@@ -13,19 +13,30 @@ jobs:
 
       - name: Deploy to Server
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
         with:
           host: ${{ secrets.DO_HOST }}
           username: ${{ secrets.DO_USERNAME }}
           key: ${{ secrets.DO_SSH_KEY }}
+          envs: GH_PAT
           script: |
             # Create directory if it doesn't exist
             mkdir -p ~/manara-backend
             cd ~/manara-backend
             
-            # Pull latest code
-            # Note: First time you might need to git clone manually or use a checkout action, 
-            # but assuming the folder exists and is a git repo:
-            git pull origin main || git clone https://github.com/Manara-Education/Manara-Backend-foundation.git .
+            # Configure Auth URL
+            REPO_URL="https://$GH_PAT@github.com/Manara-Education/Manara-Backend-foundation.git"
+            
+            # Clone or Pull
+            if [ ! -d ".git" ]; then
+              echo "Cloning fresh..."
+              git clone $REPO_URL .
+            else
+              echo "Pulling updates..."
+              git remote set-url origin $REPO_URL
+              git pull origin main
+            fi
             
             # Start/Restart services (Builds the Docker image automatically)
             docker-compose up -d --build --remove-orphans
