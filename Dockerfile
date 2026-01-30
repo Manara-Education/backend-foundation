@@ -12,4 +12,4 @@ VOLUME /tmp
 WORKDIR /app
 # Copy the jar from the build stage
 COPY --from=build /app/target/backend-0.0.1-SNAPSHOT.jar app.jar
-ENTRYPOINT ["java","-jar","/app.jar"]
+ENTRYPOINT ["java","-jar","app.jar"]
