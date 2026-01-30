@@ -1,0 +1,31 @@
+name: Deploy to Remote Server
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Deploy to Server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DO_HOST }}
+          username: ${{ secrets.DO_USERNAME }}
+          key: ${{ secrets.DO_SSH_KEY }}
+          script: |
+            # Create directory if it doesn't exist
+            mkdir -p ~/manara-backend
+            cd ~/manara-backend
+            
+            # Pull latest code
+            # Note: First time you might need to git clone manually or use a checkout action, 
+            # but assuming the folder exists and is a git repo:
+            git pull origin main || git clone https://github.com/Manara-Education/Manara-Backend-foundation.git .
+            
+            # Start/Restart services (Builds the Docker image automatically)
+            docker-compose up -d --build --remove-orphans
