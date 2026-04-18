@@ -1,4 +1,4 @@
-package com.manara.backend.dtos;
+package com.manara.backend.auth.dto;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -9,6 +9,7 @@ import lombok.NoArgsConstructor;
 @Builder
 @AllArgsConstructor
 @NoArgsConstructor
-public class AuthResponse {
-    private String token;
+public class MessageResponse {
+
+    private String message;
 }
