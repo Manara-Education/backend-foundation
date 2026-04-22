@@ -47,8 +47,7 @@ public class OtpService {
         return otp;
     }
 
-    @Transactional
-    public void verify(String email, String code, OtpType type) {
+    public Otp validateCode(String email, String code, OtpType type) {
         var otp = otpRepository
                 .findTopByUserEmailAndTypeAndUsedFalseOrderByCreatedAtDesc(email, type)
                 .orElseThrow(() -> new BusinessException("auth.otp.noActive"));
@@ -61,6 +60,12 @@ public class OtpService {
             throw new BusinessException("auth.otp.invalid");
         }
 
+        return otp;
+    }
+
+    @Transactional
+    public void verify(String email, String code, OtpType type) {
+        var otp = validateCode(email, code, type);
         otp.setUsed(true);
         otpRepository.save(otp);
     }
