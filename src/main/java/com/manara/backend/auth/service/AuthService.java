@@ -61,11 +61,13 @@ public class AuthService {
     public MessageResponse resendOtp(ResendOtpRequest request) {
         var user = findUserByEmail(request.getEmail());
 
-        if (user.isEmailVerified()) {
+        OtpType typeToResend = request.getType() != null ? request.getType() : OtpType.EMAIL_VERIFICATION;
+
+        if (typeToResend == OtpType.EMAIL_VERIFICATION && user.isEmailVerified()) {
             throw new BusinessException("auth.email.alreadyVerified");
         }
 
-        otpService.generateAndSave(user, OtpType.EMAIL_VERIFICATION);
+        otpService.generateAndSave(user, typeToResend);
 
         return MessageResponse.builder()
                 .message(messageService.get("auth.otp.resent"))
@@ -94,6 +96,14 @@ public class AuthService {
 
         return MessageResponse.builder()
                 .message(messageService.get("auth.otp.sentForReset"))
+                .build();
+    }
+
+    public MessageResponse verifyResetOtp(OtpVerifyRequest request) {
+        otpService.validateCode(request.getEmail(), request.getCode(), OtpType.PASSWORD_RESET);
+
+        return MessageResponse.builder()
+                .message(messageService.get("auth.otp.verified"))
                 .build();
     }
 
