@@ -1,5 +1,6 @@
-package com.manara.backend.dtos;
+package com.manara.backend.common.dto;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -11,26 +12,31 @@ import java.util.List;
 @Builder
 @AllArgsConstructor
 @NoArgsConstructor
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public class ApiResponse<T> {
-    private String status; // "success" or "error"
-    private T payload; // The actual data
-    private List<String> errors; // Error details
 
-    // Helper for success
-    public static <T> ApiResponse<T> success(T payload) {
+    private String status;
+    private T data;
+    private List<String> errors;
+
+    public static <T> ApiResponse<T> success(T data) {
         return ApiResponse.<T>builder()
                 .status("success")
-                .payload(payload)
-                .errors(null)
+                .data(data)
                 .build();
     }
 
-    // Helper for error
     public static <T> ApiResponse<T> error(List<String> errors) {
         return ApiResponse.<T>builder()
                 .status("error")
-                .payload(null)
                 .errors(errors)
+                .build();
+    }
+
+    public static <T> ApiResponse<T> error(String error) {
+        return ApiResponse.<T>builder()
+                .status("error")
+                .errors(List.of(error))
                 .build();
     }
 }
