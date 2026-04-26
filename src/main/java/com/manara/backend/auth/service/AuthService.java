@@ -5,8 +5,13 @@ import com.manara.backend.auth.model.OtpType;
 import com.manara.backend.common.exception.BusinessException;
 import com.manara.backend.common.exception.ResourceNotFoundException;
 import com.manara.backend.common.service.MessageService;
+import com.manara.backend.user.model.Role;
 import com.manara.backend.user.model.User;
 import com.manara.backend.user.repository.UserRepository;
+import com.manara.backend.profile.model.Instructor;
+import com.manara.backend.profile.model.Student;
+import com.manara.backend.profile.repository.InstructorRepository;
+import com.manara.backend.profile.repository.StudentRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -20,6 +25,8 @@ import org.springframework.transaction.annotation.Transactional;
 public class AuthService {
 
     private final UserRepository userRepository;
+    private final InstructorRepository instructorRepository;
+    private final StudentRepository studentRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final OtpService otpService;
@@ -32,13 +39,23 @@ public class AuthService {
             throw new BusinessException("auth.email.duplicate");
         }
 
+        var roleToSet = request.getRole() != null ? request.getRole() : Role.STUDENT;
+
         var user = User.builder()
                 .fullName(request.getFullName())
                 .email(request.getEmail())
                 .password(passwordEncoder.encode(request.getPassword()))
+                .role(roleToSet)
                 .build();
 
         user = userRepository.save(user);
+
+        if (roleToSet == Role.INSTRUCTOR) {
+            instructorRepository.save(Instructor.builder().user(user).build());
+        } else if (roleToSet == Role.STUDENT) {
+            studentRepository.save(Student.builder().user(user).build());
+        }
+
         otpService.generateAndSave(user, OtpType.EMAIL_VERIFICATION);
 
         return MessageResponse.builder()

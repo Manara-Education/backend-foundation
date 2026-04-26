@@ -24,4 +24,6 @@ public class RegisterRequest {
     @NotBlank(message = "{validation.password.required}")
     @Size(min = 6, message = "{validation.password.size}")
     private String password;
+
+    private com.manara.backend.user.model.Role role;
 }
