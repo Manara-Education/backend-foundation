@@ -38,7 +38,7 @@ public class User implements UserDetails {
     @Builder.Default
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private Role role = Role.USER;
+    private Role role = Role.STUDENT;
 
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
