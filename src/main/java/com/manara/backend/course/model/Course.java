@@ -19,8 +19,18 @@ public class Course {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Embedded
-    private SharedData sharedData;
+    @Column(nullable = false)
+    private String title;
+
+    private String subtitle;
+
+    private String image;
+
+    @Column(columnDefinition = "TEXT")
+    private String description;
+
+    // Estimated total duration in minutes
+    private Integer duration;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "instructor_id", nullable = false)

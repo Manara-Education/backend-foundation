@@ -16,6 +16,5 @@ public class EnrollmentResponse {
     private CourseResponse course;
     private Integer progress;
     private Boolean enrolled;
-    private String level;
     private LocalDateTime enrolledAt;
 }

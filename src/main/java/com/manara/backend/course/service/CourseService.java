@@ -7,7 +7,6 @@ import com.manara.backend.course.dto.CourseResponse;
 import com.manara.backend.course.dto.EnrollmentResponse;
 import com.manara.backend.course.model.Course;
 import com.manara.backend.course.model.Enrollment;
-import com.manara.backend.course.model.SharedData;
 import com.manara.backend.course.repository.CourseRepository;
 import com.manara.backend.course.repository.EnrollmentRepository;
 import com.manara.backend.profile.repository.InstructorRepository;
@@ -46,16 +45,12 @@ public class CourseService {
         var instructor = instructorRepository.findByUserId(user.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("error.profile.instructorNotFound", user.getId().toString()));
 
-        var sharedData = SharedData.builder()
+        var course = Course.builder()
                 .title(request.getTitle())
                 .subtitle(request.getSubtitle())
                 .image(request.getImage())
                 .description(request.getDescription())
                 .duration(request.getDuration())
-                .build();
-
-        var course = Course.builder()
-                .sharedData(sharedData)
                 .price(request.getPrice())
                 .instructor(instructor)
                 .build();
@@ -83,7 +78,6 @@ public class CourseService {
         var enrollment = Enrollment.builder()
                 .course(course)
                 .student(student)
-                .level("Beginner")
                 .build();
 
         enrollmentRepository.save(enrollment);
@@ -110,11 +104,11 @@ public class CourseService {
     private CourseResponse mapToCourseResponse(Course course) {
         return CourseResponse.builder()
                 .id(course.getId())
-                .title(course.getSharedData().getTitle())
-                .subtitle(course.getSharedData().getSubtitle())
-                .image(course.getSharedData().getImage())
-                .description(course.getSharedData().getDescription())
-                .duration(course.getSharedData().getDuration())
+                .title(course.getTitle())
+                .subtitle(course.getSubtitle())
+                .image(course.getImage())
+                .description(course.getDescription())
+                .duration(course.getDuration())
                 .price(course.getPrice())
                 .studentsCount(course.getStudentsCount())
                 .instructorName(course.getInstructor().getUser().getFullName())
@@ -128,7 +122,6 @@ public class CourseService {
                 .course(mapToCourseResponse(enrollment.getCourse()))
                 .progress(enrollment.getProgress())
                 .enrolled(enrollment.getEnrolled())
-                .level(enrollment.getLevel())
                 .enrolledAt(enrollment.getEnrolledAt())
                 .build();
     }

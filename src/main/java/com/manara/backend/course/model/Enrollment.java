@@ -34,7 +34,6 @@ public class Enrollment {
     @Column(nullable = false)
     private Boolean enrolled = true;
 
-    private String level;
 
     @Column(nullable = false, updatable = false)
     private LocalDateTime enrolledAt;
