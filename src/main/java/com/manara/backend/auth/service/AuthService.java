@@ -1,20 +1,25 @@
 package com.manara.backend.auth.service;
 
 import com.manara.backend.auth.dto.*;
+import com.manara.backend.auth.mapper.AuthMapper;
+import com.manara.backend.common.dto.MessageResponse;
 import com.manara.backend.auth.model.OtpType;
+import com.manara.backend.session.manager.SessionManager;
 import com.manara.backend.common.exception.BusinessException;
 import com.manara.backend.common.exception.ResourceNotFoundException;
 import com.manara.backend.common.service.MessageService;
 import com.manara.backend.user.model.Role;
 import com.manara.backend.user.model.User;
 import com.manara.backend.user.repository.UserRepository;
-import com.manara.backend.profile.model.Instructor;
-import com.manara.backend.profile.model.Student;
+import com.manara.backend.profile.mapper.ProfileMapper;
 import com.manara.backend.profile.repository.InstructorRepository;
 import com.manara.backend.profile.repository.StudentRepository;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,10 +33,12 @@ public class AuthService {
     private final InstructorRepository instructorRepository;
     private final StudentRepository studentRepository;
     private final PasswordEncoder passwordEncoder;
-    private final JwtService jwtService;
     private final OtpService otpService;
     private final AuthenticationManager authenticationManager;
     private final MessageService messageService;
+    private final SessionManager sessionManager;
+    private final AuthMapper authMapper;
+    private final ProfileMapper profileMapper;
 
     @Transactional
     public MessageResponse register(RegisterRequest request) {
@@ -40,20 +47,13 @@ public class AuthService {
         }
 
         var roleToSet = request.getRole() != null ? request.getRole() : Role.STUDENT;
-
-        var user = User.builder()
-                .fullName(request.getFullName())
-                .email(request.getEmail())
-                .password(passwordEncoder.encode(request.getPassword()))
-                .role(roleToSet)
-                .build();
-
-        user = userRepository.save(user);
+        var encodedPassword = passwordEncoder.encode(request.getPassword());
+        var user = userRepository.save(authMapper.toUser(request, encodedPassword, roleToSet));
 
         if (roleToSet == Role.INSTRUCTOR) {
-            instructorRepository.save(Instructor.builder().user(user).build());
+            instructorRepository.save(profileMapper.toInstructor(user));
         } else if (roleToSet == Role.STUDENT) {
-            studentRepository.save(Student.builder().user(user).build());
+            studentRepository.save(profileMapper.toStudent(user));
         }
 
         otpService.generateAndSave(user, OtpType.EMAIL_VERIFICATION);
@@ -64,14 +64,17 @@ public class AuthService {
     }
 
     @Transactional
-    public AuthResponse verifyOtp(OtpVerifyRequest request) {
+    public AuthResponse verifyOtp(OtpVerifyRequest request,
+                                  HttpServletRequest httpRequest,
+                                  HttpServletResponse httpResponse) {
         otpService.verify(request.getEmail(), request.getCode(), OtpType.EMAIL_VERIFICATION);
 
         var user = findUserByEmail(request.getEmail());
         user.setEmailVerified(true);
         userRepository.save(user);
 
-        return buildAuthResponse(user);
+        sessionManager.establish(user, httpRequest, httpResponse);
+        return authMapper.toAuthResponse(user);
     }
 
     @Transactional
@@ -91,8 +94,10 @@ public class AuthService {
                 .build();
     }
 
-    public AuthResponse login(LoginRequest request) {
-        authenticationManager.authenticate(
+    public AuthResponse login(LoginRequest request,
+                              HttpServletRequest httpRequest,
+                              HttpServletResponse httpResponse) {
+        Authentication auth = authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(
                         request.getEmail(),
                         request.getPassword()));
@@ -103,7 +108,8 @@ public class AuthService {
             throw new BusinessException("auth.email.notVerified");
         }
 
-        return buildAuthResponse(user);
+        sessionManager.establish(auth, httpRequest, httpResponse);
+        return authMapper.toAuthResponse(user);
     }
 
     @Transactional
@@ -124,6 +130,13 @@ public class AuthService {
                 .build();
     }
 
+    public MessageResponse logout(HttpServletRequest request, HttpServletResponse response) {
+        sessionManager.terminate(request, response);
+        return MessageResponse.builder()
+                .message(messageService.get("auth.logout.success"))
+                .build();
+    }
+
     @Transactional
     public MessageResponse resetPassword(ResetPasswordRequest request) {
         otpService.verify(request.getEmail(), request.getCode(), OtpType.PASSWORD_RESET);
@@ -140,14 +153,5 @@ public class AuthService {
     private User findUserByEmail(String email) {
         return userRepository.findByEmail(email)
                 .orElseThrow(() -> new ResourceNotFoundException("error.user.notFoundByEmail", email));
-    }
-
-    private AuthResponse buildAuthResponse(User user) {
-        var token = jwtService.generateToken(user);
-        return AuthResponse.builder()
-                .token(token)
-                .fullName(user.getFullName())
-                .email(user.getEmail())
-                .build();
     }
 }

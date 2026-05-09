@@ -1,9 +1,10 @@
 package com.manara.backend.profile.service;
 
-import com.manara.backend.auth.dto.MessageResponse;
+import com.manara.backend.common.dto.MessageResponse;
 import com.manara.backend.common.service.MessageService;
 import com.manara.backend.profile.dto.ProfileResponse;
 import com.manara.backend.profile.dto.UpdateProfileRequest;
+import com.manara.backend.profile.mapper.ProfileMapper;
 import com.manara.backend.user.model.User;
 import com.manara.backend.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -17,9 +18,10 @@ public class ProfileService {
 
     private final UserRepository userRepository;
     private final MessageService messageService;
+    private final ProfileMapper profileMapper;
 
     public ProfileResponse getProfile(User user) {
-        return buildProfileResponse(user);
+        return profileMapper.toProfileResponse(user);
     }
 
     @Transactional
@@ -28,15 +30,6 @@ public class ProfileService {
         userRepository.save(user);
         return MessageResponse.builder()
                 .message(messageService.get("profile.update.success"))
-                .build();
-    }
-
-    private ProfileResponse buildProfileResponse(User user) {
-        return ProfileResponse.builder()
-                .fullName(user.getFullName())
-                .email(user.getEmail())
-                .role(user.getRole().name())
-                .createdAt(user.getCreatedAt())
                 .build();
     }
 }

@@ -11,6 +11,7 @@
 .mtj.tmp/
 
 .cursor
+.claude
 
 # Package Files #
 *.jar
