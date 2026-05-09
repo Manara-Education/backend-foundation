@@ -5,10 +5,10 @@ import com.manara.backend.common.exception.ResourceNotFoundException;
 import com.manara.backend.course.dto.CourseRequest;
 import com.manara.backend.course.dto.CourseResponse;
 import com.manara.backend.course.dto.EnrollmentResponse;
-import com.manara.backend.course.model.Course;
-import com.manara.backend.course.model.Enrollment;
+import com.manara.backend.course.mapper.CourseMapper;
 import com.manara.backend.course.repository.CourseRepository;
 import com.manara.backend.course.repository.EnrollmentRepository;
+import com.manara.backend.profile.model.Student;
 import com.manara.backend.profile.repository.InstructorRepository;
 import com.manara.backend.profile.repository.StudentRepository;
 import com.manara.backend.user.model.Role;
@@ -29,10 +29,11 @@ public class CourseService {
     private final EnrollmentRepository enrollmentRepository;
     private final InstructorRepository instructorRepository;
     private final StudentRepository studentRepository;
+    private final CourseMapper courseMapper;
 
     public List<CourseResponse> getAllCourses() {
         return courseRepository.findAll().stream()
-                .map(this::mapToCourseResponse)
+                .map(courseMapper::toCourseResponse)
                 .collect(Collectors.toList());
     }
 
@@ -45,18 +46,8 @@ public class CourseService {
         var instructor = instructorRepository.findByUserId(user.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("error.profile.instructorNotFound", user.getId().toString()));
 
-        var course = Course.builder()
-                .title(request.getTitle())
-                .subtitle(request.getSubtitle())
-                .image(request.getImage())
-                .description(request.getDescription())
-                .duration(request.getDuration())
-                .price(request.getPrice())
-                .instructor(instructor)
-                .build();
-
-        course = courseRepository.save(course);
-        return mapToCourseResponse(course);
+        var course = courseRepository.save(courseMapper.toCourse(request, instructor));
+        return courseMapper.toCourseResponse(course);
     }
 
     @Transactional
@@ -75,17 +66,12 @@ public class CourseService {
             throw new BusinessException("error.course.alreadyEnrolled");
         }
 
-        var enrollment = Enrollment.builder()
-                .course(course)
-                .student(student)
-                .build();
-
-        enrollmentRepository.save(enrollment);
+        var enrollment = enrollmentRepository.save(courseMapper.toEnrollment(course, student));
 
         course.setStudentsCount(course.getStudentsCount() + 1);
         courseRepository.save(course);
 
-        return mapToEnrollmentResponse(enrollment);
+        return courseMapper.toEnrollmentResponse(enrollment);
     }
 
     public List<EnrollmentResponse> getMyEnrollments(User user) {
@@ -93,36 +79,11 @@ public class CourseService {
             throw new BusinessException("error.course.onlyStudent");
         }
 
-        var student = studentRepository.findByUserId(user.getId())
+        final Student student = studentRepository.findByUserId(user.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("error.profile.studentNotFound", user.getId().toString()));
 
         return enrollmentRepository.findByStudentId(student.getId()).stream()
-                .map(this::mapToEnrollmentResponse)
+                .map(courseMapper::toEnrollmentResponse)
                 .collect(Collectors.toList());
-    }
-
-    private CourseResponse mapToCourseResponse(Course course) {
-        return CourseResponse.builder()
-                .id(course.getId())
-                .title(course.getTitle())
-                .subtitle(course.getSubtitle())
-                .image(course.getImage())
-                .description(course.getDescription())
-                .duration(course.getDuration())
-                .price(course.getPrice())
-                .studentsCount(course.getStudentsCount())
-                .instructorName(course.getInstructor().getUser().getFullName())
-                .createdAt(course.getCreatedAt())
-                .build();
-    }
-
-    private EnrollmentResponse mapToEnrollmentResponse(Enrollment enrollment) {
-        return EnrollmentResponse.builder()
-                .id(enrollment.getId())
-                .course(mapToCourseResponse(enrollment.getCourse()))
-                .progress(enrollment.getProgress())
-                .enrolled(enrollment.getEnrolled())
-                .enrolledAt(enrollment.getEnrolledAt())
-                .build();
     }
 }

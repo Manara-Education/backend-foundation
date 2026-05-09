@@ -1,4 +1,4 @@
-package com.manara.backend.config;
+package com.manara.backend.common.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

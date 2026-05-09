@@ -12,6 +12,16 @@ services:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
 
+  redis:
+    container_name: manara_redis
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
   app:
     container_name: manara-backend
     build: .
@@ -19,11 +29,16 @@ services:
       - "8080:8080"
     depends_on:
       - postgres
+      - redis
     environment:
       - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/manara_db
       - SPRING_DATASOURCE_USERNAME=postgres
       - SPRING_DATASOURCE_PASSWORD=password
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - COOKIE_SECURE=true
     restart: always
 
 volumes:
   postgres_data:
+  redis_data:
