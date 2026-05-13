@@ -12,7 +12,7 @@ import java.nio.file.Paths;
 import java.util.List;
 
 @Configuration
-public class WebMvcConfig implements WebMvcConfigurer, PublicEndpointContribution {
+public class StaticResourceConfig implements WebMvcConfigurer, PublicEndpointContribution {
 
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
@@ -26,11 +26,7 @@ public class WebMvcConfig implements WebMvcConfigurer, PublicEndpointContributio
     @Override
     public List<PublicEndpoint> endpoints() {
         return List.of(
-                PublicEndpoint.of(HttpMethod.GET, "/uploads/**"),
-                PublicEndpoint.of(HttpMethod.GET, "/api/v1/instructors/**"),
-                PublicEndpoint.of(HttpMethod.GET, "/swagger-ui/**"),
-                PublicEndpoint.of(HttpMethod.GET, "/swagger-ui.html"),
-                PublicEndpoint.of(HttpMethod.GET, "/v3/api-docs/**")
+                PublicEndpoint.of(HttpMethod.GET, "/uploads/**")
         );
     }
 }
