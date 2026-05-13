@@ -59,3 +59,6 @@ AGENTS.md
 
 # Spring Boot
 .mvn/wrapper/maven-wrapper.properties
+
+# Uploads
+/uploads/

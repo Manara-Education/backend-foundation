@@ -39,8 +39,10 @@ public class CourseMapper {
                 .image(course.getImage())
                 .description(course.getDescription())
                 .duration(course.getDuration())
+                .lessonCount(course.getLessonCount())
                 .price(course.getPrice())
                 .studentsCount(course.getStudentsCount())
+                .instructorId(course.getInstructor().getId())
                 .instructorName(course.getInstructor().getUser().getFullName())
                 .createdAt(course.getCreatedAt())
                 .build();

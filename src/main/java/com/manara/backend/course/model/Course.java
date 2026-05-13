@@ -32,6 +32,9 @@ public class Course {
     // Estimated total duration in minutes
     private Integer duration;
 
+    @org.hibernate.annotations.Formula("(SELECT COUNT(l.id) FROM lessons l WHERE l.course_id = id)")
+    private Integer lessonCount;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "instructor_id", nullable = false)
     private Instructor instructor;
