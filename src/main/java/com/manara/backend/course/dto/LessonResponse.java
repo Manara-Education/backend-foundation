@@ -5,24 +5,21 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Data
 @Builder
 @AllArgsConstructor
 @NoArgsConstructor
-public class CourseResponse {
+public class LessonResponse {
     private Long id;
     private String title;
-    private String subtitle;
-    private String image;
+    private String summary;
     private String description;
+    private String videoId;
     private Integer duration;
-    private Integer lessonCount;
-    private BigDecimal price;
-    private Integer studentsCount;
-    private Long instructorId;
-    private String instructorName;
+    private Integer orderIndex;
+    private Long courseId;
+    private Boolean isCompleted; // Included if returned in a student context
     private LocalDateTime createdAt;
 }

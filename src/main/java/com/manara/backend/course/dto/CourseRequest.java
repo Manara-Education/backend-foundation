@@ -3,6 +3,7 @@ package com.manara.backend.course.dto;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.PositiveOrZero;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -29,6 +30,6 @@ public class CourseRequest {
     private Integer duration;
 
     @NotNull(message = "{validation.course.price.required}")
-    @Positive(message = "{validation.course.price.positive}")
+    @PositiveOrZero(message = "{validation.course.price.positive}")
     private BigDecimal price;
 }
