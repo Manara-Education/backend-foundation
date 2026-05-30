@@ -7,6 +7,7 @@ import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Data
 @Builder
@@ -25,4 +26,5 @@ public class CourseResponse {
     private Long instructorId;
     private String instructorName;
     private LocalDateTime createdAt;
+    private List<LessonResponse> lessons;
 }
