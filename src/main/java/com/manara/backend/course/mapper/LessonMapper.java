@@ -22,10 +22,10 @@ public class LessonMapper {
     }
 
     public LessonResponse toLessonResponse(Lesson lesson) {
-        return toLessonResponse(lesson, false);
+        return toLessonResponse(lesson, null);
     }
 
-    public LessonResponse toLessonResponse(Lesson lesson, boolean isCompleted) {
+    public LessonResponse toLessonResponse(Lesson lesson, Boolean isCompleted) {
         return LessonResponse.builder()
                 .id(lesson.getId())
                 .title(lesson.getTitle())

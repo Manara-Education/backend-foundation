@@ -26,11 +26,6 @@ public class CourseController {
         return ApiResponse.success(courseService.getAllCourses());
     }
 
-    @GetMapping("/{courseId}")
-    public ApiResponse<CourseResponse> getCourseById(@PathVariable Long courseId) {
-        return ApiResponse.success(courseService.getCourseById(courseId));
-    }
-
     @GetMapping("/my-courses")
     public ApiResponse<List<CourseResponse>> getMyCourses(@AuthenticationPrincipal User user) {
         return ApiResponse.success(courseService.getMyCourses(user));

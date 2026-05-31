@@ -3,12 +3,16 @@ package com.manara.backend.course.service;
 import com.manara.backend.common.exception.BusinessException;
 import com.manara.backend.common.exception.ResourceNotFoundException;
 import com.manara.backend.common.file.FileUploadService;
+import com.manara.backend.course.dto.CourseDetailsResponse;
 import com.manara.backend.course.dto.CourseRequest;
 import com.manara.backend.course.dto.CourseResponse;
+import com.manara.backend.course.dto.CourseViewMode;
 import com.manara.backend.course.dto.EnrollmentResponse;
 import com.manara.backend.course.mapper.CourseMapper;
 import com.manara.backend.course.repository.CourseRepository;
 import com.manara.backend.course.repository.EnrollmentRepository;
+import com.manara.backend.course.repository.LessonRepository;
+import com.manara.backend.course.service.view.CourseDetailsViewRegistry;
 import com.manara.backend.profile.model.Student;
 import com.manara.backend.profile.repository.InstructorRepository;
 import com.manara.backend.profile.repository.StudentRepository;
@@ -28,9 +32,11 @@ public class CourseService {
 
     private final CourseRepository courseRepository;
     private final EnrollmentRepository enrollmentRepository;
+    private final LessonRepository lessonRepository;
     private final InstructorRepository instructorRepository;
     private final StudentRepository studentRepository;
     private final CourseMapper courseMapper;
+    private final CourseDetailsViewRegistry courseDetailsViewRegistry;
     private final FileUploadService fileUploadService;
 
     public List<CourseResponse> getAllCourses() {
@@ -39,10 +45,16 @@ public class CourseService {
                 .collect(Collectors.toList());
     }
 
-    public CourseResponse getCourseById(Long courseId) {
+    public CourseDetailsResponse getCourseDetails(User user, Long courseId, CourseViewMode mode) {
         var course = courseRepository.findById(courseId)
                 .orElseThrow(() -> new ResourceNotFoundException("error.course.notFound", courseId.toString()));
-        return courseMapper.toCourseResponse(course);
+
+        var courseLessons = lessonRepository.findByCourseIdOrderByOrderIndexAsc(courseId);
+
+        var lessons = courseDetailsViewRegistry.get(mode)
+                .resolveLessons(user, courseId, courseLessons);
+
+        return courseMapper.toCourseDetailsResponse(course, lessons);
     }
 
     public List<CourseResponse> getMyCourses(User user) {
