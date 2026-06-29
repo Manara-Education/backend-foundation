@@ -2,9 +2,9 @@ package com.manara.backend.dashboard.service;
 
 import com.manara.backend.common.exception.BusinessException;
 import com.manara.backend.common.exception.ResourceNotFoundException;
-import com.manara.backend.course.repository.CompletedLessonRepository;
 import com.manara.backend.course.repository.EnrollmentRepository;
-import com.manara.backend.course.repository.LessonRepository;
+import com.manara.backend.lesson.repository.CompletedLessonRepository;
+import com.manara.backend.lesson.repository.LessonRepository;
 import com.manara.backend.dashboard.dto.CourseViewResponse;
 import com.manara.backend.dashboard.mapper.DashboardMapper;
 import com.manara.backend.profile.repository.StudentRepository;

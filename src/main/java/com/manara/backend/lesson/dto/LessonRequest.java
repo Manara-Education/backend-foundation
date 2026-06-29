@@ -1,13 +1,15 @@
-package com.manara.backend.course.dto;
+package com.manara.backend.lesson.dto;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
-import lombok.Data;
+import lombok.Getter;
 import lombok.NoArgsConstructor;
+import lombok.Setter;
 
-@Data
+@Getter
+@Setter
 @Builder
 @AllArgsConstructor
 @NoArgsConstructor
@@ -20,10 +22,8 @@ public class LessonRequest {
 
     private String description;
 
-    @NotBlank(message = "{validation.lesson.videoId.required}")
-    private String videoId;
-
-    private Integer duration;
+    @NotBlank(message = "{validation.lesson.videoUrl.required}")
+    private String videoUrl;
 
     @NotNull(message = "{validation.lesson.orderIndex.required}")
     private Integer orderIndex;

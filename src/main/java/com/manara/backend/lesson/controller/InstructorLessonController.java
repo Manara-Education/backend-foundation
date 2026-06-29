@@ -1,10 +1,11 @@
-package com.manara.backend.course.controller;
+package com.manara.backend.lesson.controller;
 
 import com.manara.backend.common.dto.ApiResponse;
 import com.manara.backend.common.dto.MessageResponse;
-import com.manara.backend.course.dto.LessonRequest;
-import com.manara.backend.course.dto.LessonResponse;
-import com.manara.backend.course.service.LessonService;
+import com.manara.backend.common.service.MessageService;
+import com.manara.backend.lesson.dto.LessonRequest;
+import com.manara.backend.lesson.dto.LessonResponse;
+import com.manara.backend.lesson.service.LessonService;
 import com.manara.backend.user.model.User;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -14,11 +15,12 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/v1/courses/{courseId}/lessons")
+@RequestMapping("/api/v1/instructor/courses/{courseId}/lessons")
 @RequiredArgsConstructor
-public class LessonController {
+public class InstructorLessonController {
 
     private final LessonService lessonService;
+    private final MessageService messageService;
 
     @GetMapping
     public ApiResponse<List<LessonResponse>> getCourseLessons(
@@ -50,15 +52,8 @@ public class LessonController {
             @PathVariable Long courseId,
             @PathVariable Long lessonId) {
         lessonService.deleteLesson(user, courseId, lessonId);
-        return ApiResponse.success(MessageResponse.builder().message("Lesson deleted successfully").build());
-    }
-
-    @PostMapping("/{lessonId}/complete")
-    public ApiResponse<MessageResponse> markLessonCompleted(
-            @AuthenticationPrincipal User user,
-            @PathVariable Long courseId,
-            @PathVariable Long lessonId) {
-        lessonService.markLessonCompleted(user, courseId, lessonId);
-        return ApiResponse.success(MessageResponse.builder().message("Lesson marked as completed").build());
+        return ApiResponse.success(MessageResponse.builder()
+                .message(messageService.get("lesson.deleted"))
+                .build());
     }
 }
