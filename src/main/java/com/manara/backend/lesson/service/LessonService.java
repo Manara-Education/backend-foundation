@@ -1,18 +1,19 @@
-package com.manara.backend.course.service;
+package com.manara.backend.lesson.service;
 
 import com.manara.backend.common.exception.BusinessException;
 import com.manara.backend.common.exception.ResourceNotFoundException;
-import com.manara.backend.course.dto.LessonRequest;
-import com.manara.backend.course.dto.LessonResponse;
-import com.manara.backend.course.mapper.LessonMapper;
-import com.manara.backend.course.model.CompletedLesson;
 import com.manara.backend.course.model.Course;
 import com.manara.backend.course.model.Enrollment;
-import com.manara.backend.course.model.Lesson;
-import com.manara.backend.course.repository.CompletedLessonRepository;
 import com.manara.backend.course.repository.CourseRepository;
 import com.manara.backend.course.repository.EnrollmentRepository;
-import com.manara.backend.course.repository.LessonRepository;
+import com.manara.backend.lesson.dto.LessonDetailsResponse;
+import com.manara.backend.lesson.dto.LessonRequest;
+import com.manara.backend.lesson.dto.LessonResponse;
+import com.manara.backend.lesson.mapper.LessonMapper;
+import com.manara.backend.lesson.model.CompletedLesson;
+import com.manara.backend.lesson.model.Lesson;
+import com.manara.backend.lesson.repository.CompletedLessonRepository;
+import com.manara.backend.lesson.repository.LessonRepository;
 import com.manara.backend.profile.model.Student;
 import com.manara.backend.profile.repository.StudentRepository;
 import com.manara.backend.user.model.Role;
@@ -57,25 +58,15 @@ public class LessonService {
         courseRepository.save(course);
     }
 
-
-
     @Transactional
     public LessonResponse addLesson(User user, Long courseId, LessonRequest request) {
         Course course = getCourseAndVerifyInstructor(user, courseId);
-        
-        if (request.getDuration() == null) {
-            request.setDuration(0);
-        }
-        
+
         Lesson lesson = lessonMapper.toLesson(request, course);
         lesson = lessonRepository.save(lesson);
-        
-        if (request.getDuration() == 0 && request.getVideoId() != null && !request.getVideoId().isEmpty()) {
-            youtubeDurationService.fetchAndUpdateDurationAsync(lesson.getId(), request.getVideoId());
-        } else {
-            recalculateCourseDuration(course);
-        }
-        
+
+        youtubeDurationService.fetchAndUpdateDurationAsync(lesson.getId(), request.getVideoUrl());
+
         return lessonMapper.toLessonResponse(lesson);
     }
 
@@ -84,32 +75,31 @@ public class LessonService {
         getCourseAndVerifyInstructor(user, courseId);
         Lesson lesson = lessonRepository.findById(lessonId)
                 .orElseThrow(() -> new ResourceNotFoundException("error.lesson.notFound", lessonId.toString()));
-        
+
         if (!lesson.getCourse().getId().equals(courseId)) {
             throw new BusinessException("error.lesson.notInCourse");
         }
 
-        boolean shouldFetchDuration = false;
-        if (request.getDuration() == null || request.getDuration() == 0 || !request.getVideoId().equals(lesson.getVideoId())) {
-            request.setDuration(0);
-            shouldFetchDuration = true;
-        }
+        boolean videoUrlChanged = !request.getVideoUrl().equals(lesson.getVideoUrl());
 
         lesson.setTitle(request.getTitle());
         lesson.setSummary(request.getSummary());
         lesson.setDescription(request.getDescription());
-        lesson.setVideoId(request.getVideoId());
-        lesson.setDuration(request.getDuration());
+        lesson.setVideoUrl(request.getVideoUrl());
         lesson.setOrderIndex(request.getOrderIndex());
-        
+
+        if (videoUrlChanged) {
+            lesson.setDuration(0);
+        }
+
         lesson = lessonRepository.save(lesson);
-        
-        if (shouldFetchDuration && request.getVideoId() != null && !request.getVideoId().isEmpty()) {
-            youtubeDurationService.fetchAndUpdateDurationAsync(lesson.getId(), request.getVideoId());
+
+        if (videoUrlChanged) {
+            youtubeDurationService.fetchAndUpdateDurationAsync(lesson.getId(), request.getVideoUrl());
         } else {
             recalculateCourseDuration(lesson.getCourse());
         }
-        
+
         return lessonMapper.toLessonResponse(lesson);
     }
 
@@ -124,14 +114,52 @@ public class LessonService {
         }
 
         Course course = lesson.getCourse();
+        completedLessonRepository.deleteByLessonId(lessonId);
         lessonRepository.delete(lesson);
         recalculateCourseDuration(course);
+    }
+
+    public LessonDetailsResponse getLesson(User user, Long courseId, Long lessonId) {
+        courseRepository.findById(courseId)
+                .orElseThrow(() -> new ResourceNotFoundException("error.course.notFound", courseId.toString()));
+
+        List<Lesson> lessons = lessonRepository.findByCourseIdOrderByOrderIndexAsc(courseId);
+
+        int index = -1;
+        for (int i = 0; i < lessons.size(); i++) {
+            if (lessons.get(i).getId().equals(lessonId)) {
+                index = i;
+                break;
+            }
+        }
+        if (index == -1) {
+            if (!lessonRepository.existsById(lessonId)) {
+                throw new ResourceNotFoundException("error.lesson.notFound", lessonId.toString());
+            }
+            throw new BusinessException("error.lesson.notInCourse");
+        }
+
+        Lesson lesson = lessons.get(index);
+        Lesson previous = index > 0 ? lessons.get(index - 1) : null;
+        Lesson next = index < lessons.size() - 1 ? lessons.get(index + 1) : null;
+
+        Boolean isCompleted = null;
+        if (user != null && user.getRole() == Role.STUDENT) {
+            Optional<Student> studentOpt = studentRepository.findByUserId(user.getId());
+            if (studentOpt.isPresent() && enrollmentRepository.findByCourseIdAndStudentId(courseId, studentOpt.get().getId()).isPresent()) {
+                isCompleted = completedLessonRepository
+                        .findByStudentIdAndLessonId(studentOpt.get().getId(), lessonId)
+                        .isPresent();
+            }
+        }
+
+        return lessonMapper.toLessonDetailsResponse(lesson, isCompleted, previous, next);
     }
 
     public List<LessonResponse> getCourseLessons(User user, Long courseId) {
         courseRepository.findById(courseId)
                 .orElseThrow(() -> new ResourceNotFoundException("error.course.notFound", courseId.toString()));
-        
+
         List<Lesson> lessons = lessonRepository.findByCourseIdOrderByOrderIndexAsc(courseId);
 
         Student student = null;
@@ -172,19 +200,12 @@ public class LessonService {
         }
 
         if (completedLessonRepository.findByStudentIdAndLessonId(student.getId(), lessonId).isEmpty()) {
-            CompletedLesson completedLesson = CompletedLesson.builder()
-                    .student(student)
-                    .lesson(lesson)
-                    .build();
+            CompletedLesson completedLesson = lessonMapper.toCompletedLesson(student, lesson);
             completedLessonRepository.save(completedLesson);
 
-            // Recalculate progress
             int totalLessons = lessonRepository.countByCourseId(courseId);
             if (totalLessons > 0) {
                 int completedLessonsCount = completedLessonRepository.countByStudentIdAndLesson_Course_Id(student.getId(), courseId);
-                // completedLessonsCount includes the one we just saved because hibernate session holds it, 
-                // but count query goes to DB. Let's do it safely by querying + 1 or flushing.
-                // It's safer to just calculate mathematically if we know this is the new one.
                 int progress = (int) (((double) (completedLessonsCount + 1) / totalLessons) * 100);
                 enrollment.setProgress(Math.min(progress, 100));
                 enrollmentRepository.save(enrollment);

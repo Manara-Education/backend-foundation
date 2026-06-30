@@ -11,7 +11,7 @@ import com.manara.backend.course.dto.EnrollmentResponse;
 import com.manara.backend.course.mapper.CourseMapper;
 import com.manara.backend.course.repository.CourseRepository;
 import com.manara.backend.course.repository.EnrollmentRepository;
-import com.manara.backend.course.repository.LessonRepository;
+import com.manara.backend.lesson.repository.LessonRepository;
 import com.manara.backend.course.service.view.CourseDetailsViewRegistry;
 import com.manara.backend.profile.model.Student;
 import com.manara.backend.profile.repository.InstructorRepository;
@@ -54,7 +54,7 @@ public class CourseService {
         var lessons = courseDetailsViewRegistry.get(mode)
                 .resolveLessons(user, courseId, courseLessons);
 
-        return courseMapper.toCourseDetailsResponse(course, lessons);
+        return courseMapper.toCourseDetailsResponse(course, courseLessons, lessons);
     }
 
     public List<CourseResponse> getMyCourses(User user) {

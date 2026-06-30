@@ -1,11 +1,18 @@
-package com.manara.backend.course.model;
+package com.manara.backend.lesson.model;
 
+import com.manara.backend.course.model.Course;
 import jakarta.persistence.*;
-import lombok.*;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
 
 import java.time.LocalDateTime;
+import java.util.Objects;
 
-@Data
+@Getter
+@Setter
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
@@ -13,45 +20,35 @@ import java.time.LocalDateTime;
 @Table(name = "lessons")
 public class Lesson {
 
-    /** Unique identifier for the lesson */
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    /** The title of the lesson */
     @Column(nullable = false)
     private String title;
 
-    /** A brief summary of the lesson */
     @Column(columnDefinition = "TEXT")
     private String summary;
 
-    /** Detailed description or content of the lesson */
     @Column(columnDefinition = "TEXT")
     private String description;
 
-    /** The extracted YouTube video ID used for embedding and fetching thumbnails */
-    @Column(nullable = false)
-    private String videoId;
+    @Column(nullable = false, columnDefinition = "TEXT")
+    private String videoUrl;
 
-    /** Duration of the video/lesson in seconds (or "HH:MM:SS" format depending on preference). Using Integer for minutes/seconds is common, let's use Integer for total seconds. */
     @Column
     private Integer duration;
 
-    /** The order/position of this lesson within the course sequence */
     @Column(nullable = false)
     private Integer orderIndex;
 
-    /** The course this lesson belongs to */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "course_id", nullable = false)
     private Course course;
 
-    /** Timestamp of when the lesson was created */
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
-    /** Timestamp of when the lesson was last updated */
     private LocalDateTime updatedAt;
 
     @PrePersist
@@ -62,5 +59,17 @@ public class Lesson {
     @PreUpdate
     protected void onUpdate() {
         updatedAt = LocalDateTime.now();
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof Lesson other)) return false;
+        return id != null && id.equals(other.id);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hashCode(id);
     }
 }

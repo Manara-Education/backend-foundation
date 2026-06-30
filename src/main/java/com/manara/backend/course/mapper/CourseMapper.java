@@ -1,11 +1,13 @@
 package com.manara.backend.course.mapper;
 
+import com.manara.backend.common.util.DurationFormatter;
 import com.manara.backend.course.dto.CourseDetailsResponse;
 import com.manara.backend.course.dto.CourseRequest;
 import com.manara.backend.course.dto.CourseResponse;
 import com.manara.backend.course.dto.EnrollmentResponse;
-import com.manara.backend.course.dto.LessonResponse;
 import com.manara.backend.course.model.Course;
+import com.manara.backend.lesson.dto.LessonResponse;
+import com.manara.backend.lesson.model.Lesson;
 import com.manara.backend.course.model.Enrollment;
 import com.manara.backend.profile.model.Instructor;
 import com.manara.backend.profile.model.Student;
@@ -18,7 +20,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class CourseMapper {
 
-    private final LessonMapper lessonMapper;
+    private final DurationFormatter durationFormatter;
 
     public Course toCourse(CourseRequest request, Instructor instructor) {
         return Course.builder()
@@ -61,12 +63,24 @@ public class CourseMapper {
                 .build();
     }
 
-    public CourseDetailsResponse toCourseDetailsResponse(Course course, List<LessonResponse> lessons) {
+    public CourseDetailsResponse toCourseDetailsResponse(Course course, List<Lesson> courseLessons, List<LessonResponse> lessons) {
         var instructor = course.getInstructor();
         var instructorUser = instructor.getUser();
 
-        int totalDuration = lessons == null ? 0 : lessons.stream()
-                .map(LessonResponse::getDuration)
+        java.util.Set<Long> completedLessonIds = lessons == null ? java.util.Set.of() : lessons.stream()
+                .filter(l -> Boolean.TRUE.equals(l.getIsCompleted()))
+                .map(LessonResponse::getId)
+                .collect(java.util.stream.Collectors.toSet());
+
+        int totalDurationSeconds = courseLessons == null ? 0 : courseLessons.stream()
+                .map(Lesson::getDuration)
+                .filter(java.util.Objects::nonNull)
+                .mapToInt(Integer::intValue)
+                .sum();
+
+        int remainingDurationSeconds = courseLessons == null ? 0 : courseLessons.stream()
+                .filter(l -> !completedLessonIds.contains(l.getId()))
+                .map(Lesson::getDuration)
                 .filter(java.util.Objects::nonNull)
                 .mapToInt(Integer::intValue)
                 .sum();
@@ -77,7 +91,8 @@ public class CourseMapper {
                 .subtitle(course.getSubtitle())
                 .image(course.getImage())
                 .description(course.getDescription())
-                .duration(totalDuration)
+                .duration(durationFormatter.formatSeconds(totalDurationSeconds))
+                .remainingDuration(durationFormatter.formatSeconds(remainingDurationSeconds))
                 .lessonCount(course.getLessonCount())
                 .price(course.getPrice())
                 .studentsCount(course.getStudentsCount())

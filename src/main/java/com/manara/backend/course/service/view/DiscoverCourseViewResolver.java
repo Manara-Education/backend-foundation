@@ -1,9 +1,9 @@
 package com.manara.backend.course.service.view;
 
 import com.manara.backend.course.dto.CourseViewMode;
-import com.manara.backend.course.dto.LessonResponse;
-import com.manara.backend.course.mapper.LessonMapper;
-import com.manara.backend.course.model.Lesson;
+import com.manara.backend.lesson.dto.LessonResponse;
+import com.manara.backend.lesson.mapper.LessonMapper;
+import com.manara.backend.lesson.model.Lesson;
 import com.manara.backend.user.model.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;

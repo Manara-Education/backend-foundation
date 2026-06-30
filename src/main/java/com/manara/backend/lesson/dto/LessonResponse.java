@@ -1,13 +1,13 @@
-package com.manara.backend.course.dto;
+package com.manara.backend.lesson.dto;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;
-import lombok.Data;
+import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
 
-@Data
+@Getter
 @Builder
 @AllArgsConstructor
 @NoArgsConstructor
@@ -16,10 +16,10 @@ public class LessonResponse {
     private String title;
     private String summary;
     private String description;
-    private String videoId;
-    private Integer duration;
+    private String videoUrl;
+    private String duration;
     private Integer orderIndex;
     private Long courseId;
-    private Boolean isCompleted; // Included if returned in a student context
+    private Boolean isCompleted;
     private LocalDateTime createdAt;
 }

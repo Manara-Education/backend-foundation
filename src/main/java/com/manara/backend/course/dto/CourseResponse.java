@@ -1,5 +1,6 @@
 package com.manara.backend.course.dto;
 
+import com.manara.backend.lesson.dto.LessonResponse;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
