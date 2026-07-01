@@ -7,6 +7,7 @@ import com.manara.backend.course.dto.CourseDetailsResponse;
 import com.manara.backend.course.dto.CourseRequest;
 import com.manara.backend.course.dto.CourseResponse;
 import com.manara.backend.course.dto.CourseViewMode;
+import com.manara.backend.course.dto.CheckoutRequest;
 import com.manara.backend.course.dto.EnrollmentResponse;
 import com.manara.backend.course.mapper.CourseMapper;
 import com.manara.backend.course.repository.CourseRepository;
@@ -167,5 +168,29 @@ public class CourseService {
         return enrollmentRepository.findByStudentId(student.getId()).stream()
                 .map(courseMapper::toEnrollmentResponse)
                 .collect(Collectors.toList());
+    }
+
+    @Transactional
+    public EnrollmentResponse processCheckoutAndEnroll(User user, Long courseId, CheckoutRequest request) {
+        var course = courseRepository.findById(courseId)
+                .orElseThrow(() -> new ResourceNotFoundException("error.course.notFound", courseId.toString()));
+
+        if (course.getPrice() != null && course.getPrice().compareTo(java.math.BigDecimal.ZERO) > 0) {
+            if (request == null) {
+                throw new BusinessException("error.payment.required");
+            }
+            String card = request.getCardNumber() == null ? "" : request.getCardNumber().replaceAll("\\s+", "");
+            if (card.length() < 15 || card.length() > 19) {
+                throw new BusinessException("error.payment.invalidCard");
+            }
+            if (request.getCvc() == null || request.getCvc().length() < 3 || request.getCvc().length() > 4) {
+                throw new BusinessException("error.payment.invalidCvc");
+            }
+            if (request.getExpiry() == null || !request.getExpiry().contains("/")) {
+                throw new BusinessException("error.payment.invalidExpiry");
+            }
+        }
+
+        return enrollInCourse(user, courseId);
     }
 }
