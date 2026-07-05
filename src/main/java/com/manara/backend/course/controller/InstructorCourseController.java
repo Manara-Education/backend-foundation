@@ -47,16 +47,4 @@ public class InstructorCourseController {
     }
 
 
-    @PostMapping("/{courseId}/enroll")
-    public ApiResponse<EnrollmentResponse> enrollInCourse(
-            @AuthenticationPrincipal User user,
-            @PathVariable Long courseId) {
-        return ApiResponse.success(courseService.enrollInCourse(user, courseId));
-    }
-
-    @GetMapping("/my-enrollments")
-    public ApiResponse<List<EnrollmentResponse>> getMyEnrollments(
-            @AuthenticationPrincipal User user) {
-        return ApiResponse.success(courseService.getMyEnrollments(user));
-    }
 }
