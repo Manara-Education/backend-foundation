@@ -46,13 +46,6 @@ public class InstructorCourseController {
         return ApiResponse.success(courseService.updateCourse(user, courseId, request));
     }
 
-    @DeleteMapping("/{courseId}")
-    public ApiResponse<MessageResponse> deleteCourse(
-            @AuthenticationPrincipal User user,
-            @PathVariable Long courseId) {
-        courseService.deleteCourse(user, courseId);
-        return ApiResponse.success(MessageResponse.builder().message("Course deleted successfully").build());
-    }
 
     @PostMapping("/{courseId}/enroll")
     public ApiResponse<EnrollmentResponse> enrollInCourse(

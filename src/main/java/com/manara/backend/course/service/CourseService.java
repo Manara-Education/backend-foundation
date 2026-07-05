@@ -113,25 +113,6 @@ public class CourseService {
         return courseMapper.toCourseResponse(course);
     }
 
-    @Transactional
-    public void deleteCourse(User user, Long courseId) {
-        if (user.getRole() != Role.INSTRUCTOR) {
-            throw new BusinessException("error.course.onlyInstructor");
-        }
-
-        var course = courseRepository.findById(courseId)
-                .orElseThrow(() -> new ResourceNotFoundException("error.course.notFound", courseId.toString()));
-
-        if (!course.getInstructor().getUser().getId().equals(user.getId())) {
-            throw new BusinessException("error.course.notOwner");
-        }
-
-        if (course.getImage() != null) {
-            fileUploadService.deleteFile(course.getImage());
-        }
-
-        courseRepository.delete(course);
-    }
 
     @Transactional
     public EnrollmentResponse enrollInCourse(User user, Long courseId) {
