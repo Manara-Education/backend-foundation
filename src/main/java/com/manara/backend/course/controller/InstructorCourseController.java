@@ -46,24 +46,5 @@ public class InstructorCourseController {
         return ApiResponse.success(courseService.updateCourse(user, courseId, request));
     }
 
-    @DeleteMapping("/{courseId}")
-    public ApiResponse<MessageResponse> deleteCourse(
-            @AuthenticationPrincipal User user,
-            @PathVariable Long courseId) {
-        courseService.deleteCourse(user, courseId);
-        return ApiResponse.success(MessageResponse.builder().message("Course deleted successfully").build());
-    }
 
-    @PostMapping("/{courseId}/enroll")
-    public ApiResponse<EnrollmentResponse> enrollInCourse(
-            @AuthenticationPrincipal User user,
-            @PathVariable Long courseId) {
-        return ApiResponse.success(courseService.enrollInCourse(user, courseId));
-    }
-
-    @GetMapping("/my-enrollments")
-    public ApiResponse<List<EnrollmentResponse>> getMyEnrollments(
-            @AuthenticationPrincipal User user) {
-        return ApiResponse.success(courseService.getMyEnrollments(user));
-    }
 }
