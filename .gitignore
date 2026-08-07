@@ -56,9 +56,17 @@ out/
 # User-specific
 AGENTS.md
 .env
+.env.*
+!.env.example
 
 # Spring Boot
 .mvn/wrapper/maven-wrapper.properties
+# Local, developer-specific overrides — these are where real credentials belong.
+# The committed application.properties must only ever hold env-var placeholders.
+application-local.properties
+application-local.yml
+application-secret.properties
+application-secret.yml
 
 # Uploads
 /uploads/

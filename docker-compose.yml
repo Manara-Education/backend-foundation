@@ -37,6 +37,11 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - COOKIE_SECURE=true
+      # Supplied from the host environment / .env — never hardcode the key here.
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - MAIL_FROM=${MAIL_FROM:-no-reply@manara-edu.com}
+      - MAIL_FROM_NAME=${MAIL_FROM_NAME:-Manara}
+      - MAIL_REPLY_TO=${MAIL_REPLY_TO:-support@manara-edu.com}
     restart: always
 
 volumes:

@@ -56,7 +56,7 @@ public class AuthService {
             studentRepository.save(profileMapper.toStudent(user));
         }
 
-        otpService.generateAndSave(user, OtpType.EMAIL_VERIFICATION);
+        otpService.generateAndSend(user, OtpType.EMAIL_VERIFICATION);
 
         return MessageResponse.builder()
                 .message(messageService.get("auth.register.success"))
@@ -87,7 +87,7 @@ public class AuthService {
             throw new BusinessException("auth.email.alreadyVerified");
         }
 
-        otpService.generateAndSave(user, typeToResend);
+        otpService.generateAndSend(user, typeToResend);
 
         return MessageResponse.builder()
                 .message(messageService.get("auth.otp.resent"))
@@ -115,7 +115,7 @@ public class AuthService {
     @Transactional
     public MessageResponse forgotPassword(ForgotPasswordRequest request) {
         var user = findUserByEmail(request.getEmail());
-        otpService.generateAndSave(user, OtpType.PASSWORD_RESET);
+        otpService.generateAndSend(user, OtpType.PASSWORD_RESET);
 
         return MessageResponse.builder()
                 .message(messageService.get("auth.otp.sentForReset"))
