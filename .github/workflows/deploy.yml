@@ -11,15 +11,30 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # Fails the deploy on the runner, before the server is touched. Without this a missing
+      # secret would deploy "successfully" and leave every OTP email silently unsent.
+      - name: Verify required secrets are configured
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+        run: |
+          if [ -z "$RESEND_API_KEY" ]; then
+            echo "::error::RESEND_API_KEY is not configured. Add it under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          echo "RESEND_API_KEY is configured."
+
       - name: Deploy to Server
         uses: appleboy/ssh-action@v1.0.3
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
+          # Consumed on the server by docker-compose.yml's ${RESEND_API_KEY} substitution.
+          # GitHub masks the value in logs; it is never echoed by the script below.
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
         with:
           host: ${{ secrets.DO_HOST }}
           username: ${{ secrets.DO_USERNAME }}
           key: ${{ secrets.DO_SSH_KEY }}
-          envs: GH_PAT
+          envs: GH_PAT,RESEND_API_KEY
           script: |
             # Create directory if it doesn't exist
             mkdir -p ~/manara-backend
@@ -38,5 +53,13 @@ jobs:
               git pull origin main
             fi
             
+            # Guard against the key being dropped in transit — docker-compose would otherwise
+            # substitute an empty string and bring the app up with email quietly broken.
+            if [ -z "$RESEND_API_KEY" ]; then
+              echo "RESEND_API_KEY did not reach the server; aborting before restart."
+              exit 1
+            fi
+
             # Start/Restart services (Builds the Docker image automatically)
+            # RESEND_API_KEY is inherited from this shell by compose's ${RESEND_API_KEY}.
             docker-compose up -d --build --remove-orphans
