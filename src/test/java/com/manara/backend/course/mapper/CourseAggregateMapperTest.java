@@ -68,7 +68,7 @@ class CourseAggregateMapperTest {
     @Test
     void theLearnerViewLeaksNoAnswerAnywhereInTheSerializedTree() throws Exception {
         var aggregate = flatAggregate();
-        var response = mapper.toCourseDetailsResponse(aggregate, enrolled(aggregate));
+        var response = mapper.toCourseDetailsResponse(aggregate, enrolled(aggregate), null);
 
         String json = objectMapper.writeValueAsString(response);
 
@@ -83,7 +83,7 @@ class CourseAggregateMapperTest {
     @Test
     void theLearnerViewLeaksNoAnswerFromAModuleExamEither() throws Exception {
         var aggregate = modularAggregate();
-        var response = mapper.toCourseDetailsResponse(aggregate, enrolled(aggregate));
+        var response = mapper.toCourseDetailsResponse(aggregate, enrolled(aggregate), null);
 
         String json = objectMapper.writeValueAsString(response);
 
@@ -96,7 +96,7 @@ class CourseAggregateMapperTest {
     void courseDiscoveryListsTheCurriculumWithoutHandingOutAnyOfIt() {
         var aggregate = flatAggregate();
 
-        var response = mapper.toCourseDetailsResponse(aggregate, CourseProgression.forVisitor());
+        var response = mapper.toCourseDetailsResponse(aggregate, CourseProgression.forVisitor(), null);
 
         var lesson = response.getLessons().getFirst();
         assertThat(lesson.getLocked()).isTrue();
@@ -112,7 +112,7 @@ class CourseAggregateMapperTest {
     void anEnrolledLearnerCarriesTheirOwnProgressionInTheResponse() {
         var aggregate = flatAggregate();
 
-        var response = mapper.toCourseDetailsResponse(aggregate, enrolled(aggregate));
+        var response = mapper.toCourseDetailsResponse(aggregate, enrolled(aggregate), null);
 
         assertThat(response.getLessons().getFirst().getLocked()).isFalse();
         assertThat(response.getProgress()).isZero();
@@ -124,7 +124,7 @@ class CourseAggregateMapperTest {
     void aModuleTheLearnerHasNotReachedIsMarkedLocked() {
         var aggregate = modularAggregate();
 
-        var response = mapper.toCourseDetailsResponse(aggregate, CourseProgression.forVisitor());
+        var response = mapper.toCourseDetailsResponse(aggregate, CourseProgression.forVisitor(), null);
 
         assertThat(response.getModules().getFirst().getLocked()).isTrue();
     }

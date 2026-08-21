@@ -3,26 +3,22 @@ package com.manara.backend.course.service;
 import com.manara.backend.common.exception.BusinessException;
 import com.manara.backend.common.exception.ResourceNotFoundException;
 import com.manara.backend.common.file.FileUploadService;
-import com.manara.backend.course.dto.CheckoutRequest;
 import com.manara.backend.course.dto.CourseDetailsResponse;
 import com.manara.backend.course.dto.CourseRequest;
 import com.manara.backend.course.dto.CourseResponse;
 import com.manara.backend.course.dto.CourseViewMode;
-import com.manara.backend.course.dto.EnrollmentResponse;
 import com.manara.backend.course.dto.InstructorCourseResponse;
 import com.manara.backend.course.mapper.CourseAggregateMapper;
 import com.manara.backend.course.mapper.CourseMapper;
+import com.manara.backend.course.mapper.EntitlementMapper;
 import com.manara.backend.course.model.Course;
-import com.manara.backend.course.model.CourseAccessType;
 import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseStructure;
 import com.manara.backend.course.repository.CourseRepository;
-import com.manara.backend.course.repository.EnrollmentRepository;
 import com.manara.backend.course.service.view.CourseDetailsViewRegistry;
 import com.manara.backend.lesson.repository.LessonRepository;
 import com.manara.backend.profile.model.Instructor;
 import com.manara.backend.profile.repository.InstructorRepository;
-import com.manara.backend.profile.repository.StudentRepository;
 import com.manara.backend.user.model.Role;
 import com.manara.backend.user.model.User;
 import lombok.RequiredArgsConstructor;
@@ -45,16 +41,16 @@ import java.util.List;
 public class CourseService {
 
     private final CourseRepository courseRepository;
-    private final EnrollmentRepository enrollmentRepository;
     private final LessonRepository lessonRepository;
     private final InstructorRepository instructorRepository;
-    private final StudentRepository studentRepository;
     private final CourseMapper courseMapper;
     private final CourseAggregateMapper courseAggregateMapper;
     private final CourseAggregateLoader courseAggregateLoader;
     private final CourseValidator courseValidator;
     private final CourseContentSynchronizer courseContentSynchronizer;
     private final CourseDetailsViewRegistry courseDetailsViewRegistry;
+    private final EntitlementMapper entitlementMapper;
+    private final EntitlementPolicy entitlementPolicy;
     private final FileUploadService fileUploadService;
 
     /** Catalogue for instructors and admins — drafts included. */
@@ -71,11 +67,20 @@ public class CourseService {
                 .toList();
     }
 
+    /**
+     * The learner-facing course screen, in either of its two modes.
+     *
+     * <p>The response carries the viewer's own access alongside the content in both modes, because
+     * both need it: discovery renders enrol, buy or subscribe from it — and "continue learning" when
+     * the visitor turns out to already hold the course — while the enrolled view renders the
+     * subscription's remaining days, or its renewal offer once it has run out.
+     */
     public CourseDetailsResponse getCourseDetails(User user, Long courseId, CourseViewMode mode) {
         var course = findPublishedCourse(courseId);
         var aggregate = courseAggregateLoader.load(course);
         var progression = courseDetailsViewRegistry.get(mode).resolveProgression(user, aggregate);
-        return courseAggregateMapper.toCourseDetailsResponse(aggregate, progression);
+        var access = entitlementMapper.toCourseAccessResponse(entitlementPolicy.accessOf(user, courseId));
+        return courseAggregateMapper.toCourseDetailsResponse(aggregate, progression, access);
     }
 
     public List<CourseResponse> getMyCourses(User user) {
@@ -138,58 +143,6 @@ public class CourseService {
     private InstructorCourseResponse saveAndRespond(Course course) {
         courseRepository.saveAndFlush(course);
         return courseAggregateMapper.toInstructorCourseResponse(courseAggregateLoader.load(course));
-    }
-
-    @Transactional
-    public EnrollmentResponse enrollInCourse(User user, Long courseId) {
-        if (user.getRole() != Role.STUDENT) {
-            throw new BusinessException("error.course.onlyStudent");
-        }
-
-        var student = studentRepository.findByUserId(user.getId())
-                .orElseThrow(() -> new ResourceNotFoundException("error.profile.studentNotFound", user.getId().toString()));
-
-        var course = findPublishedCourse(courseId);
-
-        if (enrollmentRepository.findByCourseIdAndStudentId(courseId, student.getId()).isPresent()) {
-            throw new BusinessException("error.course.alreadyEnrolled");
-        }
-
-        var enrollment = enrollmentRepository.save(courseMapper.toEnrollment(course, student));
-
-        course.setStudentsCount(course.getStudentsCount() + 1);
-        courseRepository.save(course);
-
-        return courseMapper.toEnrollmentResponse(enrollment);
-    }
-
-    @Transactional
-    public EnrollmentResponse processCheckoutAndEnroll(User user, Long courseId, CheckoutRequest request) {
-        var course = findPublishedCourse(courseId);
-
-        // Access type is now the authority on whether money is involved; it used to be inferred
-        // from a non-zero price, which no longer describes subscription courses.
-        if (course.getAccessType() != CourseAccessType.FREE) {
-            validatePaymentDetails(request);
-        }
-
-        return enrollInCourse(user, courseId);
-    }
-
-    private void validatePaymentDetails(CheckoutRequest request) {
-        if (request == null) {
-            throw new BusinessException("error.payment.required");
-        }
-        String card = request.getCardNumber() == null ? "" : request.getCardNumber().replaceAll("\\s+", "");
-        if (card.length() < 15 || card.length() > 19) {
-            throw new BusinessException("error.payment.invalidCard");
-        }
-        if (request.getCvc() == null || request.getCvc().length() < 3 || request.getCvc().length() > 4) {
-            throw new BusinessException("error.payment.invalidCvc");
-        }
-        if (request.getExpiry() == null || !request.getExpiry().contains("/")) {
-            throw new BusinessException("error.payment.invalidExpiry");
-        }
     }
 
     private Instructor requireInstructor(User user) {

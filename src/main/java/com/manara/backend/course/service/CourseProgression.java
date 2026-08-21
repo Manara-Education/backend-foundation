@@ -55,6 +55,29 @@ public record CourseProgression(
                 0, false, false, null);
     }
 
+    /**
+     * The same standing with every door shut — what a lapsed subscriber sees.
+     *
+     * <p>Everything the learner earned is kept: which lessons they completed, the percentage they
+     * reached, whether they finished the course. What goes is only the right to open anything, so
+     * renewing restores their exact position instead of starting them over. This is why expiry is a
+     * progression concern and not a deletion.
+     */
+    public CourseProgression suspended() {
+        return new CourseProgression(
+                tracksProgress,
+                completedLessonIds,
+                Set.of(),
+                Set.of(),
+                quizStates.entrySet().stream().collect(Collectors.toUnmodifiableMap(
+                        Map.Entry::getKey, entry -> entry.getValue().withAvailability(false))),
+                progress,
+                curriculumCompleted,
+                courseCompleted,
+                // Nothing is open, so there is nowhere to continue to.
+                null);
+    }
+
     /** Whether this viewer may be served the lesson's protected content — its video and its quiz. */
     public boolean isLessonAccessible(Lesson lesson) {
         return accessibleLessonIds.contains(lesson.getId());

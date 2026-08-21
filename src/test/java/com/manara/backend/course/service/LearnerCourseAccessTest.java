@@ -35,8 +35,9 @@ import static org.mockito.Mockito.lenient;
  * Who may see a course, and how much of it.
  *
  * <p>The rule this pins down is the one the API used to get wrong: publication makes a course
- * <em>visible</em>, enrolment makes it <em>readable</em>. A signed-in stranger sees the shape of a
- * published course and none of its content.
+ * <em>visible</em>, the learner's entitlement makes it <em>readable</em>. A signed-in stranger sees
+ * the shape of a published course and none of its content — and so, now, does a learner whose
+ * subscription ran out, except that they keep every figure describing what they already did.
  */
 @ExtendWith(MockitoExtension.class)
 class LearnerCourseAccessTest {
@@ -58,6 +59,9 @@ class LearnerCourseAccessTest {
     @Mock
     private CourseProgressionService courseProgressionService;
 
+    @Mock
+    private EntitlementPolicy entitlementPolicy;
+
     private LearnerCourseAccess learnerCourseAccess;
 
     private final User instructorUser = User.builder().id(1L).role(Role.INSTRUCTOR).build();
@@ -70,7 +74,7 @@ class LearnerCourseAccessTest {
     void setUp() {
         learnerCourseAccess = new LearnerCourseAccess(
                 courseRepository, studentRepository, enrollmentRepository,
-                courseAggregateLoader, courseProgressionService);
+                courseAggregateLoader, courseProgressionService, entitlementPolicy);
     }
 
     // --- reading -------------------------------------------------------------
@@ -92,6 +96,7 @@ class LearnerCourseAccessTest {
     void anEnrolledLearnerGetsTheProgressionTheCurriculumGivesThem() {
         Course course = givenCourse(CourseStatus.PUBLISHED);
         givenEnrolled();
+        givenEntitled(true);
         var progression = progressionFor(course);
         given(courseProgressionService.progressionOf(any(), any())).willReturn(progression);
 
@@ -99,6 +104,29 @@ class LearnerCourseAccessTest {
 
         assertThat(viewer.isEnrolled()).isTrue();
         assertThat(viewer.progression()).isSameAs(progression);
+    }
+
+    /**
+     * The expiry rule, stated as plainly as it can be: the door shuts, the record stays. Anything
+     * that dropped the completed lessons or reset the percentage here would be destroying a
+     * learner's history to enforce a billing decision.
+     */
+    @Test
+    void aLearnerWhoseSubscriptionLapsedKeepsTheirProgressAndLosesTheContent() {
+        Course course = givenCourse(CourseStatus.PUBLISHED);
+        givenEnrolled();
+        givenEntitled(false);
+        given(courseProgressionService.progressionOf(any(), any())).willReturn(completedProgressionFor(course));
+
+        var viewer = learnerCourseAccess.resolveViewer(studentUser, COURSE_ID);
+
+        assertThat(viewer.isEnrolled()).isTrue();
+        assertThat(viewer.progression().accessibleLessonIds()).isEmpty();
+        assertThat(viewer.progression().nextLessonId()).isNull();
+        // Everything they earned survives the lapse.
+        assertThat(viewer.progression().tracksProgress()).isTrue();
+        assertThat(viewer.progression().completedLessonIds()).containsExactly(1L);
+        assertThat(viewer.progression().progress()).isEqualTo(100);
     }
 
     @Test
@@ -144,6 +172,27 @@ class LearnerCourseAccessTest {
     }
 
     @Test
+    void requireEnrolledRefusesALearnerWhoseSubscriptionLapsed() {
+        givenCourse(CourseStatus.PUBLISHED);
+        givenEnrolled();
+        givenEntitled(false);
+
+        assertThatThrownBy(() -> learnerCourseAccess.requireEnrolled(studentUser, COURSE_ID))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("error.course.accessExpired");
+    }
+
+    @Test
+    void requireEnrolledAdmitsAnEntitledLearner() {
+        Course course = givenCourse(CourseStatus.PUBLISHED);
+        givenEnrolled();
+        givenEntitled(true);
+        given(courseProgressionService.progressionOf(any(), any())).willReturn(progressionFor(course));
+
+        assertThat(learnerCourseAccess.requireEnrolled(studentUser, COURSE_ID).isEnrolled()).isTrue();
+    }
+
+    @Test
     void requireEnrolledRefusesAnInstructorEvenOnTheirOwnCourse() {
         assertThatThrownBy(() -> learnerCourseAccess.requireEnrolled(instructorUser, COURSE_ID))
                 .isInstanceOf(BusinessException.class)
@@ -185,7 +234,16 @@ class LearnerCourseAccessTest {
         return new CourseAggregate(course, List.of(), List.of(lesson), Map.of(), Map.of(), null, List.of());
     }
 
+    private void givenEntitled(boolean entitled) {
+        given(entitlementPolicy.isEntitled(COURSE_ID, 20L)).willReturn(entitled);
+    }
+
     private CourseProgression progressionFor(Course course) {
         return new CourseProgressionCalculator().compute(aggregateOf(course), Set.of(), Map.of());
+    }
+
+    /** A learner who finished the course's only lesson, so the lapse has something to preserve. */
+    private CourseProgression completedProgressionFor(Course course) {
+        return new CourseProgressionCalculator().compute(aggregateOf(course), Set.of(1L), Map.of());
     }
 }

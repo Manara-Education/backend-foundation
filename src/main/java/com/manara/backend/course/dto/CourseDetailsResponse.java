@@ -32,6 +32,15 @@ public class CourseDetailsResponse {
 
     private CourseInfo course;
     private InstructorInfo instructor;
+
+    /**
+     * The viewing learner's own standing: enrolled, entitled, and — for a subscription — until when.
+     *
+     * <p>What the CTA should offer is read from here, not guessed from the pricing fields. "Every
+     * lesson locked" describes a visitor who has not bought the course and a subscriber whose window
+     * closed equally well; only this block separates them.
+     */
+    private CourseAccessResponse access;
     private CourseStructure structure;
     private List<LessonResponse> lessons;
     private List<LearnerModuleResponse> modules;
