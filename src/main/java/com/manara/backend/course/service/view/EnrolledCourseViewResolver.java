@@ -7,6 +7,7 @@ import com.manara.backend.course.repository.EnrollmentRepository;
 import com.manara.backend.course.service.CourseAggregate;
 import com.manara.backend.course.service.CourseProgression;
 import com.manara.backend.course.service.CourseProgressionService;
+import com.manara.backend.course.service.EntitlementPolicy;
 import com.manara.backend.profile.repository.StudentRepository;
 import com.manara.backend.user.model.Role;
 import com.manara.backend.user.model.User;
@@ -20,6 +21,7 @@ public class EnrolledCourseViewResolver implements CourseDetailsViewResolver {
     private final StudentRepository studentRepository;
     private final EnrollmentRepository enrollmentRepository;
     private final CourseProgressionService courseProgressionService;
+    private final EntitlementPolicy entitlementPolicy;
 
     @Override
     public CourseViewMode mode() {
@@ -39,6 +41,10 @@ public class EnrolledCourseViewResolver implements CourseDetailsViewResolver {
         enrollmentRepository.findByCourseIdAndStudentId(courseId, student.getId())
                 .orElseThrow(() -> new BusinessException("error.course.notEnrolled"));
 
-        return courseProgressionService.progressionOf(aggregate, student);
+        var progression = courseProgressionService.progressionOf(aggregate, student);
+
+        // A lapsed subscriber still owns this screen — their progress, their history, their
+        // renewal offer. What they no longer own is the content, so everything in it locks.
+        return entitlementPolicy.isEntitled(courseId, student.getId()) ? progression : progression.suspended();
     }
 }

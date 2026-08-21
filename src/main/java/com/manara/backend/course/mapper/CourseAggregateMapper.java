@@ -1,6 +1,7 @@
 package com.manara.backend.course.mapper;
 
 import com.manara.backend.common.util.DurationFormatter;
+import com.manara.backend.course.dto.CourseAccessResponse;
 import com.manara.backend.course.dto.CourseDetailsResponse;
 import com.manara.backend.course.dto.InstructorCourseResponse;
 import com.manara.backend.course.dto.InstructorModuleResponse;
@@ -75,8 +76,13 @@ public class CourseAggregateMapper {
     /**
      * @param progression what the viewing learner has reached — it decides which lessons are served
      *                    with their content and which are served as locked rows
+     * @param access      the viewer's standing on the course: enrolled, entitled, and until when.
+     *                    Kept beside the content rather than inferred from it, because "every lesson
+     *                    is locked" is what an unenrolled visitor and a lapsed subscriber have in
+     *                    common, and the screen has to tell them apart
      */
-    public CourseDetailsResponse toCourseDetailsResponse(CourseAggregate aggregate, CourseProgression progression) {
+    public CourseDetailsResponse toCourseDetailsResponse(
+            CourseAggregate aggregate, CourseProgression progression, CourseAccessResponse access) {
         Course course = aggregate.course();
         var instructor = course.getInstructor();
         var instructorUser = instructor.getUser();
@@ -114,6 +120,7 @@ public class CourseAggregateMapper {
         return CourseDetailsResponse.builder()
                 .course(courseInfo)
                 .instructor(instructorInfo)
+                .access(access)
                 .structure(course.getStructure())
                 .lessons(isFlat(course)
                         ? learnerLessons(aggregate, aggregate.lessons(), progression)

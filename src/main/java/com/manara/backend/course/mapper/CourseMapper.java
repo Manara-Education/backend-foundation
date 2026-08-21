@@ -2,7 +2,6 @@ package com.manara.backend.course.mapper;
 
 import com.manara.backend.course.dto.CourseRequest;
 import com.manara.backend.course.dto.CourseResponse;
-import com.manara.backend.course.dto.EnrollmentResponse;
 import com.manara.backend.course.model.Course;
 import com.manara.backend.course.model.Enrollment;
 import com.manara.backend.course.service.ResolvedCourseSettings;
@@ -14,8 +13,9 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 /**
- * Course-level mapping: summaries, enrollments and the course entity itself. The full editor and
- * learner trees are assembled by {@link CourseAggregateMapper}.
+ * Course-level mapping: summaries, enrolments and the course entity itself. The full editor and
+ * learner trees are assembled by {@link CourseAggregateMapper}; the access-lifecycle rows by
+ * {@link EntitlementMapper}.
  */
 @Component
 public class CourseMapper {
@@ -67,16 +67,6 @@ public class CourseMapper {
                 .instructorName(course.getInstructor().getUser().getFullName())
                 .createdAt(course.getCreatedAt())
                 .lessons(lessons)
-                .build();
-    }
-
-    public EnrollmentResponse toEnrollmentResponse(Enrollment enrollment) {
-        return EnrollmentResponse.builder()
-                .id(enrollment.getId())
-                .course(toCourseResponse(enrollment.getCourse()))
-                .progress(enrollment.getProgress())
-                .enrolled(enrollment.getEnrolled())
-                .enrolledAt(enrollment.getEnrolledAt())
                 .build();
     }
 }

@@ -14,6 +14,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.security.SecureRandom;
+import java.time.Clock;
 
 @Configuration
 @RequiredArgsConstructor
@@ -47,5 +48,14 @@ public class ApplicationConfig {
     @Bean
     public SecureRandom secureRandom() {
         return new SecureRandom();
+    }
+
+    /**
+     * Injected wherever "now" is a business decision — subscription windows, entitlement expiry —
+     * so those rules can be tested at a fixed instant instead of against the wall clock.
+     */
+    @Bean
+    public Clock clock() {
+        return Clock.systemDefaultZone();
     }
 }
