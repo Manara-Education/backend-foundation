@@ -1,8 +1,7 @@
 package com.manara.backend.lesson.controller;
 
 import com.manara.backend.common.dto.ApiResponse;
-import com.manara.backend.common.dto.MessageResponse;
-import com.manara.backend.common.service.MessageService;
+import com.manara.backend.lesson.dto.LessonCompletionResponse;
 import com.manara.backend.lesson.dto.LessonDetailsResponse;
 import com.manara.backend.lesson.service.LessonService;
 import com.manara.backend.user.model.User;
@@ -20,7 +19,6 @@ import org.springframework.web.bind.annotation.RestController;
 public class StudentLessonController {
 
     private final LessonService lessonService;
-    private final MessageService messageService;
 
     @GetMapping("/{lessonId}")
     public ApiResponse<LessonDetailsResponse> getLesson(
@@ -30,14 +28,15 @@ public class StudentLessonController {
         return ApiResponse.success(lessonService.getLesson(user, courseId, lessonId));
     }
 
+    /**
+     * Returns the progression the completion produced rather than an acknowledgement, so the client
+     * refreshes the curriculum from the server's answer instead of recomputing it.
+     */
     @PostMapping("/{lessonId}/complete")
-    public ApiResponse<MessageResponse> markLessonCompleted(
+    public ApiResponse<LessonCompletionResponse> markLessonCompleted(
             @AuthenticationPrincipal User user,
             @PathVariable Long courseId,
             @PathVariable Long lessonId) {
-        lessonService.markLessonCompleted(user, courseId, lessonId);
-        return ApiResponse.success(MessageResponse.builder()
-                .message(messageService.get("lesson.completed"))
-                .build());
+        return ApiResponse.success(lessonService.markLessonCompleted(user, courseId, lessonId));
     }
 }

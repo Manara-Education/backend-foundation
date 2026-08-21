@@ -4,22 +4,22 @@ import com.manara.backend.common.exception.BusinessException;
 import com.manara.backend.common.exception.ResourceNotFoundException;
 import com.manara.backend.course.model.Course;
 import com.manara.backend.course.model.CourseModule;
-import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseStructure;
-import com.manara.backend.course.model.Enrollment;
 import com.manara.backend.course.repository.CourseModuleRepository;
 import com.manara.backend.course.repository.CourseRepository;
 import com.manara.backend.course.repository.EnrollmentRepository;
+import com.manara.backend.course.service.CourseProgression;
+import com.manara.backend.course.service.CourseProgressionService;
+import com.manara.backend.course.service.CourseViewer;
+import com.manara.backend.course.service.LearnerCourseAccess;
+import com.manara.backend.lesson.dto.LessonCompletionResponse;
 import com.manara.backend.lesson.dto.LessonDetailsResponse;
 import com.manara.backend.lesson.dto.LessonRequest;
 import com.manara.backend.lesson.dto.LessonResponse;
 import com.manara.backend.lesson.mapper.LessonMapper;
-import com.manara.backend.lesson.model.CompletedLesson;
 import com.manara.backend.lesson.model.Lesson;
 import com.manara.backend.lesson.repository.CompletedLessonRepository;
 import com.manara.backend.lesson.repository.LessonRepository;
-import com.manara.backend.profile.model.Student;
-import com.manara.backend.profile.repository.StudentRepository;
 import com.manara.backend.quiz.mapper.QuizMapper;
 import com.manara.backend.quiz.model.Quiz;
 import com.manara.backend.quiz.model.QuizOwnerType;
@@ -30,9 +30,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -52,7 +51,8 @@ public class LessonService {
     private final CourseModuleRepository courseModuleRepository;
     private final CompletedLessonRepository completedLessonRepository;
     private final EnrollmentRepository enrollmentRepository;
-    private final StudentRepository studentRepository;
+    private final LearnerCourseAccess learnerCourseAccess;
+    private final CourseProgressionService courseProgressionService;
     private final LessonMapper lessonMapper;
     private final QuizService quizService;
     private final QuizMapper quizMapper;
@@ -161,11 +161,11 @@ public class LessonService {
     }
 
     public LessonDetailsResponse getLesson(User user, Long courseId, Long lessonId) {
-        requireVisibleCourse(user, courseId);
+        CourseViewer viewer = learnerCourseAccess.resolveViewer(user, courseId);
 
         // Reading order spans modules, so "previous" and "next" walk the course the way a learner
         // actually sees it rather than jumping between modules.
-        List<Lesson> lessons = lessonRepository.findCourseLessonsInReadingOrder(courseId);
+        List<Lesson> lessons = viewer.aggregate().lessons();
 
         int index = indexOf(lessons, lessonId);
         if (index == -1) {
@@ -179,67 +179,78 @@ public class LessonService {
         Lesson previous = index > 0 ? lessons.get(index - 1) : null;
         Lesson next = index < lessons.size() - 1 ? lessons.get(index + 1) : null;
 
-        Boolean isCompleted = null;
-        Optional<Student> enrolledStudent = findEnrolledStudent(user, courseId);
-        if (enrolledStudent.isPresent()) {
-            isCompleted = completedLessonRepository
-                    .findByStudentIdAndLessonId(enrolledStudent.get().getId(), lessonId)
-                    .isPresent();
-        }
-
-        var quiz = quizService.findByOwner(QuizOwnerType.LESSON, lessonId).orElse(null);
-
-        return lessonMapper.toLessonDetailsResponse(
-                lesson, isCompleted, quizMapper.toLearnerResponse(quiz), previous, next);
+        return lessonMapper.toLessonDetailsResponse(learnerLessonResponse(viewer, lesson), previous, next);
     }
 
     public List<LessonResponse> getCourseLessons(User user, Long courseId) {
-        requireVisibleCourse(user, courseId);
-
-        List<Lesson> lessons = lessonRepository.findCourseLessonsInReadingOrder(courseId);
-        List<Long> lessonIds = lessons.stream().map(Lesson::getId).toList();
-
-        Map<Long, Quiz> quizzes = quizService.findByOwners(QuizOwnerType.LESSON, lessonIds);
-
-        Set<Long> completedIds = findEnrolledStudent(user, courseId)
-                .map(student -> Set.copyOf(
-                        completedLessonRepository.findCompletedLessonIdsByStudentIdAndCourseId(student.getId(), courseId)))
-                .orElse(Set.of());
-
-        return lessons.stream()
-                .map(lesson -> lessonMapper.toLessonResponse(
-                        lesson,
-                        completedIds.contains(lesson.getId()),
-                        quizMapper.toLearnerResponse(quizzes.get(lesson.getId()))))
+        CourseViewer viewer = learnerCourseAccess.resolveViewer(user, courseId);
+        return viewer.aggregate().lessons().stream()
+                .map(lesson -> learnerLessonResponse(viewer, lesson))
                 .toList();
     }
 
-    @Transactional
-    public void markLessonCompleted(User user, Long courseId, Long lessonId) {
-        if (user.getRole() != Role.STUDENT) {
-            throw new BusinessException("error.course.onlyStudent");
+    /**
+     * A published course is a shop window, not an open library. Until this change any signed-in
+     * user could read a published lesson — video URL, description and all — simply by asking for
+     * it, which made enrolment decorative. The listing still shows what a course contains; the
+     * content behind it is served only to someone the curriculum has actually opened it for.
+     */
+    private LessonResponse learnerLessonResponse(CourseViewer viewer, Lesson lesson) {
+        CourseProgression progression = viewer.progression();
+        if (!progression.isLessonAccessible(lesson)) {
+            return lessonMapper.toLockedLessonResponse(lesson, progression.completionOf(lesson));
         }
 
-        Student student = studentRepository.findByUserId(user.getId())
-                .orElseThrow(() -> new ResourceNotFoundException("error.profile.studentNotFound", user.getId().toString()));
+        Quiz quiz = viewer.aggregate().quizOfLesson(lesson);
+        return lessonMapper.toLessonResponse(
+                lesson,
+                progression.completionOf(lesson),
+                quizMapper.toLearnerResponse(quiz, progression.stateOf(quiz)));
+    }
 
-        Enrollment enrollment = enrollmentRepository.findByCourseIdAndStudentId(courseId, student.getId())
-                .orElseThrow(() -> new BusinessException("error.course.notEnrolled"));
-
+    /**
+     * Completing a lesson is the learner's claim; whether it counts is the server's decision.
+     *
+     * <p>A lesson carrying a quiz stays incomplete until that quiz is passed — the prototype
+     * enforced this in the player alone, which meant a direct call to this endpoint skipped it
+     * entirely. The response reports what the completion changed, so the client updates the
+     * curriculum from the server's answer instead of recomputing progress and unlocks itself.
+     */
+    @Transactional
+    public LessonCompletionResponse markLessonCompleted(User user, Long courseId, Long lessonId) {
+        CourseViewer viewer = learnerCourseAccess.requireEnrolled(user, courseId);
         Lesson lesson = requireLessonOfCourse(courseId, lessonId);
 
-        if (completedLessonRepository.findByStudentIdAndLessonId(student.getId(), lessonId).isEmpty()) {
-            CompletedLesson completedLesson = lessonMapper.toCompletedLesson(student, lesson);
-            completedLessonRepository.save(completedLesson);
-
-            int totalLessons = lessonRepository.countByCourseId(courseId);
-            if (totalLessons > 0) {
-                int completedLessonsCount = completedLessonRepository.countByStudentIdAndLesson_Course_Id(student.getId(), courseId);
-                int progress = (int) (((double) (completedLessonsCount + 1) / totalLessons) * 100);
-                enrollment.setProgress(Math.min(progress, 100));
-                enrollmentRepository.save(enrollment);
-            }
+        if (!viewer.progression().isLessonAccessible(lesson)) {
+            throw new BusinessException("error.lesson.locked");
         }
+
+        Quiz quiz = viewer.aggregate().quizOfLesson(lesson);
+        if (quiz != null && !viewer.progression().stateOf(quiz).passed()) {
+            throw new BusinessException("error.quiz.lessonRequiresPass");
+        }
+
+        Set<Long> completedLessonIds = new HashSet<>(viewer.progression().completedLessonIds());
+        if (completedLessonIds.add(lessonId)) {
+            completedLessonRepository.save(lessonMapper.toCompletedLesson(viewer.student(), lesson));
+        }
+
+        // Recomputed from the updated picture rather than read back: the completion above is not
+        // flushed yet, and the rules are pure, so handing them the new set is both cheaper and
+        // exactly what the next request would see.
+        CourseProgression updated = courseProgressionService.recompute(
+                viewer.aggregate(), viewer.student(), completedLessonIds);
+
+        viewer.enrollment().setProgress(updated.progress());
+        enrollmentRepository.save(viewer.enrollment());
+
+        return LessonCompletionResponse.builder()
+                .lessonId(lessonId)
+                .completed(true)
+                .courseProgress(updated.progress())
+                .nextLessonId(updated.nextLessonId())
+                .courseCompleted(updated.courseCompleted())
+                .build();
     }
 
     /**
@@ -255,29 +266,6 @@ public class LessonService {
         return quizService.sync(QuizOwnerType.LESSON, lesson.getId(), request.getQuiz());
     }
 
-    /**
-     * Draft courses are an instructor's work in progress. Until this change nothing unpublished
-     * existed, so reading a lesson only needed the course to exist; now anyone who guessed an id
-     * could read an unreleased lesson and its quiz. Published courses stay readable exactly as
-     * before — only the owning instructor can see a draft.
-     */
-    private Course requireVisibleCourse(User user, Long courseId) {
-        Course course = courseRepository.findById(courseId)
-                .orElseThrow(() -> new ResourceNotFoundException("error.course.notFound", courseId.toString()));
-
-        if (course.getStatus() == CourseStatus.PUBLISHED) {
-            return course;
-        }
-
-        boolean owningInstructor = user != null
-                && user.getRole() == Role.INSTRUCTOR
-                && course.getInstructor().getUser().getId().equals(user.getId());
-        if (!owningInstructor) {
-            throw new ResourceNotFoundException("error.course.notFound", courseId.toString());
-        }
-        return course;
-    }
-
     private Lesson requireLessonOfCourse(Long courseId, Long lessonId) {
         Lesson lesson = lessonRepository.findById(lessonId)
                 .orElseThrow(() -> new ResourceNotFoundException("error.lesson.notFound", lessonId.toString()));
@@ -285,14 +273,6 @@ public class LessonService {
             throw new BusinessException("error.lesson.notInCourse");
         }
         return lesson;
-    }
-
-    private Optional<Student> findEnrolledStudent(User user, Long courseId) {
-        if (user == null || user.getRole() != Role.STUDENT) {
-            return Optional.empty();
-        }
-        return studentRepository.findByUserId(user.getId())
-                .filter(student -> enrollmentRepository.findByCourseIdAndStudentId(courseId, student.getId()).isPresent());
     }
 
     private int indexOf(List<Lesson> lessons, Long lessonId) {

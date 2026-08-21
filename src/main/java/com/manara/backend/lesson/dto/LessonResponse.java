@@ -12,6 +12,10 @@ import java.time.LocalDateTime;
  * Learner-facing lesson. The attached quiz is the {@link LearnerQuizResponse} view, so course and
  * lesson browsing can never hand out an answer key.
  *
+ * <p>When {@code locked} is true the viewer has not earned the lesson's content, and the fields
+ * that carry it — {@code videoUrl}, {@code description} and {@code quiz} — are absent. What is left
+ * is the title, length and position, which is what a locked row in the curriculum shows.
+ *
  * @see InstructorLessonResponse for the authoring view
  */
 @Getter
@@ -29,6 +33,10 @@ public class LessonResponse {
     private Long courseId;
     private Long moduleId;
     private Boolean isCompleted;
+
+    /** True when the viewer may see this lesson listed but not open it. */
+    private Boolean locked;
+
     private LearnerQuizResponse quiz;
     private LocalDateTime createdAt;
 }

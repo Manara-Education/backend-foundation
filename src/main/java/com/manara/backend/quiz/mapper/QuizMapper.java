@@ -4,6 +4,7 @@ import com.manara.backend.quiz.dto.InstructorQuizQuestionResponse;
 import com.manara.backend.quiz.dto.InstructorQuizResponse;
 import com.manara.backend.quiz.dto.LearnerQuizQuestionResponse;
 import com.manara.backend.quiz.dto.LearnerQuizResponse;
+import com.manara.backend.quiz.dto.LearnerQuizStateResponse;
 import com.manara.backend.quiz.dto.QuizOptionRequest;
 import com.manara.backend.quiz.dto.QuizOptionResponse;
 import com.manara.backend.quiz.dto.QuizQuestionRequest;
@@ -12,6 +13,7 @@ import com.manara.backend.quiz.model.Quiz;
 import com.manara.backend.quiz.model.QuizOption;
 import com.manara.backend.quiz.model.QuizOwnerType;
 import com.manara.backend.quiz.model.QuizQuestion;
+import com.manara.backend.quiz.service.LearnerQuizState;
 import org.springframework.stereotype.Component;
 
 import java.util.Comparator;
@@ -100,6 +102,14 @@ public class QuizMapper {
     }
 
     public LearnerQuizResponse toLearnerResponse(Quiz quiz) {
+        return toLearnerResponse(quiz, null);
+    }
+
+    /**
+     * @param state where the viewing learner stands on this quiz, or {@code null} when the viewer
+     *              is not one — an instructor reading a learner-shaped response, typically
+     */
+    public LearnerQuizResponse toLearnerResponse(Quiz quiz, LearnerQuizState state) {
         if (quiz == null) {
             return null;
         }
@@ -109,6 +119,21 @@ public class QuizMapper {
                 .instructions(quiz.getInstructions())
                 .passingScore(quiz.getPassingScore())
                 .questions(sortedQuestions(quiz).map(this::toLearnerQuestionResponse).toList())
+                .state(toLearnerQuizStateResponse(state))
+                .build();
+    }
+
+    public LearnerQuizStateResponse toLearnerQuizStateResponse(LearnerQuizState state) {
+        if (state == null) {
+            return null;
+        }
+        return LearnerQuizStateResponse.builder()
+                .available(state.available())
+                .attemptCount(state.attemptCount())
+                .passed(state.passed())
+                .bestScore(state.bestScore())
+                .lastAttemptId(state.lastAttemptId())
+                .lastSubmittedAt(state.lastSubmittedAt())
                 .build();
     }
 

@@ -24,4 +24,7 @@ public class LearnerModuleResponse {
     private Integer orderIndex;
     private List<LessonResponse> lessons;
     private LearnerQuizResponse quiz;
+
+    /** True while an earlier module is unfinished, which is what keeps this one shut. */
+    private Boolean locked;
 }

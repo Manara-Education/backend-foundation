@@ -10,6 +10,7 @@ import com.manara.backend.course.model.Course;
 import com.manara.backend.course.model.CourseModule;
 import com.manara.backend.course.model.CourseStructure;
 import com.manara.backend.course.service.CourseAggregate;
+import com.manara.backend.course.service.CourseProgression;
 import com.manara.backend.lesson.dto.InstructorLessonResponse;
 import com.manara.backend.lesson.dto.LessonResponse;
 import com.manara.backend.lesson.mapper.LessonMapper;
@@ -20,7 +21,6 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 
 /**
  * Turns a loaded {@link CourseAggregate} into one of the two course trees the API serves.
@@ -73,17 +73,17 @@ public class CourseAggregateMapper {
     }
 
     /**
-     * @param completedLessonIds ids the learner has completed, or {@code null} when the view does
-     *                           not carry completion state (course discovery)
+     * @param progression what the viewing learner has reached — it decides which lessons are served
+     *                    with their content and which are served as locked rows
      */
-    public CourseDetailsResponse toCourseDetailsResponse(CourseAggregate aggregate, Set<Long> completedLessonIds) {
+    public CourseDetailsResponse toCourseDetailsResponse(CourseAggregate aggregate, CourseProgression progression) {
         Course course = aggregate.course();
         var instructor = course.getInstructor();
         var instructorUser = instructor.getUser();
 
         int totalDurationSeconds = sumDuration(aggregate.lessons());
         int remainingDurationSeconds = sumDuration(aggregate.lessons().stream()
-                .filter(lesson -> completedLessonIds == null || !completedLessonIds.contains(lesson.getId()))
+                .filter(lesson -> !Boolean.TRUE.equals(progression.completionOf(lesson)))
                 .toList());
 
         var courseInfo = CourseDetailsResponse.CourseInfo.builder()
@@ -116,12 +116,16 @@ public class CourseAggregateMapper {
                 .instructor(instructorInfo)
                 .structure(course.getStructure())
                 .lessons(isFlat(course)
-                        ? learnerLessons(aggregate, aggregate.lessons(), completedLessonIds)
+                        ? learnerLessons(aggregate, aggregate.lessons(), progression)
                         : List.of())
                 .modules(aggregate.modules().stream()
-                        .map(module -> toLearnerModuleResponse(aggregate, module, completedLessonIds))
+                        .map(module -> toLearnerModuleResponse(aggregate, module, progression))
                         .toList())
-                .finalQuiz(quizMapper.toLearnerResponse(aggregate.finalQuiz()))
+                .finalQuiz(quizMapper.toLearnerResponse(
+                        aggregate.finalQuiz(), progression.stateOf(aggregate.finalQuiz())))
+                .progress(progression.tracksProgress() ? progression.progress() : null)
+                .courseCompleted(progression.tracksProgress() ? progression.courseCompleted() : null)
+                .nextLessonId(progression.tracksProgress() ? progression.nextLessonId() : null)
                 .build();
     }
 
@@ -137,14 +141,16 @@ public class CourseAggregateMapper {
     }
 
     private LearnerModuleResponse toLearnerModuleResponse(CourseAggregate aggregate, CourseModule module,
-                                                          Set<Long> completedLessonIds) {
+                                                          CourseProgression progression) {
         return LearnerModuleResponse.builder()
                 .id(module.getId())
                 .title(module.getTitle())
                 .description(module.getDescription())
                 .orderIndex(module.getOrderIndex())
-                .lessons(learnerLessons(aggregate, aggregate.lessonsOf(module), completedLessonIds))
-                .quiz(quizMapper.toLearnerResponse(aggregate.quizOfModule(module)))
+                .lessons(learnerLessons(aggregate, aggregate.lessonsOf(module), progression))
+                .quiz(quizMapper.toLearnerResponse(
+                        aggregate.quizOfModule(module), progression.stateOf(aggregate.quizOfModule(module))))
+                .locked(!progression.isModuleUnlocked(module.getId()))
                 .build();
     }
 
@@ -155,13 +161,22 @@ public class CourseAggregateMapper {
                 .toList();
     }
 
+    /**
+     * The point where a curriculum listing stops being a content feed. A lesson the viewer has not
+     * reached is still listed — that is the locked row the learner sees — but it is mapped through
+     * the locked builder, so its video and its quiz never enter the response at all.
+     */
     private List<LessonResponse> learnerLessons(CourseAggregate aggregate, List<Lesson> lessons,
-                                                Set<Long> completedLessonIds) {
+                                                CourseProgression progression) {
         return lessons.stream()
-                .map(lesson -> lessonMapper.toLessonResponse(
-                        lesson,
-                        completedLessonIds == null ? null : completedLessonIds.contains(lesson.getId()),
-                        quizMapper.toLearnerResponse(aggregate.quizOfLesson(lesson))))
+                .map(lesson -> progression.isLessonAccessible(lesson)
+                        ? lessonMapper.toLessonResponse(
+                                lesson,
+                                progression.completionOf(lesson),
+                                quizMapper.toLearnerResponse(
+                                        aggregate.quizOfLesson(lesson),
+                                        progression.stateOf(aggregate.quizOfLesson(lesson))))
+                        : lessonMapper.toLockedLessonResponse(lesson, progression.completionOf(lesson)))
                 .toList();
     }
 

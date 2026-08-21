@@ -73,8 +73,9 @@ public class CourseService {
 
     public CourseDetailsResponse getCourseDetails(User user, Long courseId, CourseViewMode mode) {
         var course = findPublishedCourse(courseId);
-        var completedLessonIds = courseDetailsViewRegistry.get(mode).resolveCompletedLessonIds(user, courseId);
-        return courseAggregateMapper.toCourseDetailsResponse(courseAggregateLoader.load(course), completedLessonIds);
+        var aggregate = courseAggregateLoader.load(course);
+        var progression = courseDetailsViewRegistry.get(mode).resolveProgression(user, aggregate);
+        return courseAggregateMapper.toCourseDetailsResponse(aggregate, progression);
     }
 
     public List<CourseResponse> getMyCourses(User user) {
