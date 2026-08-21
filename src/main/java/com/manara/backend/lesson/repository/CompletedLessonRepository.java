@@ -22,4 +22,17 @@ public interface CompletedLessonRepository extends JpaRepository<CompletedLesson
     @Modifying
     @Query("delete from CompletedLesson cl where cl.lesson.id = :lessonId")
     void deleteByLessonId(@Param("lessonId") Long lessonId);
+
+    /**
+     * Used when a course update removes several lessons at once — deleting the lessons without
+     * clearing their progress rows would violate the foreign key.
+     *
+     * <p>Flushes first so edits made earlier in the same synchronization pass are already written,
+     * but deliberately does not clear the persistence context: a course update still holds the
+     * course, its modules and its surviving lessons as managed entities, and detaching them
+     * mid-pass would strand every change made after this point.
+     */
+    @Modifying(flushAutomatically = true)
+    @Query("delete from CompletedLesson cl where cl.lesson.id in :lessonIds")
+    void deleteByLessonIdIn(@Param("lessonIds") List<Long> lessonIds);
 }

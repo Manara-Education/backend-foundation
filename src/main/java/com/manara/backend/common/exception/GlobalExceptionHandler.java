@@ -8,6 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.NonNull;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -59,6 +60,18 @@ public class GlobalExceptionHandler {
                 .toList();
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ApiResponse.error(errors));
+    }
+
+    /**
+     * An unreadable body is the client's mistake, not a server fault — an unparseable enum such as
+     * {@code "structure": "chapters"} used to fall through to the generic 500 handler. The parser's
+     * own message is logged but never returned: it exposes internal type names.
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<@NonNull ApiResponse<Void>> handleUnreadableRequest(HttpMessageNotReadableException ex) {
+        log.debug("Malformed request body", ex);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.error(messageService.get("error.request.malformed")));
     }
 
     @ExceptionHandler(Exception.class)
