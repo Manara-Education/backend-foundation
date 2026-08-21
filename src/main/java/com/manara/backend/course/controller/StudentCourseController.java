@@ -29,7 +29,7 @@ public class StudentCourseController {
 
     @GetMapping
     public ApiResponse<List<CourseResponse>> getAllCourses() {
-        return ApiResponse.success(courseService.getAllCourses());
+        return ApiResponse.success(courseService.getPublishedCourses());
     }
 
     @GetMapping("/{courseId}")

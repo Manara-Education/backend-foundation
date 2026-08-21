@@ -3,7 +3,11 @@ package com.manara.backend.lesson.service;
 import com.manara.backend.common.exception.BusinessException;
 import com.manara.backend.common.exception.ResourceNotFoundException;
 import com.manara.backend.course.model.Course;
+import com.manara.backend.course.model.CourseModule;
+import com.manara.backend.course.model.CourseStatus;
+import com.manara.backend.course.model.CourseStructure;
 import com.manara.backend.course.model.Enrollment;
+import com.manara.backend.course.repository.CourseModuleRepository;
 import com.manara.backend.course.repository.CourseRepository;
 import com.manara.backend.course.repository.EnrollmentRepository;
 import com.manara.backend.lesson.dto.LessonDetailsResponse;
@@ -16,6 +20,10 @@ import com.manara.backend.lesson.repository.CompletedLessonRepository;
 import com.manara.backend.lesson.repository.LessonRepository;
 import com.manara.backend.profile.model.Student;
 import com.manara.backend.profile.repository.StudentRepository;
+import com.manara.backend.quiz.mapper.QuizMapper;
+import com.manara.backend.quiz.model.Quiz;
+import com.manara.backend.quiz.model.QuizOwnerType;
+import com.manara.backend.quiz.service.QuizService;
 import com.manara.backend.user.model.Role;
 import com.manara.backend.user.model.User;
 import lombok.RequiredArgsConstructor;
@@ -23,9 +31,17 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
-import java.util.stream.Collectors;
+import java.util.Set;
 
+/**
+ * Lesson-scoped operations.
+ *
+ * <p>These endpoints edit one lesson at a time; the whole content tree is edited through the course
+ * aggregate API. Both go through the same quiz domain service — a lesson quiz saved here is the
+ * same row, validated the same way, as one saved through a course payload.
+ */
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
@@ -33,10 +49,13 @@ public class LessonService {
 
     private final LessonRepository lessonRepository;
     private final CourseRepository courseRepository;
+    private final CourseModuleRepository courseModuleRepository;
     private final CompletedLessonRepository completedLessonRepository;
     private final EnrollmentRepository enrollmentRepository;
     private final StudentRepository studentRepository;
     private final LessonMapper lessonMapper;
+    private final QuizService quizService;
+    private final QuizMapper quizMapper;
     private final YoutubeDurationService youtubeDurationService;
 
     private Course getCourseAndVerifyInstructor(User user, Long courseId) {
@@ -51,6 +70,28 @@ public class LessonService {
         return course;
     }
 
+    /**
+     * Resolves the module a lesson should sit under, refusing anything that does not belong to this
+     * course — a module id from another instructor's course is rejected here, not trusted.
+     */
+    private CourseModule resolveModule(Course course, Long moduleId) {
+        if (course.getStructure() != CourseStructure.MODULES) {
+            if (moduleId != null) {
+                throw new BusinessException("error.course.flatLessonWithModule");
+            }
+            return null;
+        }
+        if (moduleId == null) {
+            throw new BusinessException("error.course.lessonModuleRequired");
+        }
+        CourseModule module = courseModuleRepository.findById(moduleId)
+                .orElseThrow(() -> new BusinessException("error.course.moduleNotInCourse", moduleId));
+        if (!module.getCourse().getId().equals(course.getId())) {
+            throw new BusinessException("error.course.moduleNotInCourse", moduleId);
+        }
+        return module;
+    }
+
     private void recalculateCourseDuration(Course course) {
         lessonRepository.flush();
         Integer newDuration = lessonRepository.sumDurationByCourseId(course.getId());
@@ -61,24 +102,23 @@ public class LessonService {
     @Transactional
     public LessonResponse addLesson(User user, Long courseId, LessonRequest request) {
         Course course = getCourseAndVerifyInstructor(user, courseId);
+        CourseModule module = resolveModule(course, request.getModuleId());
 
-        Lesson lesson = lessonMapper.toLesson(request, course);
-        lesson = lessonRepository.save(lesson);
+        Lesson lesson = lessonMapper.toLesson(request, course, module, request.getOrderIndex());
+        lesson = lessonRepository.saveAndFlush(lesson);
+
+        Quiz quiz = syncQuizIfProvided(lesson, request);
 
         youtubeDurationService.fetchAndUpdateDurationAsync(lesson.getId(), request.getVideoUrl());
 
-        return lessonMapper.toLessonResponse(lesson);
+        return lessonMapper.toLessonResponse(lesson, null, quizMapper.toLearnerResponse(quiz));
     }
 
     @Transactional
     public LessonResponse updateLesson(User user, Long courseId, Long lessonId, LessonRequest request) {
-        getCourseAndVerifyInstructor(user, courseId);
-        Lesson lesson = lessonRepository.findById(lessonId)
-                .orElseThrow(() -> new ResourceNotFoundException("error.lesson.notFound", lessonId.toString()));
-
-        if (!lesson.getCourse().getId().equals(courseId)) {
-            throw new BusinessException("error.lesson.notInCourse");
-        }
+        Course course = getCourseAndVerifyInstructor(user, courseId);
+        Lesson lesson = requireLessonOfCourse(courseId, lessonId);
+        CourseModule module = resolveModule(course, request.getModuleId());
 
         boolean videoUrlChanged = !request.getVideoUrl().equals(lesson.getVideoUrl());
 
@@ -87,6 +127,7 @@ public class LessonService {
         lesson.setDescription(request.getDescription());
         lesson.setVideoUrl(request.getVideoUrl());
         lesson.setOrderIndex(request.getOrderIndex());
+        lesson.setModule(module);
 
         if (videoUrlChanged) {
             lesson.setDuration(0);
@@ -94,44 +135,39 @@ public class LessonService {
 
         lesson = lessonRepository.save(lesson);
 
+        Quiz quiz = syncQuizIfProvided(lesson, request);
+
         if (videoUrlChanged) {
             youtubeDurationService.fetchAndUpdateDurationAsync(lesson.getId(), request.getVideoUrl());
         } else {
             recalculateCourseDuration(lesson.getCourse());
         }
 
-        return lessonMapper.toLessonResponse(lesson);
+        return lessonMapper.toLessonResponse(lesson, null, quizMapper.toLearnerResponse(quiz));
     }
 
     @Transactional
     public void deleteLesson(User user, Long courseId, Long lessonId) {
         getCourseAndVerifyInstructor(user, courseId);
-        Lesson lesson = lessonRepository.findById(lessonId)
-                .orElseThrow(() -> new ResourceNotFoundException("error.lesson.notFound", lessonId.toString()));
-
-        if (!lesson.getCourse().getId().equals(courseId)) {
-            throw new BusinessException("error.lesson.notInCourse");
-        }
+        Lesson lesson = requireLessonOfCourse(courseId, lessonId);
 
         Course course = lesson.getCourse();
+        // The quiz owner reference is polymorphic and carries no foreign key, so its cleanup is
+        // this method's responsibility — nothing in the database would do it.
+        quizService.deleteByOwner(QuizOwnerType.LESSON, lessonId);
         completedLessonRepository.deleteByLessonId(lessonId);
         lessonRepository.delete(lesson);
         recalculateCourseDuration(course);
     }
 
     public LessonDetailsResponse getLesson(User user, Long courseId, Long lessonId) {
-        courseRepository.findById(courseId)
-                .orElseThrow(() -> new ResourceNotFoundException("error.course.notFound", courseId.toString()));
+        requireVisibleCourse(user, courseId);
 
-        List<Lesson> lessons = lessonRepository.findByCourseIdOrderByOrderIndexAsc(courseId);
+        // Reading order spans modules, so "previous" and "next" walk the course the way a learner
+        // actually sees it rather than jumping between modules.
+        List<Lesson> lessons = lessonRepository.findCourseLessonsInReadingOrder(courseId);
 
-        int index = -1;
-        for (int i = 0; i < lessons.size(); i++) {
-            if (lessons.get(i).getId().equals(lessonId)) {
-                index = i;
-                break;
-            }
-        }
+        int index = indexOf(lessons, lessonId);
         if (index == -1) {
             if (!lessonRepository.existsById(lessonId)) {
                 throw new ResourceNotFoundException("error.lesson.notFound", lessonId.toString());
@@ -144,40 +180,38 @@ public class LessonService {
         Lesson next = index < lessons.size() - 1 ? lessons.get(index + 1) : null;
 
         Boolean isCompleted = null;
-        if (user != null && user.getRole() == Role.STUDENT) {
-            Optional<Student> studentOpt = studentRepository.findByUserId(user.getId());
-            if (studentOpt.isPresent() && enrollmentRepository.findByCourseIdAndStudentId(courseId, studentOpt.get().getId()).isPresent()) {
-                isCompleted = completedLessonRepository
-                        .findByStudentIdAndLessonId(studentOpt.get().getId(), lessonId)
-                        .isPresent();
-            }
+        Optional<Student> enrolledStudent = findEnrolledStudent(user, courseId);
+        if (enrolledStudent.isPresent()) {
+            isCompleted = completedLessonRepository
+                    .findByStudentIdAndLessonId(enrolledStudent.get().getId(), lessonId)
+                    .isPresent();
         }
 
-        return lessonMapper.toLessonDetailsResponse(lesson, isCompleted, previous, next);
+        var quiz = quizService.findByOwner(QuizOwnerType.LESSON, lessonId).orElse(null);
+
+        return lessonMapper.toLessonDetailsResponse(
+                lesson, isCompleted, quizMapper.toLearnerResponse(quiz), previous, next);
     }
 
     public List<LessonResponse> getCourseLessons(User user, Long courseId) {
-        courseRepository.findById(courseId)
-                .orElseThrow(() -> new ResourceNotFoundException("error.course.notFound", courseId.toString()));
+        requireVisibleCourse(user, courseId);
 
-        List<Lesson> lessons = lessonRepository.findByCourseIdOrderByOrderIndexAsc(courseId);
+        List<Lesson> lessons = lessonRepository.findCourseLessonsInReadingOrder(courseId);
+        List<Long> lessonIds = lessons.stream().map(Lesson::getId).toList();
 
-        Student student = null;
-        if (user != null && user.getRole() == Role.STUDENT) {
-            Optional<Student> studentOpt = studentRepository.findByUserId(user.getId());
-            if (studentOpt.isPresent() && enrollmentRepository.findByCourseIdAndStudentId(courseId, studentOpt.get().getId()).isPresent()) {
-                student = studentOpt.get();
-            }
-        }
+        Map<Long, Quiz> quizzes = quizService.findByOwners(QuizOwnerType.LESSON, lessonIds);
 
-        final Student finalStudent = student;
-        return lessons.stream().map(lesson -> {
-            boolean isCompleted = false;
-            if (finalStudent != null) {
-                isCompleted = completedLessonRepository.findByStudentIdAndLessonId(finalStudent.getId(), lesson.getId()).isPresent();
-            }
-            return lessonMapper.toLessonResponse(lesson, isCompleted);
-        }).collect(Collectors.toList());
+        Set<Long> completedIds = findEnrolledStudent(user, courseId)
+                .map(student -> Set.copyOf(
+                        completedLessonRepository.findCompletedLessonIdsByStudentIdAndCourseId(student.getId(), courseId)))
+                .orElse(Set.of());
+
+        return lessons.stream()
+                .map(lesson -> lessonMapper.toLessonResponse(
+                        lesson,
+                        completedIds.contains(lesson.getId()),
+                        quizMapper.toLearnerResponse(quizzes.get(lesson.getId()))))
+                .toList();
     }
 
     @Transactional
@@ -192,12 +226,7 @@ public class LessonService {
         Enrollment enrollment = enrollmentRepository.findByCourseIdAndStudentId(courseId, student.getId())
                 .orElseThrow(() -> new BusinessException("error.course.notEnrolled"));
 
-        Lesson lesson = lessonRepository.findById(lessonId)
-                .orElseThrow(() -> new ResourceNotFoundException("error.lesson.notFound", lessonId.toString()));
-
-        if (!lesson.getCourse().getId().equals(courseId)) {
-            throw new BusinessException("error.lesson.notInCourse");
-        }
+        Lesson lesson = requireLessonOfCourse(courseId, lessonId);
 
         if (completedLessonRepository.findByStudentIdAndLessonId(student.getId(), lessonId).isEmpty()) {
             CompletedLesson completedLesson = lessonMapper.toCompletedLesson(student, lesson);
@@ -211,5 +240,67 @@ public class LessonService {
                 enrollmentRepository.save(enrollment);
             }
         }
+    }
+
+    /**
+     * These endpoints edit one lesson; they are not the course editor. A payload that says nothing
+     * about a quiz therefore leaves the existing one alone rather than deleting it — clients that
+     * predate quizzes send exactly that. Removing a lesson quiz is done through the course
+     * aggregate, whose payload is a deliberate full replacement.
+     */
+    private Quiz syncQuizIfProvided(Lesson lesson, LessonRequest request) {
+        if (request.getQuiz() == null) {
+            return quizService.findByOwner(QuizOwnerType.LESSON, lesson.getId()).orElse(null);
+        }
+        return quizService.sync(QuizOwnerType.LESSON, lesson.getId(), request.getQuiz());
+    }
+
+    /**
+     * Draft courses are an instructor's work in progress. Until this change nothing unpublished
+     * existed, so reading a lesson only needed the course to exist; now anyone who guessed an id
+     * could read an unreleased lesson and its quiz. Published courses stay readable exactly as
+     * before — only the owning instructor can see a draft.
+     */
+    private Course requireVisibleCourse(User user, Long courseId) {
+        Course course = courseRepository.findById(courseId)
+                .orElseThrow(() -> new ResourceNotFoundException("error.course.notFound", courseId.toString()));
+
+        if (course.getStatus() == CourseStatus.PUBLISHED) {
+            return course;
+        }
+
+        boolean owningInstructor = user != null
+                && user.getRole() == Role.INSTRUCTOR
+                && course.getInstructor().getUser().getId().equals(user.getId());
+        if (!owningInstructor) {
+            throw new ResourceNotFoundException("error.course.notFound", courseId.toString());
+        }
+        return course;
+    }
+
+    private Lesson requireLessonOfCourse(Long courseId, Long lessonId) {
+        Lesson lesson = lessonRepository.findById(lessonId)
+                .orElseThrow(() -> new ResourceNotFoundException("error.lesson.notFound", lessonId.toString()));
+        if (!lesson.getCourse().getId().equals(courseId)) {
+            throw new BusinessException("error.lesson.notInCourse");
+        }
+        return lesson;
+    }
+
+    private Optional<Student> findEnrolledStudent(User user, Long courseId) {
+        if (user == null || user.getRole() != Role.STUDENT) {
+            return Optional.empty();
+        }
+        return studentRepository.findByUserId(user.getId())
+                .filter(student -> enrollmentRepository.findByCourseIdAndStudentId(courseId, student.getId()).isPresent());
+    }
+
+    private int indexOf(List<Lesson> lessons, Long lessonId) {
+        for (int i = 0; i < lessons.size(); i++) {
+            if (lessons.get(i).getId().equals(lessonId)) {
+                return i;
+            }
+        }
+        return -1;
     }
 }

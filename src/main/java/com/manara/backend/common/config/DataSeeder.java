@@ -1,6 +1,9 @@
 package com.manara.backend.common.config;
 
 import com.manara.backend.course.model.Course;
+import com.manara.backend.course.model.CourseAccessType;
+import com.manara.backend.course.model.CourseStatus;
+import com.manara.backend.course.model.CourseStructure;
 import com.manara.backend.course.repository.CourseRepository;
 import com.manara.backend.lesson.model.Lesson;
 import com.manara.backend.lesson.repository.LessonRepository;
@@ -102,7 +105,10 @@ public class DataSeeder implements CommandLineRunner {
                     .subtitle("قواعد وتطبيقات شاملة")
                     .description("رحلة شاملة في قواعد النحو العربي من المبادئ الأولى حتى الاستخدام الاحترافي في الكتابة والخطابة.")
                     .duration(1200) // 20 hours
-                    .price(new BigDecimal("49.99"))
+                    .structure(CourseStructure.FLAT)
+                    .status(CourseStatus.PUBLISHED)
+                    .accessType(CourseAccessType.PURCHASE)
+                    .purchasePrice(new BigDecimal("49.99"))
                     .image("https://images.unsplash.com/photo-1771909752761-d26abe4e60ba?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080")
                     .instructor(instructor)
                     .studentsCount(0)
@@ -139,7 +145,9 @@ public class DataSeeder implements CommandLineRunner {
                     .subtitle("من الفكرة إلى النص الإبداعي")
                     .description("دورة عملية تأخذك خطوة بخطوة نحو بناء صوتك الأدبي الخاص وصقل مهاراتك التحريرية.")
                     .duration(720) // 12 hours
-                    .price(BigDecimal.ZERO)
+                    .structure(CourseStructure.FLAT)
+                    .status(CourseStatus.PUBLISHED)
+                    .accessType(CourseAccessType.FREE)
                     .image("https://images.unsplash.com/photo-1622137879013-beaca5144a4b?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080")
                     .instructor(instructor)
                     .studentsCount(0)

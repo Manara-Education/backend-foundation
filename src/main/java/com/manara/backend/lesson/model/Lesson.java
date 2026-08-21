@@ -1,6 +1,7 @@
 package com.manara.backend.lesson.model;
 
 import com.manara.backend.course.model.Course;
+import com.manara.backend.course.model.CourseModule;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -17,7 +18,13 @@ import java.util.Objects;
 @NoArgsConstructor
 @AllArgsConstructor
 @Entity
-@Table(name = "lessons")
+@Table(
+        name = "lessons",
+        indexes = {
+                @Index(name = "idx_lessons_course_id", columnList = "course_id"),
+                @Index(name = "idx_lessons_module_id", columnList = "module_id")
+        }
+)
 public class Lesson {
 
     @Id
@@ -45,6 +52,15 @@ public class Lesson {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "course_id", nullable = false)
     private Course course;
+
+    /**
+     * Set only while the owning course uses {@link com.manara.backend.course.model.CourseStructure#MODULES}.
+     * The course reference above stays populated either way, which is what keeps every existing
+     * course-scoped query (lesson count, duration, progress) working for both structures.
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "module_id")
+    private CourseModule module;
 
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
