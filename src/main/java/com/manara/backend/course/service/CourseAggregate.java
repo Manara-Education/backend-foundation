@@ -9,6 +9,9 @@ import com.manara.backend.quiz.model.Quiz;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.function.Function;
+import java.util.stream.Stream;
 
 /**
  * A fully loaded course, ready to be turned into either the editor or the learner response.
@@ -42,5 +45,28 @@ public record CourseAggregate(
 
     public Quiz quizOfModule(CourseModule module) {
         return moduleQuizzes.get(module.getId());
+    }
+
+    /**
+     * Every quiz this course owns — lesson quizzes, module exams and the final exam — flattened.
+     *
+     * <p>Quiz ownership is polymorphic, so there is no query that reaches a course's quizzes
+     * directly. Walking the loaded aggregate is what establishes that a quiz belongs to this
+     * course, which is the check a submission is authorized against.
+     */
+    public List<Quiz> allQuizzes() {
+        return Stream.of(lessonQuizzes.values().stream(), moduleQuizzes.values().stream(), Stream.ofNullable(finalQuiz))
+                .flatMap(Function.identity())
+                .toList();
+    }
+
+    /** @return the quiz with this id, or empty when it belongs to some other course */
+    public Optional<Quiz> quizById(Long quizId) {
+        if (quizId == null) {
+            return Optional.empty();
+        }
+        return allQuizzes().stream()
+                .filter(quiz -> quizId.equals(quiz.getId()))
+                .findFirst();
     }
 }

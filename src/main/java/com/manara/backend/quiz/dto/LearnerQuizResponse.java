@@ -29,4 +29,10 @@ public class LearnerQuizResponse {
     private Integer passingScore;
 
     private List<LearnerQuizQuestionResponse> questions;
+
+    /**
+     * Where this learner stands on the quiz — whether the curriculum has opened it, and how earlier
+     * attempts went. Null when the viewer is not a learner of the course.
+     */
+    private LearnerQuizStateResponse state;
 }

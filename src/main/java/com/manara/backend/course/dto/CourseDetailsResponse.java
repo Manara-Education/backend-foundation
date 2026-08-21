@@ -19,6 +19,10 @@ import java.util.List;
  * <p>Like the editor response, only the branch matching {@code structure} is populated: a flat
  * course fills {@code lessons}, a module course fills {@code modules}. Every quiz in the tree is
  * the learner view, which has no answer key.
+ *
+ * <p>The progression fields describe the viewing learner's own standing, so a client renders locks,
+ * the progress bar and "continue where you left off" from what the server decided rather than from
+ * rules of its own. They are absent for a viewer the course tracks no progress for.
  */
 @Getter
 @Builder
@@ -32,6 +36,15 @@ public class CourseDetailsResponse {
     private List<LessonResponse> lessons;
     private List<LearnerModuleResponse> modules;
     private LearnerQuizResponse finalQuiz;
+
+    /** Percentage of the course's lessons this learner has completed, 0-100. */
+    private Integer progress;
+
+    /** True once the curriculum is finished and the final exam, if there is one, is passed. */
+    private Boolean courseCompleted;
+
+    /** The lesson to open next, or {@code null} when nothing is left to open. */
+    private Long nextLessonId;
 
     @Getter
     @Builder

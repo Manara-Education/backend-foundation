@@ -8,6 +8,8 @@ import com.manara.backend.course.model.CourseModule;
 import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseStructure;
 import com.manara.backend.course.service.CourseAggregate;
+import com.manara.backend.course.service.CourseProgression;
+import com.manara.backend.course.service.CourseProgressionCalculator;
 import com.manara.backend.lesson.mapper.LessonMapper;
 import com.manara.backend.lesson.model.Lesson;
 import com.manara.backend.profile.model.Instructor;
@@ -41,6 +43,11 @@ class CourseAggregateMapperTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final CourseAggregateMapper mapper = buildMapper();
 
+    /** An enrolled learner who has completed nothing — everything the first module opens is open. */
+    private static CourseProgression enrolled(CourseAggregate aggregate) {
+        return new CourseProgressionCalculator().compute(aggregate, Set.of(), Map.of());
+    }
+
     private static CourseAggregateMapper buildMapper() {
         DurationFormatter durationFormatter = mock(DurationFormatter.class);
         when(durationFormatter.formatSeconds(org.mockito.ArgumentMatchers.any())).thenReturn("0s");
@@ -60,7 +67,8 @@ class CourseAggregateMapperTest {
 
     @Test
     void theLearnerViewLeaksNoAnswerAnywhereInTheSerializedTree() throws Exception {
-        var response = mapper.toCourseDetailsResponse(flatAggregate(), Set.of());
+        var aggregate = flatAggregate();
+        var response = mapper.toCourseDetailsResponse(aggregate, enrolled(aggregate));
 
         String json = objectMapper.writeValueAsString(response);
 
@@ -74,13 +82,51 @@ class CourseAggregateMapperTest {
 
     @Test
     void theLearnerViewLeaksNoAnswerFromAModuleExamEither() throws Exception {
-        var response = mapper.toCourseDetailsResponse(modularAggregate(), null);
+        var aggregate = modularAggregate();
+        var response = mapper.toCourseDetailsResponse(aggregate, enrolled(aggregate));
 
         String json = objectMapper.writeValueAsString(response);
 
         assertThat(json).doesNotContain("correctOptionId").doesNotContain(EXPLANATION);
         assertThat(response.getModules()).hasSize(1);
         assertThat(response.getModules().getFirst().getQuiz()).isNotNull();
+    }
+
+    @Test
+    void courseDiscoveryListsTheCurriculumWithoutHandingOutAnyOfIt() {
+        var aggregate = flatAggregate();
+
+        var response = mapper.toCourseDetailsResponse(aggregate, CourseProgression.forVisitor());
+
+        var lesson = response.getLessons().getFirst();
+        assertThat(lesson.getLocked()).isTrue();
+        // The row a browsing visitor sees: what the lesson is, and how long it takes.
+        assertThat(lesson.getTitle()).isNotBlank();
+        assertThat(lesson.getVideoUrl()).isNull();
+        assertThat(lesson.getDescription()).isNull();
+        assertThat(lesson.getQuiz()).isNull();
+        assertThat(response.getProgress()).isNull();
+    }
+
+    @Test
+    void anEnrolledLearnerCarriesTheirOwnProgressionInTheResponse() {
+        var aggregate = flatAggregate();
+
+        var response = mapper.toCourseDetailsResponse(aggregate, enrolled(aggregate));
+
+        assertThat(response.getLessons().getFirst().getLocked()).isFalse();
+        assertThat(response.getProgress()).isZero();
+        assertThat(response.getCourseCompleted()).isFalse();
+        assertThat(response.getNextLessonId()).isNotNull();
+    }
+
+    @Test
+    void aModuleTheLearnerHasNotReachedIsMarkedLocked() {
+        var aggregate = modularAggregate();
+
+        var response = mapper.toCourseDetailsResponse(aggregate, CourseProgression.forVisitor());
+
+        assertThat(response.getModules().getFirst().getLocked()).isTrue();
     }
 
     @Test
