@@ -1,13 +1,51 @@
-name: Deploy to Remote Server
+# ⚠️ FROZEN — LEGACY DEPLOYMENT WORKFLOW — DO NOT RUN WITHOUT REVIEW ⚠️
+#
+# This workflow is retained for history and reference only. It is NOT part of an active
+# deployment pipeline and it must not run automatically.
+#
+# Why it was frozen:
+#   * It previously auto-triggered on every push to `main`.
+#   * `main` is stale: it still carries the older JWT-based authentication architecture,
+#     while the live implementation has since moved to cookie/session auth on `develop`
+#     (which is now this repository's default branch). Any push to `main` would therefore
+#     have deployed an obsolete application over the running one.
+#   * Its server-side clone URL referenced `Manara-Education/Manara-Backend-foundation`,
+#     a stale repository name that only still resolves through GitHub's rename redirect.
+#
+# What changed in the freeze:
+#   * The `push` trigger was removed. The workflow is now manual-only (`workflow_dispatch`)
+#     and additionally requires an explicit typed confirmation, so a stray click cannot
+#     deploy stale code.
+#   * The repository reference was corrected to the canonical `Manara-Education/backend-foundation`.
+#
+# This file is intentionally left otherwise unchanged. The replacement pipeline is out of
+# scope here and will be introduced separately.
+
+name: "[FROZEN] Legacy Deploy to Remote Server (manual only)"
+
+# Automatic deployment is disabled. There is deliberately no `push` trigger.
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type DEPLOY-STALE-MAIN to confirm you intend to deploy the stale `main` branch.'
+        required: true
+        default: ''
 
 jobs:
   build_and_deploy:
     runs-on: ubuntu-latest
     steps:
+      # Second safety gate: a manual run still has to be confirmed on purpose.
+      - name: Confirm intentional legacy deploy
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "DEPLOY-STALE-MAIN" ]; then
+            echo "::error::This legacy workflow is frozen. It deploys the stale 'main' branch."
+            echo "::error::Re-run and type DEPLOY-STALE-MAIN in the confirmation input only if that is genuinely intended."
+            exit 1
+          fi
+          echo "Confirmation accepted. Proceeding with the legacy deployment path."
+
       - name: Checkout Code
         uses: actions/checkout@v4
 
@@ -39,10 +77,12 @@ jobs:
             # Create directory if it doesn't exist
             mkdir -p ~/manara-backend
             cd ~/manara-backend
-            
+
             # Configure Auth URL
-            REPO_URL="https://$GH_PAT@github.com/Manara-Education/Manara-Backend-foundation.git"
-            
+            # Canonical repository name. The previous value (Manara-Backend-foundation) only
+            # resolved via GitHub's rename redirect and would break if that name were reclaimed.
+            REPO_URL="https://$GH_PAT@github.com/Manara-Education/backend-foundation.git"
+
             # Clone or Pull
             if [ ! -d ".git" ]; then
               echo "Cloning fresh..."
@@ -52,7 +92,7 @@ jobs:
               git remote set-url origin $REPO_URL
               git pull origin main
             fi
-            
+
             # Guard against the key being dropped in transit — docker-compose would otherwise
             # substitute an empty string and bring the app up with email quietly broken.
             if [ -z "$RESEND_API_KEY" ]; then
