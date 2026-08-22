@@ -47,7 +47,7 @@ jobs:
           echo "Confirmation accepted. Proceeding with the legacy deployment path."
 
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Fails the deploy on the runner, before the server is touched. Without this a missing
       # secret would deploy "successfully" and leave every OTP email silently unsent.
