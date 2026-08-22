@@ -62,7 +62,7 @@ jobs:
           echo "RESEND_API_KEY is configured."
 
       - name: Deploy to Server
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           # Consumed on the server by docker-compose.yml's ${RESEND_API_KEY} substitution.
