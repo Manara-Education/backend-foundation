@@ -1,0 +1,68 @@
+# Continuous integration for backend-foundation.
+#
+# This is the validation gate for every pull request into `develop` (the default
+# branch) and `main`. It exists so that dependency-update PRs raised by Dependabot
+# are proven to still compile and pass the test suite before anyone merges them —
+# but it is not Dependabot-specific: human PRs run exactly the same checks.
+#
+# `mvn verify` is the repository's real build: it compiles, runs the 256 Surefire
+# unit tests and packages the Spring Boot jar. This repository has no Maven
+# wrapper, so the runner's preinstalled `mvn` is used with a pinned JDK.
+#
+# No services and no secrets are needed. Every test under src/test is a plain
+# JUnit/Mockito unit test — there is no @SpringBootTest, @DataJpaTest or
+# Testcontainers usage — so nothing here needs Postgres or Redis. The one test
+# that does reach the network, SendRealOtpEmailIT, is named `*IT` and is outside
+# Surefire's default includes, so it stays unrun (and RESEND_API_KEY stays unread).
+#
+# That secret-free design is deliberate: workflow runs triggered by Dependabot
+# pull requests receive Dependabot secrets rather than Actions secrets, so a CI
+# job that depended on production secrets would fail or silently degrade on
+# exactly the PRs this pipeline exists to validate.
+#
+# This workflow does not build or push images and does not deploy. Deployment
+# remains the frozen, manual-only workflow in deploy.yml.
+
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+  push:
+    branches:
+      - develop
+
+# Least privilege: this job only reads the repository. It never writes to the
+# repo, comments on PRs, or touches deployments.
+permissions:
+  contents: read
+
+# A newer push to the same PR supersedes the previous run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Pinned to the <java.version> declared in pom.xml.
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build and run tests
+        run: mvn -B -ntp verify
