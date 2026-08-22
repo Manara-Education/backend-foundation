@@ -5,7 +5,7 @@
 	<parent>
 		<groupId>org.springframework.boot</groupId>
 		<artifactId>spring-boot-starter-parent</artifactId>
-		<version>4.0.0</version>
+		<version>4.1.0</version>
 		<relativePath/> <!-- lookup parent from repository -->
 	</parent>
 	<groupId>com.manara</groupId>
@@ -63,7 +63,35 @@
 		<dependency>
 			<groupId>com.resend</groupId>
 			<artifactId>resend-java</artifactId>
-			<version>4.13.0</version>
+			<version>4.19.0</version>
+			<exclusions>
+				<!-- Replaced by okhttp-jvm below; see the comment on that dependency. -->
+				<exclusion>
+					<groupId>com.squareup.okhttp3</groupId>
+					<artifactId>okhttp</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+		<!--
+			resend-java 4.19.0 moved from okhttp 4.12.0 to okhttp 5.4.0, and okhttp 5.x is
+			published as a Kotlin Multiplatform module. Its `okhttp` artifact is now an empty
+			754-byte stub containing only KMP metadata — the JVM classes were moved to
+			`okhttp-jvm`. Gradle follows that redirect via Gradle Module Metadata (.module);
+			Maven does not read that file, so it resolves the stub and every okhttp class is
+			missing at runtime (NoClassDefFoundError: okhttp3/RequestBody when Spring builds
+			the Resend Emails bean). The same applies to okio, which okhttp-jvm pulls in
+			correctly as okio-jvm.
+
+			So we exclude the stub above and depend on the real JVM artifact here. Scope is
+			runtime because no code in this repository imports okhttp directly — only
+			resend-java does. Keep this version in step with the okhttp version declared by
+			resend-java, and drop both blocks once resend-java depends on okhttp-jvm itself.
+		-->
+		<dependency>
+			<groupId>com.squareup.okhttp3</groupId>
+			<artifactId>okhttp-jvm</artifactId>
+			<version>5.4.0</version>
+			<scope>runtime</scope>
 		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
