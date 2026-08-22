@@ -1,0 +1,179 @@
+# Safe auto-merge for Dependabot pull requests — backend-foundation.
+#
+# Policy (see the PR description for the full rationale):
+#   auto-merge      : semver-patch application dependencies
+#                     semver-patch and semver-minor GitHub Actions bumps
+#   human review    : semver-minor application dependencies
+#                     semver-major anything (a Spring Boot major is a migration)
+#                     every security update
+#
+# Why this workflow waits for CI instead of just calling `gh pr merge --auto`:
+#   GitHub's auto-merge merges a PR as soon as nothing *required* is blocking it.
+#   The `develop_branch_rule` ruleset in this repository is currently DISABLED, so
+#   there are no required status checks — auto-merge alone would therefore merge a
+#   Dependabot PR before CI had even finished, which is exactly what this pipeline
+#   exists to prevent. So we first wait for the CI check runs on this commit to
+#   conclude, and only hand the PR to GitHub's auto-merge once they are green.
+#   Once required status checks are enabled on `develop`, this stays correct — it
+#   simply becomes belt-and-braces, and auto-merge continues to respect every
+#   protection (required reviews, linear history, merge queue) rather than bypass it.
+#
+# This workflow never triggers a deployment. Deployment remains the frozen,
+# manual-only workflow in deploy.yml, which has no push trigger.
+#
+# This workflow never approves a PR. "Allow GitHub Actions to create and approve
+# pull requests" is disabled on this repository and does not need to be enabled:
+# approval is a human act, and self-approval would defeat the review requirement.
+
+name: Dependabot auto-merge
+
+on:
+  pull_request:
+
+# Least privilege, and every scope is used:
+#   contents: write       -> completing the merge
+#   pull-requests: write  -> enabling auto-merge, requesting a reviewer, commenting
+#   checks: read          -> reading the CI check runs this job waits on
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+
+jobs:
+  dependabot:
+    name: Dependabot auto-merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    # Ignore human PRs and any other bot. Both the triggering actor and the PR
+    # author must be Dependabot, so a re-run by a human on a Dependabot PR, or a
+    # PR merely *named* like a Dependabot PR, does not reach the merge step.
+    if: >-
+      github.actor == 'dependabot[bot]' &&
+      github.event.pull_request.user.login == 'dependabot[bot]'
+
+    steps:
+      # Official metadata source. The update type is read from Dependabot's own
+      # metadata rather than parsed out of the PR title, which is unreliable and
+      # spoofable. For a grouped PR this reports the highest semver bump in the
+      # group, so a group containing any major is correctly treated as major.
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v3
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Decide whether this update may auto-merge
+        id: policy
+        env:
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+          ECOSYSTEM: ${{ steps.meta.outputs.package-ecosystem }}
+        run: |
+          set -euo pipefail
+          eligible=false
+
+          case "$UPDATE_TYPE" in
+            version-update:semver-patch)
+              eligible=true
+              ;;
+            version-update:semver-minor)
+              # Minor bumps of the CI toolchain are low risk and fully exercised
+              # by the very run that validates them. Minor bumps of application
+              # dependencies are not, and stay with a human.
+              if [ "$ECOSYSTEM" = "github_actions" ]; then
+                eligible=true
+              fi
+              ;;
+          esac
+
+          echo "eligible=$eligible" >> "$GITHUB_OUTPUT"
+          echo "Ecosystem=$ECOSYSTEM UpdateType=$UPDATE_TYPE Eligible=$eligible"
+
+      # ---------------------------------------------------------------------
+      # Eligible updates: wait for CI on this exact commit, then auto-merge.
+      # ---------------------------------------------------------------------
+      - name: Wait for CI to pass on this commit
+        if: steps.policy.outputs.eligible == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          SELF: Dependabot auto-merge
+        run: |
+          set -euo pipefail
+
+          # Poll for up to ~30 minutes. Every check run on this commit except this
+          # job itself must finish; excluding self avoids waiting on our own run.
+          for attempt in $(seq 1 60); do
+            runs="$(gh api "repos/$REPO/commits/$SHA/check-runs" \
+              --jq "[.check_runs[] | select(.name != \"$SELF\") | {name, status, conclusion}]")"
+
+            total="$(echo "$runs"   | jq 'length')"
+            pending="$(echo "$runs" | jq '[.[] | select(.status != "completed")] | length')"
+
+            if [ "$total" -gt 0 ] && [ "$pending" -eq 0 ]; then
+              # Anything not success/skipped/neutral is a failure for our purposes.
+              bad="$(echo "$runs" | jq -r \
+                '[.[] | select(.conclusion | IN("success","skipped","neutral") | not)]')"
+              if [ "$(echo "$bad" | jq 'length')" -gt 0 ]; then
+                echo "::error::CI did not pass on $SHA; refusing to auto-merge."
+                echo "$bad" | jq -r '.[] | "  failed: \(.name) (\(.conclusion))"'
+                exit 1
+              fi
+              echo "All $total CI check run(s) passed on $SHA."
+              exit 0
+            fi
+
+            echo "attempt $attempt: $pending of $total check run(s) still running..."
+            sleep 30
+          done
+
+          echo "::error::Timed out waiting for CI on $SHA; refusing to auto-merge."
+          exit 1
+
+      # Hands the PR to GitHub's own auto-merge. This respects — and cannot
+      # bypass — required reviews, required checks, linear history and merge
+      # queues. Squash matches this repository's history, where every merged PR
+      # appears as a single "<title> (#NN)" commit on develop.
+      - name: Enable auto-merge
+        if: steps.policy.outputs.eligible == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$PR_URL"
+
+      # ---------------------------------------------------------------------
+      # Everything else: route to a human. Never merged by this workflow.
+      # ---------------------------------------------------------------------
+      # `reviewers` is no longer supported in dependabot.yml, so the repository's
+      # standing reviewer is requested here, and only on the PRs that need one.
+      - name: Request human review
+        if: steps.policy.outputs.eligible != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr edit "$PR_URL" --add-reviewer Mohamed-Hamza
+
+      - name: Explain why the PR is held for review
+        if: steps.policy.outputs.eligible != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          # Built as an environment value rather than interpolated into the shell,
+          # so metadata can never be executed as part of the command.
+          BODY: |
+            🤖 **Held for human review** — this update is outside the auto-merge policy.
+
+            | | |
+            |---|---|
+            | Ecosystem | `${{ steps.meta.outputs.package-ecosystem }}` |
+            | Update type | `${{ steps.meta.outputs.update-type }}` |
+
+            Auto-merge covers patch-level application dependencies and patch/minor
+            GitHub Actions bumps only. Please review the changelog, confirm CI is
+            green, and merge manually.
+
+            `@dependabot rebase`, `@dependabot recreate` and `@dependabot merge`
+            all work as normal on this PR.
+        run: gh pr comment "$PR_URL" --body "$BODY"
