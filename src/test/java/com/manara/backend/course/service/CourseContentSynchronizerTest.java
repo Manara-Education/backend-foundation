@@ -18,7 +18,8 @@ import com.manara.backend.lesson.mapper.LessonMapper;
 import com.manara.backend.lesson.model.Lesson;
 import com.manara.backend.lesson.repository.CompletedLessonRepository;
 import com.manara.backend.lesson.repository.LessonRepository;
-import com.manara.backend.lesson.service.YoutubeDurationService;
+import com.manara.backend.video.VideoProviderFixtures;
+import com.manara.backend.video.service.VideoMetadataService;
 import com.manara.backend.quiz.dto.QuizOptionRequest;
 import com.manara.backend.quiz.dto.QuizQuestionRequest;
 import com.manara.backend.quiz.dto.QuizRequest;
@@ -63,7 +64,7 @@ class CourseContentSynchronizerTest {
     @Mock
     private QuizService quizService;
     @Mock
-    private YoutubeDurationService youtubeDurationService;
+    private VideoMetadataService videoMetadataService;
     @Mock
     private DurationFormatter durationFormatter;
 
@@ -78,10 +79,11 @@ class CourseContentSynchronizerTest {
                 completedLessonRepository,
                 subscriptionPlanRepository,
                 new CourseModuleMapper(),
-                new LessonMapper(durationFormatter),
+                new LessonMapper(durationFormatter, VideoProviderFixtures.resolver()),
                 new SubscriptionPlanMapper(),
                 quizService,
-                youtubeDurationService);
+                videoMetadataService,
+                VideoProviderFixtures.resolver());
 
         course = Course.builder()
                 .id(COURSE_ID)
@@ -259,7 +261,7 @@ class CourseContentSynchronizerTest {
         return LessonRequest.builder()
                 .id(id)
                 .title("Lesson")
-                .videoUrl("https://youtube.com/watch?v=abc")
+                .videoUrl("https://youtube.com/watch?v=aBcDeFgHiJk")
                 .build();
     }
 
@@ -267,7 +269,8 @@ class CourseContentSynchronizerTest {
         return Lesson.builder()
                 .id(id)
                 .title("Lesson " + id)
-                .videoUrl("https://youtube.com/watch?v=abc")
+                .video(VideoProviderFixtures.resolver()
+                        .resolve("https://youtube.com/watch?v=aBcDeFgHiJk").toVideoSource())
                 .orderIndex(orderIndex)
                 .duration(0)
                 .course(course)

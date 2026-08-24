@@ -10,11 +10,13 @@ import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseStructure;
 import com.manara.backend.lesson.dto.LessonRequest;
 import com.manara.backend.quiz.service.QuizValidator;
+import com.manara.backend.video.service.VideoProviderResolver;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 import java.util.function.IntSupplier;
 
 /**
@@ -31,7 +33,20 @@ import java.util.function.IntSupplier;
 @RequiredArgsConstructor
 public class CourseValidator {
 
+    /**
+     * How the resolver's refusals read once they are about lesson number N of a course payload.
+     *
+     * @see #lessonScopedCode(String)
+     */
+    private static final Map<String, String> LESSON_VIDEO_ERROR_CODES = Map.of(
+            "error.video.urlRequired", "error.course.lessonVideoUrlRequired",
+            "error.video.urlMalformed", "error.course.lessonVideoUrlMalformed",
+            "error.video.providerUnsupported", "error.course.lessonVideoProviderUnsupported",
+            "error.video.videoIdInvalid", "error.course.lessonVideoIdInvalid",
+            "error.video.providerMismatch", "error.course.lessonVideoProviderMismatch");
+
     private final QuizValidator quizValidator;
+    private final VideoProviderResolver videoProviderResolver;
 
     /**
      * Validates the payload and resolves the course-level settings it implies.
@@ -152,8 +167,46 @@ public class CourseValidator {
             if (isBlank(lesson.getVideoUrl())) {
                 throw new BusinessException("error.course.lessonVideoUrlRequired", position);
             }
+            // Checked here, with the rest of the payload, precisely because synchronization is
+            // destructive: a course whose fourth lesson carries an unplayable link must be turned
+            // away before the first three have had their modules and quizzes rewritten.
+            validateVideo(lesson, position);
             quizValidator.validateIfPresent(lesson.getQuiz());
         }
+    }
+
+    /**
+     * Rejects a video Manara cannot play, naming the lesson that carries it.
+     *
+     * <p>The reason travels with the position, because "lesson 4 is on a platform we do not
+     * support" and "lesson 4's link has no video in it" send an instructor to different fixes. The
+     * message says which; it never says which adapter, host or pattern decided so.
+     *
+     * <p>This is a real tightening. The prototype accepted any non-blank string as a video URL,
+     * which is how a typo became a lesson with a permanently empty player. Existing rows are not
+     * affected: validation runs on the write path only, and the read path is deliberately lenient.
+     */
+    private void validateVideo(LessonRequest lesson, int position) {
+        try {
+            videoProviderResolver.resolve(lesson.getVideoUrl(), lesson.getVideoProvider());
+        } catch (BusinessException e) {
+            throw new BusinessException(lessonScopedCode(e.getMessageCode()), position);
+        }
+    }
+
+    /**
+     * The same reason, told about a numbered lesson.
+     *
+     * <p>The resolver states its complaint about a URL; inside a course payload the instructor
+     * needs to know which of thirty lessons it was about. Translating the code rather than
+     * embedding the resolver's rendered text keeps both halves of the sentence in the reader's
+     * language and keeps the message catalogue the single place either is worded.
+     *
+     * <p>An unmapped code — a reason a future adapter invents — degrades to the generic invalid
+     * message rather than surfacing a raw key.
+     */
+    private String lessonScopedCode(String videoErrorCode) {
+        return LESSON_VIDEO_ERROR_CODES.getOrDefault(videoErrorCode, "error.course.lessonVideoUrlInvalid");
     }
 
     /**

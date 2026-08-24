@@ -2,6 +2,7 @@ package com.manara.backend.lesson.model;
 
 import com.manara.backend.course.model.Course;
 import com.manara.backend.course.model.CourseModule;
+import com.manara.backend.video.model.VideoSource;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -40,8 +41,15 @@ public class Lesson {
     @Column(columnDefinition = "TEXT")
     private String description;
 
-    @Column(nullable = false, columnDefinition = "TEXT")
-    private String videoUrl;
+    /**
+     * The lesson's video, whoever hosts it.
+     *
+     * <p>Embedded, so {@code video.url} is still the {@code lessons.video_url} column the prototype
+     * wrote and no existing row had to move. What is new beside it is the provider, the provider's
+     * own id, and a thumbnail — see {@link VideoSource} for which of those are authoritative.
+     */
+    @Embedded
+    private VideoSource video;
 
     @Column
     private Integer duration;
