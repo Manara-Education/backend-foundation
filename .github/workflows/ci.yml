@@ -5,9 +5,11 @@
 # are proven to still compile and pass the test suite before anyone merges them —
 # but it is not Dependabot-specific: human PRs run exactly the same checks.
 #
-# `mvn verify` is the repository's real build: it compiles, runs the 256 Surefire
-# unit tests and packages the Spring Boot jar. This repository has no Maven
-# wrapper, so the runner's preinstalled `mvn` is used with a pinned JDK.
+# `./mvnw verify` is the repository's real build: it compiles, runs the Surefire
+# unit tests and packages the Spring Boot jar. The Maven Wrapper is used rather
+# than the runner's preinstalled `mvn`, so CI, the Docker build and a developer's
+# laptop all run the exact Maven version pinned (and checksummed) in
+# .mvn/wrapper/maven-wrapper.properties.
 #
 # No services and no secrets are needed. Every test under src/test is a plain
 # JUnit/Mockito unit test — there is no @SpringBootTest, @DataJpaTest or
@@ -65,4 +67,4 @@ jobs:
           cache: 'maven'
 
       - name: Build and run tests
-        run: mvn -B -ntp verify
+        run: ./mvnw -B -ntp verify
