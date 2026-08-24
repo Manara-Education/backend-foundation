@@ -80,7 +80,28 @@ EXPOSE 8080
 # Containers get a cgroup memory limit, not the host's RAM. These flags make the
 # JVM honour it — without MaxRAMPercentage the heap is sized from the host's
 # 2 GiB while Postgres, Redis and Caddy are also using it.
+# The image's own contract, matching EXPOSE above: this container serves on 8080,
+# whatever Spring profile is active. Without it the default profile binds 8081
+# (the port the frontend dev server proxies to) and both the published port and
+# the healthcheck below reach nothing.
+ENV SERVER_PORT=8080
+
 ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=70 -XX:+UseSerialGC -XX:+ExitOnOutOfMemoryError -Djava.security.egd=file:/dev/./urandom"
+
+# Reports the container unhealthy when the application cannot serve. It asks the
+# readiness probe, not liveness, because readiness is what accounts for Postgres
+# and Redis — a JVM that is up but cannot reach its database is not ready, and
+# without this the container would look perfectly healthy while failing every
+# request.
+#
+# start-period covers JVM start plus Flyway migrations, and failures during it do
+# not count against retries, so a slow start is not mistaken for a broken one.
+# The 10 s timeout sits at the production datasource connection timeout
+# (application-prod.properties), so a database that is slow to answer is reported
+# by the health indicator rather than cut off by wget first.
+# busybox wget is already present in the base image; nothing is installed for this.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+    CMD wget -qO- "http://127.0.0.1:${SERVER_PORT:-8080}/actuator/health/readiness" | grep -q '"status":"UP"' || exit 1
 
 # Exec form, no shell: the JVM becomes PID 1 and receives SIGTERM directly, so
 # `docker stop` and compose restarts shut it down gracefully instead of killing
