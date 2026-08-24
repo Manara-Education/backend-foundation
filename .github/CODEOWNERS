@@ -1,0 +1,41 @@
+# Code owners for this repository.
+#
+# A pattern listed here requests a review from its owner automatically when a
+# pull request touches a matching file. Only real GitHub accounts with access to
+# this repository appear below — an unknown or unauthorised username makes the
+# whole entry silently do nothing, which is worse than having no CODEOWNERS at
+# all because it looks like protection that is not there.
+#
+# Verified collaborators at the time of writing:
+#   @Mohamed-Hamza  @Hamed-mohamed-Git
+#
+# Note: CODEOWNERS requests a review; it does not require one. Requiring owner
+# approval is a separate switch in the branch ruleset, deliberately left off
+# while the team is small enough that it would block every merge.
+
+# Default owners for everything not matched more specifically below.
+*                       @Mohamed-Hamza @Hamed-mohamed-Git
+
+# ---------------------------------------------------------------------------
+# Anything that changes how the application is built, released or deployed.
+# A mistake in these files does not fail a test — it fails a deployment.
+# ---------------------------------------------------------------------------
+/.github/workflows/     @Mohamed-Hamza @Hamed-mohamed-Git
+/Dockerfile             @Mohamed-Hamza @Hamed-mohamed-Git
+/.dockerignore          @Mohamed-Hamza @Hamed-mohamed-Git
+/docker-compose.yml     @Mohamed-Hamza @Hamed-mohamed-Git
+
+# ---------------------------------------------------------------------------
+# Database migrations are append-only and effectively irreversible in
+# production. Flyway checksums every applied file, so editing one after it has
+# run makes that database refuse to start.
+# ---------------------------------------------------------------------------
+/src/main/resources/db/migration/   @Mohamed-Hamza @Hamed-mohamed-Git
+
+# Security policy, session handling and rate limiting.
+/src/main/java/com/manara/backend/common/security/   @Mohamed-Hamza @Hamed-mohamed-Git
+/src/main/java/com/manara/backend/auth/security/     @Mohamed-Hamza @Hamed-mohamed-Git
+
+# Production configuration. No secrets live here, but what does live here
+# decides whether the production profile is safe.
+/src/main/resources/application-prod.properties      @Mohamed-Hamza @Hamed-mohamed-Git
