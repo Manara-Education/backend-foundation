@@ -25,9 +25,20 @@ public class OtpService {
     private final SecureRandom secureRandom;
     private final OtpEmailFactory otpEmailFactory;
     private final EmailService emailService;
+    private final OtpAttemptRecorder attemptRecorder;
 
     @Value("${otp.expiration-minutes}")
     private int expirationMinutes;
+
+    /**
+     * Guesses allowed against a single code before it is burned.
+     *
+     * <p>A six-digit code has a million possibilities, so five attempts leave a 1-in-200,000
+     * chance of a lucky guess per issued code — while comfortably tolerating a user mistyping a
+     * code they legitimately received.
+     */
+    @Value("${otp.max-attempts:5}")
+    private int maxAttempts;
 
     /**
      * Invalidates any outstanding code of this type, issues a new one, and emails it.
@@ -53,6 +64,14 @@ public class OtpService {
         emailService.send(otpEmailFactory.create(user.getEmail(), code, type, expirationMinutes));
     }
 
+    /**
+     * Resolves the caller's outstanding code and checks the one they supplied against it.
+     *
+     * <p>A wrong code is counted. Once {@code otp.max-attempts} failures accumulate against the
+     * same code it is marked used, so guessing must start over from a newly emailed code rather
+     * than continuing against the one already in flight. Without this, a six-digit code with a
+     * ten-minute lifetime and no attempt ceiling is enumerable.
+     */
     public Otp validateCode(String email, String code, OtpType type) {
         var otp = otpRepository
                 .findTopByUserEmailAndTypeAndUsedFalseOrderByCreatedAtDesc(email, type)
@@ -63,6 +82,12 @@ public class OtpService {
         }
 
         if (!otp.getCode().equals(code)) {
+            // Committed in its own transaction, because throwing below rolls this one back and
+            // would otherwise discard the increment — leaving the attacker unlimited guesses.
+            int attempts = attemptRecorder.recordFailure(otp.getId(), maxAttempts);
+            if (attempts >= maxAttempts) {
+                throw new BusinessException("auth.otp.tooManyAttempts");
+            }
             throw new BusinessException("auth.otp.invalid");
         }
 

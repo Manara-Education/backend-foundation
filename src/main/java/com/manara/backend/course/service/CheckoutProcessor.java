@@ -239,29 +239,17 @@ public class CheckoutProcessor {
     }
 
     /**
-     * Accepts both shapes of the payload: the current {@code paymentMethod} object, and the flat card
-     * fields the previous contract put at the top level.
+     * Resolves the payment instrument from the request.
+     *
+     * <p>The flat top-level card fields the previous contract accepted are gone along with the
+     * card fields themselves — see {@link PaymentMethodRequest}. Only the nested object remains,
+     * which is the shape the client already sends.
      */
     private PaymentMethodRequest paymentMethodOf(CheckoutRequest request) {
         if (request == null) {
             throw new BusinessException("error.payment.required");
         }
-        if (request.getPaymentMethod() != null) {
-            return request.getPaymentMethod();
-        }
-        // A body with neither shape has not supplied an instrument at all, which is a different
-        // failure from supplying a bad one — folding it into an empty card would report it as
-        // "invalid card number" and send the learner looking for a typo that is not there.
-        if (request.getCardNumber() == null && request.getExpiry() == null && request.getCvc() == null) {
-            return null;
-        }
-        return PaymentMethodRequest.builder()
-                .cardNumber(request.getCardNumber())
-                .expiry(request.getExpiry())
-                .cvc(request.getCvc())
-                .name(request.getName())
-                .email(request.getEmail())
-                .build();
+        return request.getPaymentMethod();
     }
 
     private Student requireStudent(User user) {

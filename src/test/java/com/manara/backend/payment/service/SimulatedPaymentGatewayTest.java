@@ -5,11 +5,13 @@ import com.manara.backend.payment.dto.PaymentMethodRequest;
 import com.manara.backend.payment.model.PaymentCharge;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -17,10 +19,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * The payment seam, and the honesty of what it does.
  *
- * <p>No money moves here. What is real is the refusal of a malformed instrument — the checkout form
- * already checks the same things client-side, and a request that skips the form must not skip them —
- * and the {@code sim_} prefix, which is what keeps a simulated grant distinguishable from a paid one
- * for as long as this class is the only implementation.
+ * <p>No money moves here. What is real is the {@code sim_} prefix, which keeps a simulated grant
+ * distinguishable from a paid one for as long as this class is the only implementation — and the
+ * fact that no card data reaches this application at all.
  */
 class SimulatedPaymentGatewayTest {
 
@@ -33,8 +34,8 @@ class SimulatedPaymentGatewayTest {
             new PaymentCharge(BigDecimal.valueOf(490), "Course", "course-7:student-20:purchase");
 
     @Test
-    void aWellFormedCardIsAcceptedAndReceiptedAsASimulation() {
-        var receipt = gateway.charge(charge, card("4242 4242 4242 4242", "12 / 30", "123"));
+    void anInstrumentIsAcceptedAndReceiptedAsASimulation() {
+        var receipt = gateway.charge(charge, instrument());
 
         assertThat(receipt.reference()).startsWith("sim_");
         assertThat(receipt.amount()).isEqualByComparingTo("490");
@@ -48,29 +49,32 @@ class SimulatedPaymentGatewayTest {
                 .hasMessage("error.payment.required");
     }
 
+    /**
+     * The guard that matters, and the reason the card-shape tests that used to live here are gone.
+     *
+     * <p>This application has no payment provider, so any card number reaching it would be a real
+     * primary account number held by a server with no acquirer and no PCI DSS scope. This asserts
+     * the fields cannot come back by accident — a reinstated {@code cardNumber} or {@code cvc}
+     * fails the build here rather than quietly resuming collection.
+     */
     @Test
-    void aShortCardNumberIsRefused() {
-        assertThatThrownBy(() -> gateway.charge(charge, card("4242", "12 / 30", "123")))
-                .isInstanceOf(BusinessException.class)
-                .hasMessage("error.payment.invalidCard");
+    void thePaymentInstrumentCarriesNoCardData() {
+        var forbidden = Arrays.stream(PaymentMethodRequest.class.getDeclaredFields())
+                .map(Field::getName)
+                .map(String::toLowerCase)
+                .filter(name -> name.contains("card")
+                        || name.contains("cvc")
+                        || name.contains("cvv")
+                        || name.contains("pan")
+                        || name.equals("expiry"))
+                .toList();
+
+        assertThat(forbidden)
+                .as("PaymentMethodRequest must never carry card data while the gateway is simulated")
+                .isEmpty();
     }
 
-    @Test
-    void aMalformedCvcIsRefused() {
-        assertThatThrownBy(() -> gateway.charge(charge, card("4242424242424242", "12 / 30", "1")))
-                .isInstanceOf(BusinessException.class)
-                .hasMessage("error.payment.invalidCvc");
-    }
-
-    @Test
-    void aMalformedExpiryIsRefused() {
-        assertThatThrownBy(() -> gateway.charge(charge, card("4242424242424242", "1230", "123")))
-                .isInstanceOf(BusinessException.class)
-                .hasMessage("error.payment.invalidExpiry");
-    }
-
-    private PaymentMethodRequest card(String number, String expiry, String cvc) {
-        return PaymentMethodRequest.builder()
-                .cardNumber(number).expiry(expiry).cvc(cvc).name("Learner").build();
+    private PaymentMethodRequest instrument() {
+        return PaymentMethodRequest.builder().name("Learner").email("learner@example.com").build();
     }
 }

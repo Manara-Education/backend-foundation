@@ -10,10 +10,19 @@ import lombok.Setter;
 /**
  * The payment instrument a learner submits at checkout.
  *
- * <p>Deliberately card-shaped and nothing more. There is no payment provider behind this
- * application, so there is no tokenization step to model and no provider-specific payload to carry.
- * When a real provider arrives this becomes the client's opaque token and the fields below
- * disappear — which is why nothing outside {@link com.manara.backend.payment} reads them.
+ * <p><strong>This deliberately carries no card data.</strong> It used to hold {@code cardNumber},
+ * {@code expiry} and {@code cvc}, and those fields were removed on purpose.
+ *
+ * <p>There is no payment provider behind this application — {@link
+ * com.manara.backend.payment.service.SimulatedPaymentGateway} contacts nobody and moves no money.
+ * So every card number and CVC that reached this object was a real primary account number,
+ * transmitted to and held in the memory of a server with no acquirer, no tokenisation, no PCI DSS
+ * scope and no reason whatsoever to possess it. Card-shape validation against a gateway that
+ * takes no payment was theatre; the risk of holding the data was not.
+ *
+ * <p>What remains is the learner's contact details, and {@code token} for the day a real provider
+ * arrives — at which point that becomes the provider's opaque token and card data still never
+ * touches this server, because the client exchanges it with the provider directly.
  */
 @Getter
 @Setter
@@ -22,12 +31,11 @@ import lombok.Setter;
 @AllArgsConstructor
 public class PaymentMethodRequest {
 
-    private String cardNumber;
-
-    /** {@code MM/YY} or {@code MM / YY}, as the checkout form produces it. */
-    private String expiry;
-
-    private String cvc;
+    /**
+     * Opaque instrument token from a payment provider. Unused while the gateway is simulated;
+     * present so introducing a real provider does not change this contract's shape.
+     */
+    private String token;
 
     private String name;
 
