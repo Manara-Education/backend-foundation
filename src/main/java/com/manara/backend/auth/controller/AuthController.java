@@ -1,7 +1,6 @@
 package com.manara.backend.auth.controller;
 
 import com.manara.backend.auth.dto.*;
-import com.manara.backend.auth.mapper.AuthMapper;
 import com.manara.backend.auth.service.AuthService;
 import com.manara.backend.common.dto.ApiResponse;
 import com.manara.backend.common.dto.MessageResponse;
@@ -28,7 +27,6 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuthController {
 
     private final AuthService authService;
-    private final AuthMapper authMapper;
 
     @PostMapping("/register")
     @ResponseStatus(HttpStatus.CREATED)
@@ -70,16 +68,33 @@ public class AuthController {
         return ApiResponse.success(authService.resetPassword(request));
     }
 
+    /**
+     * Changes the password of the signed-in account. Unlike {@code /reset-password}, which is
+     * anonymous and carries an emailed OTP, this one authenticates by session and proves the
+     * caller knows the account by asking for the current password. Succeeding here also clears
+     * a forced-reset requirement, which is what reopens the rest of the API to the account.
+     */
+    @PostMapping("/change-password")
+    public ApiResponse<MessageResponse> changePassword(@AuthenticationPrincipal User user,
+                                                       @RequestBody @Valid ChangePasswordRequest request) {
+        return ApiResponse.success(authService.changePassword(user, request));
+    }
+
     @PostMapping("/logout")
     public ApiResponse<MessageResponse> logout(HttpServletRequest httpRequest,
                                                HttpServletResponse httpResponse) {
         return ApiResponse.success(authService.logout(httpRequest, httpResponse));
     }
 
-    /** Returns the current session principal — frontend uses this in lieu of decoding a JWT. */
+    /**
+     * Returns the current user — frontend uses this in lieu of decoding a JWT, and on every
+     * reload to restore the session. The service re-reads the row rather than mapping the
+     * session principal, so state that changed after sign-in (notably the forced-reset flag)
+     * is reported as the database has it.
+     */
     @GetMapping("/me")
     public ApiResponse<AuthResponse> me(@AuthenticationPrincipal User user) {
-        return ApiResponse.success(authMapper.toAuthResponse(user));
+        return ApiResponse.success(authService.currentUser(user));
     }
 
     /**
