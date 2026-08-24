@@ -1,0 +1,16 @@
+# Normalise line endings so the Maven Wrapper works on every platform.
+#
+# mvnw is a POSIX shell script. If it is ever checked out with CRLF endings the
+# shell fails with a confusing "bad interpreter: /bin/sh^M", so it is forced to
+# LF regardless of a developer's core.autocrlf setting. mvnw.cmd is the Windows
+# batch counterpart and needs the opposite.
+* text=auto
+
+mvnw text eol=lf
+mvnw.cmd text eol=crlf
+*.sh text eol=lf
+
+# Never let git rewrite bytes inside binaries.
+*.jar binary
+*.zip binary
+*.png binary

@@ -1,0 +1,52 @@
+# Everything the image must never receive.
+#
+# Two jobs. First, keep the build context small and the layer cache stable —
+# without this, `COPY src/ src/` also ships target/ and .git, and every commit
+# invalidates every cached layer. Second, and more important: keep secrets and
+# host state out of the image. Anything copied in is permanently readable in
+# the layer history even if a later step deletes it.
+
+# --- Secrets and local-only configuration --------------------------------
+# .env holds the real Resend key on a developer machine; the *-local and
+# *-secret property files are where developer credentials live by convention
+# (see .gitignore). None of them may ever enter an image.
+.env
+.env.*
+!.env.example
+application-local.properties
+application-local.yml
+application-secret.properties
+application-secret.yml
+
+# --- Build output ---------------------------------------------------------
+# The image builds its own jar. Copying a host-built target/ in would let a
+# stale local artifact silently become the deployed one.
+target/
+
+# --- Runtime state --------------------------------------------------------
+# User-uploaded files live in a volume, never baked into the image.
+uploads/
+
+# --- Version control and tooling -----------------------------------------
+.git
+.gitignore
+.github
+.idea
+.vscode
+.run
+.claude
+.cursor
+*.iml
+
+# --- Docs, CI and compose (not needed to compile) -------------------------
+docs/
+*.md
+!README.md
+docker-compose.yml
+docker-compose.*.yml
+Dockerfile
+.dockerignore
+
+# --- OS noise -------------------------------------------------------------
+.DS_Store
+**/.DS_Store

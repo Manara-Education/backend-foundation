@@ -60,7 +60,9 @@ AGENTS.md
 !.env.example
 
 # Spring Boot
-.mvn/wrapper/maven-wrapper.properties
+# NOTE: .mvn/wrapper/maven-wrapper.properties is deliberately NOT ignored. It
+# declares which Maven version the wrapper downloads and its checksum, so the
+# wrapper is useless — and the build unreproducible — without it in git.
 # Local, developer-specific overrides — these are where real credentials belong.
 # The committed application.properties must only ever hold env-var placeholders.
 application-local.properties
