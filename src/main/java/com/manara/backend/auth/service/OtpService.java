@@ -6,6 +6,7 @@ import com.manara.backend.auth.model.Otp;
 import com.manara.backend.auth.model.OtpType;
 import com.manara.backend.auth.repository.OtpRepository;
 import com.manara.backend.common.exception.BusinessException;
+import com.manara.backend.common.util.EmailAddress;
 import com.manara.backend.email.service.EmailService;
 import com.manara.backend.user.model.User;
 import lombok.RequiredArgsConstructor;
@@ -67,6 +68,12 @@ public class OtpService {
     /**
      * Resolves the caller's outstanding code and checks the one they supplied against it.
      *
+     * <p>The address is canonicalised before the lookup. Callers hand this whatever string the
+     * client sent, and {@code otps} is joined to {@code users} on the stored — canonical —
+     * address, so an uncanonicalised argument would find no outstanding code and report
+     * {@code auth.otp.noActive}: a user who registered as {@code Ali@x.com} and typed
+     * {@code ali@x.com} into the verification form would be told their code had expired.
+     *
      * <p>A wrong code is counted. Once {@code otp.max-attempts} failures accumulate against the
      * same code it is marked used, so guessing must start over from a newly emailed code rather
      * than continuing against the one already in flight. Without this, a six-digit code with a
@@ -74,7 +81,8 @@ public class OtpService {
      */
     public Otp validateCode(String email, String code, OtpType type) {
         var otp = otpRepository
-                .findTopByUserEmailAndTypeAndUsedFalseOrderByCreatedAtDesc(email, type)
+                .findTopByUserEmailAndTypeAndUsedFalseOrderByCreatedAtDesc(
+                        EmailAddress.canonical(email), type)
                 .orElseThrow(() -> new BusinessException("auth.otp.noActive"));
 
         if (otp.isExpired()) {

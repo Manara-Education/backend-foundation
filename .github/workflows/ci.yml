@@ -11,11 +11,19 @@
 # laptop all run the exact Maven version pinned (and checksummed) in
 # .mvn/wrapper/maven-wrapper.properties.
 #
-# No services and no secrets are needed. Every test under src/test is a plain
-# JUnit/Mockito unit test — there is no @SpringBootTest, @DataJpaTest or
-# Testcontainers usage — so nothing here needs Postgres or Redis. The one test
-# that does reach the network, SendRealOtpEmailIT, is named `*IT` and is outside
-# Surefire's default includes, so it stays unrun (and RESEND_API_KEY stays unread).
+# No services and no secrets are needed. Most tests under src/test are plain
+# JUnit/Mockito unit tests. The handful that cannot be — the ones asserting that
+# Flyway really migrates an empty database, and that PostgreSQL itself rejects a
+# second account whose address differs only in case — are @SpringBootTest classes
+# that bring up their own PostgreSQL and Redis with Testcontainers. Those need a
+# Docker daemon, which the GitHub-hosted runner already provides; they still need
+# no `services:` block, no secrets and no network beyond the image pull.
+#
+# They deliberately run under Surefire rather than being named `*IT` and skipped.
+# A test that only runs when someone remembers to run it is no protection against
+# a Flyway setup that silently stops migrating. The one test that does reach the
+# network, SendRealOtpEmailIT, is named `*IT` and is outside Surefire's default
+# includes, so it stays unrun (and RESEND_API_KEY stays unread).
 #
 # That secret-free design is deliberate: workflow runs triggered by Dependabot
 # pull requests receive Dependabot secrets rather than Actions secrets, so a CI

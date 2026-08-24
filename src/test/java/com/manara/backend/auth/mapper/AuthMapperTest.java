@@ -3,6 +3,7 @@ package com.manara.backend.auth.mapper;
 import com.manara.backend.auth.dto.RegisterRequest;
 import com.manara.backend.user.model.Role;
 import com.manara.backend.user.model.User;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -40,5 +41,35 @@ class AuthMapperTest {
                 .build();
 
         assertThat(mapper.toAuthResponse(flagged).isRequiresPasswordReset()).isTrue();
+    }
+
+    @Test
+    @DisplayName("the entity is built with the canonical address, not the one that was typed")
+    void theStoredAddressIsCanonical() {
+        // The mapper is the only place a User is constructed, and Lombok's builder writes fields
+        // directly rather than through setEmail. So if canonicalisation is not done here, a
+        // registration that reaches the service by any route other than a bound HTTP request puts
+        // a raw address in the column — a row no lookup afterwards can find.
+        User user = mapper.toUser(
+                RegisterRequest.builder()
+                        .fullName("أحمد طارق")
+                        .email("  Student@Manara.com  ")
+                        .build(),
+                "$2a$10$hash",
+                Role.STUDENT);
+
+        assertThat(user.getEmail()).isEqualTo("student@manara.com");
+    }
+
+    @Test
+    @DisplayName("two instances whose addresses differ only in case are the same account")
+    void identityIgnoresCase() {
+        // Matches how uk_users_email_lower sees them: the database would refuse to hold both, so
+        // the application must not treat them as different accounts either.
+        User lower = User.builder().email("student@manara.com").role(Role.STUDENT).build();
+        User upper = User.builder().email("Student@Manara.com").role(Role.STUDENT).build();
+
+        assertThat(lower).isEqualTo(upper);
+        assertThat(lower).hasSameHashCodeAs(upper);
     }
 }
