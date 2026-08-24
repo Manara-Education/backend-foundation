@@ -18,7 +18,9 @@ import com.manara.backend.lesson.mapper.LessonMapper;
 import com.manara.backend.lesson.model.Lesson;
 import com.manara.backend.lesson.repository.CompletedLessonRepository;
 import com.manara.backend.lesson.repository.LessonRepository;
-import com.manara.backend.lesson.service.YoutubeDurationService;
+import com.manara.backend.video.model.ResolvedVideo;
+import com.manara.backend.video.service.VideoMetadataService;
+import com.manara.backend.video.service.VideoProviderResolver;
 import com.manara.backend.quiz.dto.QuizRequest;
 import com.manara.backend.quiz.model.QuizOwnerType;
 import com.manara.backend.quiz.service.QuizService;
@@ -73,7 +75,8 @@ public class CourseContentSynchronizer {
     private final LessonMapper lessonMapper;
     private final SubscriptionPlanMapper subscriptionPlanMapper;
     private final QuizService quizService;
-    private final YoutubeDurationService youtubeDurationService;
+    private final VideoMetadataService videoMetadataService;
+    private final VideoProviderResolver videoProviderResolver;
 
     public void sync(Course course, CourseRequest request, ResolvedCourseSettings settings) {
         if (request.carriesContentFor(settings.structure())) {
@@ -145,7 +148,6 @@ public class CourseContentSynchronizer {
 
         for (int order = 0; order < requests.size(); order++) {
             LessonRequest request = requests.get(order);
-            String videoUrl = request.getVideoUrl().trim();
             Lesson lesson;
 
             if (request.getId() == null) {
@@ -155,11 +157,17 @@ public class CourseContentSynchronizer {
                 lesson = resolveOwnChild(lessonsById, state.seenLessonIds, request.getId(),
                         "error.course.lessonNotInCourse", "error.course.lessonDuplicate");
 
-                boolean videoChanged = !videoUrl.equals(lesson.getVideoUrl());
+                // The whole payload was already validated, so this cannot fail here; resolving
+                // again is how the provider columns are kept in step with the URL on every save,
+                // including for a lesson that predates them.
+                ResolvedVideo video = videoProviderResolver.resolve(
+                        request.getVideoUrl(), request.getVideoProvider());
+
+                boolean videoChanged = !video.url().equals(lesson.getVideo().getUrl());
                 lesson.setTitle(request.getTitle().trim());
                 lesson.setSummary(request.getSummary());
                 lesson.setDescription(request.getDescription());
-                lesson.setVideoUrl(videoUrl);
+                lesson.setVideo(video.toVideoSource());
                 lesson.setOrderIndex(order);
                 // Re-parenting is how a structure switch keeps a lesson the payload still wants.
                 lesson.setModule(module);
@@ -266,7 +274,7 @@ public class CourseContentSynchronizer {
         course.setDuration(lessonRepository.sumDurationByCourseId(course.getId()));
 
         for (Lesson lesson : videoRefreshTargets) {
-            youtubeDurationService.fetchAndUpdateDurationAsync(lesson.getId(), lesson.getVideoUrl());
+            videoMetadataService.refreshAsync(lesson.getId(), lesson.getVideo());
         }
     }
 

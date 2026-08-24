@@ -23,6 +23,9 @@ import com.manara.backend.lesson.repository.CompletedLessonRepository;
 import com.manara.backend.lesson.repository.LessonRepository;
 import com.manara.backend.profile.model.Student;
 import com.manara.backend.quiz.mapper.QuizMapper;
+import com.manara.backend.video.VideoProviderFixtures;
+import com.manara.backend.video.model.VideoProvider;
+import com.manara.backend.video.service.VideoMetadataService;
 import com.manara.backend.quiz.model.Quiz;
 import com.manara.backend.quiz.model.QuizAttempt;
 import com.manara.backend.quiz.model.QuizOption;
@@ -91,7 +94,7 @@ class LessonProgressionTest {
     private QuizService quizService;
 
     @Mock
-    private YoutubeDurationService youtubeDurationService;
+    private VideoMetadataService videoMetadataService;
 
     @Mock
     private MessageService messageService;
@@ -109,7 +112,8 @@ class LessonProgressionTest {
         lessonService = new LessonService(
                 lessonRepository, courseRepository, courseModuleRepository, completedLessonRepository,
                 enrollmentRepository, learnerCourseAccess, courseProgressionService,
-                new LessonMapper(durationFormatter), quizService, new QuizMapper(), youtubeDurationService);
+                new LessonMapper(durationFormatter, VideoProviderFixtures.resolver()), quizService,
+                new QuizMapper(), videoMetadataService, VideoProviderFixtures.resolver());
         lenient().when(messageService.get(any(), any())).thenReturn("0s");
     }
 
@@ -219,7 +223,12 @@ class LessonProgressionTest {
         var response = lessonService.getLesson(user, COURSE_ID, 1L).getLesson();
 
         assertThat(response.getLocked()).isFalse();
-        assertThat(response.getVideoUrl()).isEqualTo("https://youtu.be/lesson-1");
+        assertThat(response.getVideoUrl()).isEqualTo("https://youtu.be/" + youTubeId(1));
+        // The video arrives described, not just linked: a client knows which player to build
+        // without parsing the URL itself.
+        assertThat(response.getVideoProvider()).isEqualTo(VideoProvider.YOUTUBE);
+        assertThat(response.getExternalVideoId()).isEqualTo(youTubeId(1));
+        assertThat(response.getVideoEmbedUrl()).isEqualTo("https://www.youtube.com/embed/" + youTubeId(1));
         assertThat(response.getQuiz()).isNotNull();
         assertThat(response.getQuiz().getState().getAvailable()).isTrue();
     }
@@ -327,11 +336,17 @@ class LessonProgressionTest {
                 .id((long) id)
                 .title("Lesson " + id)
                 .description("Lesson " + id + " notes")
-                .videoUrl("https://youtu.be/lesson-" + id)
+                .video(VideoProviderFixtures.resolver()
+                        .resolve("https://youtu.be/" + youTubeId(id)).toVideoSource())
                 .course(course)
                 .module(module)
                 .orderIndex(id)
                 .build();
+    }
+
+    /** A syntactically real YouTube id — eleven characters — that still identifies the lesson. */
+    private String youTubeId(int id) {
+        return ("lesson" + id + "AAAAA").substring(0, 11);
     }
 
     private Quiz quiz() {

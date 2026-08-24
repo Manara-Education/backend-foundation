@@ -14,6 +14,7 @@ import com.manara.backend.profile.repository.StudentRepository;
 import com.manara.backend.user.model.Role;
 import com.manara.backend.user.model.User;
 import com.manara.backend.user.repository.UserRepository;
+import com.manara.backend.video.service.VideoProviderResolver;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
@@ -34,6 +35,7 @@ public class DataSeeder implements CommandLineRunner {
     private final CourseRepository courseRepository;
     private final LessonRepository lessonRepository;
     private final PasswordEncoder passwordEncoder;
+    private final VideoProviderResolver videoProviderResolver;
 
     @Override
     @Transactional
@@ -120,7 +122,7 @@ public class DataSeeder implements CommandLineRunner {
                     .title("مقدمة في علم النحو")
                     .summary("فهم تاريخ النحو وأهميته في صون اللسان العربي.")
                     .description("في هذا الدرس، سنتناول نشأة علم النحو وتطوره، وأهم المدارس النحوية.")
-                    .videoUrl("https://www.youtube.com/watch?v=Jc__iOQgQNM")
+                    .video(videoProviderResolver.resolve("https://www.youtube.com/watch?v=Jc__iOQgQNM").toVideoSource())
                     .duration(2700)
                     .orderIndex(1)
                     .course(paidCourse)
@@ -130,7 +132,7 @@ public class DataSeeder implements CommandLineRunner {
                     .title("أقسام الكلمة: الاسم والفعل والحرف")
                     .summary("التمييز بين أنواع الكلمات وعلامات كل قسم.")
                     .description("سنتعرف على علامات الاسم، وعلامات الفعل، والحروف ومعانيها بالتفصيل.")
-                    .videoUrl("https://www.youtube.com/watch?v=NYAaOAASuZQ")
+                    .video(videoProviderResolver.resolve("https://www.youtube.com/watch?v=NYAaOAASuZQ").toVideoSource())
                     .duration(3120)
                     .orderIndex(2)
                     .course(paidCourse)
@@ -159,7 +161,7 @@ public class DataSeeder implements CommandLineRunner {
                     .title("من أين تبدأ الفكرة؟")
                     .summary("تقنيات العصف الذهني واصطياد الأفكار الملهمة.")
                     .description("سنتحدث عن مصادر الإلهام وكيفية تحويل الفكرة العابرة إلى قصة متماسكة.")
-                    .videoUrl("https://www.youtube.com/watch?v=MqKrXi3BxTI")
+                    .video(videoProviderResolver.resolve("https://www.youtube.com/watch?v=MqKrXi3BxTI").toVideoSource())
                     .duration(2400)
                     .orderIndex(1)
                     .course(freeCourse)
@@ -169,7 +171,7 @@ public class DataSeeder implements CommandLineRunner {
                     .title("رسم الشخصيات وبناء الحبكة")
                     .summary("كيف تخلق شخصيات حية وتصنع صراعاً درامياً شيقاً.")
                     .description("سنتعلم الأبعاد الثلاثة للشخصية، وأنواع الحبكات الروائية المختلفة.")
-                    .videoUrl("https://www.youtube.com/watch?v=VfL9qj95r5k")
+                    .video(videoProviderResolver.resolve("https://www.youtube.com/watch?v=VfL9qj95r5k").toVideoSource())
                     .duration(3300)
                     .orderIndex(2)
                     .course(freeCourse)

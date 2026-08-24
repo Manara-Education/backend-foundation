@@ -25,6 +25,9 @@ import com.manara.backend.quiz.model.Quiz;
 import com.manara.backend.quiz.model.QuizOwnerType;
 import com.manara.backend.quiz.service.QuizService;
 import com.manara.backend.user.model.Role;
+import com.manara.backend.video.model.ResolvedVideo;
+import com.manara.backend.video.service.VideoMetadataService;
+import com.manara.backend.video.service.VideoProviderResolver;
 import com.manara.backend.user.model.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -56,7 +59,8 @@ public class LessonService {
     private final LessonMapper lessonMapper;
     private final QuizService quizService;
     private final QuizMapper quizMapper;
-    private final YoutubeDurationService youtubeDurationService;
+    private final VideoMetadataService videoMetadataService;
+    private final VideoProviderResolver videoProviderResolver;
 
     private Course getCourseAndVerifyInstructor(User user, Long courseId) {
         if (user.getRole() != Role.INSTRUCTOR) {
@@ -109,7 +113,7 @@ public class LessonService {
 
         Quiz quiz = syncQuizIfProvided(lesson, request);
 
-        youtubeDurationService.fetchAndUpdateDurationAsync(lesson.getId(), request.getVideoUrl());
+        videoMetadataService.refreshAsync(lesson.getId(), lesson.getVideo());
 
         return lessonMapper.toLessonResponse(lesson, null, quizMapper.toLearnerResponse(quiz));
     }
@@ -120,14 +124,21 @@ public class LessonService {
         Lesson lesson = requireLessonOfCourse(courseId, lessonId);
         CourseModule module = resolveModule(course, request.getModuleId());
 
-        boolean videoUrlChanged = !request.getVideoUrl().equals(lesson.getVideoUrl());
+        // Resolved before anything is written, so an edit that swaps in an unplayable URL is
+        // refused with the lesson untouched rather than half-applied.
+        ResolvedVideo video = videoProviderResolver.resolve(request.getVideoUrl(), request.getVideoProvider());
+        boolean videoUrlChanged = !video.url().equals(lesson.getVideo().getUrl());
 
         lesson.setTitle(request.getTitle());
         lesson.setSummary(request.getSummary());
         lesson.setDescription(request.getDescription());
-        lesson.setVideoUrl(request.getVideoUrl());
         lesson.setOrderIndex(request.getOrderIndex());
         lesson.setModule(module);
+
+        // Rewritten on every save, not only when the URL changed: a lesson stored before providers
+        // existed picks up its provider, id and thumbnail the first time it is edited, with no
+        // migration and no separate back-fill pass.
+        lesson.setVideo(video.toVideoSource());
 
         if (videoUrlChanged) {
             lesson.setDuration(0);
@@ -138,7 +149,7 @@ public class LessonService {
         Quiz quiz = syncQuizIfProvided(lesson, request);
 
         if (videoUrlChanged) {
-            youtubeDurationService.fetchAndUpdateDurationAsync(lesson.getId(), request.getVideoUrl());
+            videoMetadataService.refreshAsync(lesson.getId(), lesson.getVideo());
         } else {
             recalculateCourseDuration(lesson.getCourse());
         }

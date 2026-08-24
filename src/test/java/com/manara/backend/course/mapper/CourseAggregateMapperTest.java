@@ -14,6 +14,7 @@ import com.manara.backend.lesson.mapper.LessonMapper;
 import com.manara.backend.lesson.model.Lesson;
 import com.manara.backend.profile.model.Instructor;
 import com.manara.backend.quiz.mapper.QuizMapper;
+import com.manara.backend.video.VideoProviderFixtures;
 import com.manara.backend.quiz.model.Quiz;
 import com.manara.backend.quiz.model.QuizOption;
 import com.manara.backend.quiz.model.QuizOwnerType;
@@ -52,7 +53,8 @@ class CourseAggregateMapperTest {
         DurationFormatter durationFormatter = mock(DurationFormatter.class);
         when(durationFormatter.formatSeconds(org.mockito.ArgumentMatchers.any())).thenReturn("0s");
         return new CourseAggregateMapper(
-                new LessonMapper(durationFormatter), new QuizMapper(), new SubscriptionPlanMapper(), durationFormatter);
+                new LessonMapper(durationFormatter, VideoProviderFixtures.resolver()),
+                new QuizMapper(), new SubscriptionPlanMapper(), durationFormatter);
     }
 
     @Test
@@ -211,7 +213,7 @@ class CourseAggregateMapperTest {
         return Lesson.builder()
                 .id(id)
                 .title("Lesson")
-                .videoUrl("https://youtube.com/watch?v=abc")
+                .video(VideoProviderFixtures.resolver().resolve("https://youtube.com/watch?v=aBcDeFgHiJk").toVideoSource())
                 .duration(60)
                 .orderIndex(0)
                 .course(course)

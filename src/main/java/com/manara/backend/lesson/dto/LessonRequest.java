@@ -2,6 +2,7 @@ package com.manara.backend.lesson.dto;
 
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.manara.backend.quiz.dto.QuizRequest;
+import com.manara.backend.video.model.VideoProvider;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
@@ -35,8 +36,26 @@ public class LessonRequest {
 
     private String description;
 
+    /**
+     * The lesson's video, on any platform Manara supports. The provider is worked out from this by
+     * the server, so a client never has to know how to tell YouTube from Vimeo.
+     *
+     * <p>Named for what it is rather than for one platform: the prototype's field carried the same
+     * value under the same name, so this is not a contract change, only an honest one.
+     */
     @NotBlank(message = "{validation.lesson.videoUrl.required}")
     private String videoUrl;
+
+    /**
+     * Optional, and never taken at face value.
+     *
+     * <p>A client that already knows which platform it is sending may say so, and the server checks
+     * that claim against the URL and rejects the pair if they disagree. What it will not do is
+     * believe it: a payload claiming {@code YOUTUBE} for a {@code vimeo.com} link is refused rather
+     * than stored, so the provider column can never end up describing a different video from the
+     * one the URL points at. Omitting this — which every current client does — is the normal case.
+     */
+    private VideoProvider videoProvider;
 
     @NotNull(message = "{validation.lesson.orderIndex.required}")
     @JsonAlias("order")
