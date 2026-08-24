@@ -1,5 +1,6 @@
 package com.manara.backend.user.model;
 
+import com.manara.backend.common.util.EmailAddress;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -64,6 +65,18 @@ public class User implements UserDetails {
 
     private LocalDateTime updatedAt;
 
+    /**
+     * Stores the canonical form of the address, never the raw one.
+     *
+     * <p>Written out by hand so Lombok's {@code @Setter} does not generate a plain assignment.
+     * Every mutation path through the entity therefore keeps the column canonical; the builder,
+     * which bypasses setters, is covered by {@code AuthMapper#toUser}, and the database has the
+     * final word through {@code ck_users_email_canonical}.
+     */
+    public void setEmail(String email) {
+        this.email = EmailAddress.canonical(email);
+    }
+
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();
@@ -105,15 +118,25 @@ public class User implements UserDetails {
         return true;
     }
 
+    /**
+     * Identity is the email address, compared the way the database compares it.
+     *
+     * <p>Canonicalising both sides rather than calling {@code email.equals(other.email)} keeps
+     * this consistent with {@code uk_users_email_lower}: two instances the database would refuse
+     * to store side by side must not look like different accounts here either. In practice every
+     * persisted row is already canonical, so this only matters for instances built in memory —
+     * which is exactly where a raw address can still turn up.
+     */
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
         if (!(o instanceof User other)) return false;
-        return email != null && email.equals(other.email);
+        String canonical = EmailAddress.canonical(email);
+        return canonical != null && canonical.equals(EmailAddress.canonical(other.email));
     }
 
     @Override
     public int hashCode() {
-        return Objects.hashCode(email);
+        return Objects.hashCode(EmailAddress.canonical(email));
     }
 }

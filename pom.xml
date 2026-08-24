@@ -138,6 +138,30 @@
 			<artifactId>spring-security-test</artifactId>
 			<scope>test</scope>
 		</dependency>
+		<!--
+			Testcontainers, for the tests that cannot be written against a mock.
+
+			Three of this project's guarantees are guarantees ABOUT PostgreSQL, and only a real
+			PostgreSQL can hold them up: that Flyway actually migrates a fresh database on
+			startup, that flyway_schema_history ends up with the expected versions, and that the
+			database itself rejects a second account whose address differs only in case. H2 or a
+			mocked repository would pass all three while the real thing was broken — which is the
+			exact failure this work exists to close, so the test for it may not be able to fail
+			the same way.
+
+			Test scope only, and nothing here ships. Versions come from the Spring Boot parent's
+			dependency management. These need a Docker daemon, which the CI runner provides.
+		-->
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers-postgresql</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers-junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
 	</dependencies>
 
 	<build>
