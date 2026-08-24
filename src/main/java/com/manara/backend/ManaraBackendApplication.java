@@ -2,11 +2,13 @@ package com.manara.backend;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableAsync;
 
 @SpringBootApplication
+@EnableAsync
 public class ManaraBackendApplication {
 
-	public static void main(String[] args) {
+	static void main(String[] args) {
 		SpringApplication.run(ManaraBackendApplication.class, args);
 	}
 

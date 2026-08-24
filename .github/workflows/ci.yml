@@ -1,0 +1,136 @@
+# Continuous integration for backend-foundation.
+#
+# This is the validation gate for every pull request into `develop` (the default
+# branch) and `main`. It exists so that dependency-update PRs raised by Dependabot
+# are proven to still compile and pass the test suite before anyone merges them —
+# but it is not Dependabot-specific: human PRs run exactly the same checks.
+#
+# `./mvnw verify` is the repository's real build: it compiles, runs the Surefire
+# unit tests and packages the Spring Boot jar. The Maven Wrapper is used rather
+# than the runner's preinstalled `mvn`, so CI, the Docker build and a developer's
+# laptop all run the exact Maven version pinned (and checksummed) in
+# .mvn/wrapper/maven-wrapper.properties.
+#
+# No services and no secrets are needed. Most tests under src/test are plain
+# JUnit/Mockito unit tests. The handful that cannot be — the ones asserting that
+# Flyway really migrates an empty database, and that PostgreSQL itself rejects a
+# second account whose address differs only in case — are @SpringBootTest classes
+# that bring up their own PostgreSQL and Redis with Testcontainers. Those need a
+# Docker daemon, which the GitHub-hosted runner already provides; they still need
+# no `services:` block, no secrets and no network beyond the image pull.
+#
+# They deliberately run under Surefire rather than being named `*IT` and skipped.
+# A test that only runs when someone remembers to run it is no protection against
+# a Flyway setup that silently stops migrating. The one test that does reach the
+# network, SendRealOtpEmailIT, is named `*IT` and is outside Surefire's default
+# includes, so it stays unrun (and RESEND_API_KEY stays unread).
+#
+# That secret-free design is deliberate: workflow runs triggered by Dependabot
+# pull requests receive Dependabot secrets rather than Actions secrets, so a CI
+# job that depended on production secrets would fail or silently degrade on
+# exactly the PRs this pipeline exists to validate.
+#
+# The second job builds the production container image. It proves the Dockerfile
+# still works before a change reaches `develop` — a broken image build otherwise
+# stays invisible until someone tries to deploy, which is the worst moment to
+# discover it. The image is BUILT and DISCARDED: nothing is pushed and nothing is
+# deployed. Publishing to GHCR is a separate, release-triggered workflow.
+
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+  push:
+    branches:
+      - develop
+
+# Least privilege: this job only reads the repository. It never writes to the
+# repo, comments on PRs, or touches deployments.
+permissions:
+  contents: read
+
+# A newer push to the same PR supersedes the previous run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Pinned to the <java.version> declared in pom.xml.
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build and run tests
+        run: ./mvnw -B -ntp verify
+
+  image:
+    name: Build the container image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Only after the tests pass. Building an image from code that fails its own
+    # test suite wastes several minutes to tell us nothing we did not know.
+    needs: build
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # push: false — this job is a validation gate, not a publishing step.
+      # The GitHub Actions cache keeps the Maven dependency layer between runs,
+      # so a source-only change does not re-download the Spring Boot dependency
+      # tree on every pull request.
+      - name: Build the image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          load: true
+          tags: backend-foundation:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # A build that succeeds proves the image compiles, not that it runs. This
+      # catches an image that builds and then dies immediately — a bad
+      # ENTRYPOINT, a missing runtime library, a jar that was never copied.
+      #
+      # It is started with no database, so it is EXPECTED to fail readiness and
+      # exit non-zero eventually. What is checked is that the JVM started and
+      # Spring began booting at all.
+      - name: Verify the image starts
+        run: |
+          set -euo pipefail
+          docker run -d --name ci-smoke backend-foundation:ci
+          for _ in $(seq 1 30); do
+            if docker logs ci-smoke 2>&1 | grep -q "Starting ManaraBackendApplication"; then
+              echo "Application started inside the image."
+              docker rm -f ci-smoke >/dev/null
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::The image did not start. Last 50 log lines:"
+          docker logs ci-smoke 2>&1 | tail -50
+          docker rm -f ci-smoke >/dev/null
+          exit 1

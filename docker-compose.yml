@@ -3,13 +3,37 @@ services:
     container_name: manara_db
     image: postgres:17.5
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: manara_db
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-manara_db}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    # depends_on: service_healthy below waits on this, so the application is not
+    # started against a database that is still initialising.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-manara_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  redis:
+    container_name: manara_redis
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     restart: unless-stopped
 
   app:
@@ -17,13 +41,44 @@ services:
     build: .
     ports:
       - "8080:8080"
+    # Wait for both to be HEALTHY, not merely created. Plain `depends_on` only
+    # orders container start, so the application would previously race Postgres'
+    # first-run initialisation and Flyway would fail to connect.
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
-      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/manara_db
-      - SPRING_DATASOURCE_USERNAME=postgres
-      - SPRING_DATASOURCE_PASSWORD=password
+      # Variable names match .env.example and application.properties one-for-one,
+      # so the same names work locally, in compose and in production.
+      #
+      # The published port above is 8080, so the app must listen on 8080 inside
+      # the container. Without this it binds application.properties' local
+      # default of 8081 and the published port reaches nothing.
+      - SERVER_PORT=8080
+      - DATABASE_URL=jdbc:postgresql://postgres:5432/${POSTGRES_DB:-manara_db}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - COOKIE_SECURE=true
+      # Supplied from the host environment / .env — never hardcode the key here.
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - MAIL_FROM=${MAIL_FROM:-no-reply@manara-edu.com}
+      - MAIL_FROM_NAME=${MAIL_FROM_NAME:-Manara}
+      - MAIL_REPLY_TO=${MAIL_REPLY_TO:-support@manara-edu.com}
+      # Absolute path onto the named volume mounted below.
+      - UPLOADS_DIR=/app/uploads
+    volumes:
+      # Uploaded images live in a volume, NOT in the container's writable layer.
+      # Without this every `docker compose up --build`, every image update and
+      # every `docker rm` silently destroyed every file a user had uploaded —
+      # the container filesystem is discarded when the container is replaced.
+      - uploads_data:/app/uploads
     restart: always
 
 volumes:
   postgres_data:
+  redis_data:
+  uploads_data:

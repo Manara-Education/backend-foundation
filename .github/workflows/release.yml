@@ -1,0 +1,106 @@
+# Cuts a production release of backend-foundation.
+#
+# A release is a Git tag plus a GitHub Release carrying generated notes. Nothing
+# here builds or deploys anything — publishing the container image is a separate
+# workflow that reacts to the release this one creates.
+#
+# How to cut a release:
+#
+#   1. Merge everything intended for it into `develop`, and make sure each PR
+#      carries a label — the notes are grouped by label (.github/release.yml),
+#      so an unlabelled PR lands under "Other Changes".
+#   2. Open a release PR from `develop` to `main` and merge it. `main` is only
+#      ever advanced this way.
+#   3. Tag the merge commit on `main` and push the tag:
+#
+#          git checkout main && git pull
+#          git tag v1.2.0 && git push origin v1.2.0
+#
+# Versioning is Semantic Versioning — MAJOR.MINOR.PATCH:
+#
+#   MAJOR  a breaking change to the API this repository serves or consumes
+#   MINOR  new functionality, backwards compatible
+#   PATCH  a bug fix or a security fix with no contract change
+#
+# The backend and the frontend version INDEPENDENTLY. They are separate products
+# with separate release cadences, and forcing their numbers to match would mean
+# cutting meaningless releases of one to keep up with the other.
+
+name: Release
+
+on:
+  push:
+    tags:
+      # Only vMAJOR.MINOR.PATCH. The exact format is re-checked in the job below,
+      # because this glob is looser than it looks — it would happily match
+      # "v1.2.3-oops".
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+# contents: write is required to create the release. Nothing else is granted.
+permissions:
+  contents: write
+
+# Two pushes of the same tag must never race to create the same release.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Create the GitHub release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out the repository
+        # Full history: the release notes are built by comparing this tag with
+        # the previous one, which a shallow clone cannot see.
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate the tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$TAG" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "::error::'$TAG' is not vMAJOR.MINOR.PATCH (for example v1.4.0)."
+            exit 1
+          fi
+          echo "Releasing $TAG"
+
+      # A production release must be reachable from main. Without this check a
+      # tag pushed from a feature branch would produce a GitHub Release — and,
+      # through the publishing workflow, a deployable image — from code that was
+      # never reviewed or merged.
+      - name: Refuse to release a commit that is not on main
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch origin main --quiet
+          if git merge-base --is-ancestor "$TAG" origin/main; then
+            echo "$TAG is on main."
+          else
+            echo "::error::$TAG is not an ancestor of main. Releases are cut from main only:"
+            echo "::error::merge develop into main first, then tag the merge commit."
+            exit 1
+          fi
+
+      # --generate-notes builds the body from the PRs merged since the previous
+      # tag, grouped by the categories in .github/release.yml.
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --title "Backend $TAG" \
+            --generate-notes \
+            --verify-tag \
+            --latest
+          gh release view "$TAG" --repo "${{ github.repository }}" --json url --jq .url

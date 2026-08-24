@@ -1,0 +1,138 @@
+# Publishes the backend container image to GHCR.
+#
+# Runs when a GitHub Release is published — that is, after release.yml has
+# already proved the tag is valid semver and that the tagged commit is on
+# `main`. This workflow does not re-litigate that; it builds the image for the
+# released commit and pushes it. Deployment is separate again, and reacts to the
+# image existing.
+#
+# Tags applied to every published image:
+#
+#   :v1.4.0       the release. This is what production pins to.
+#   :sha-abc1234  the exact commit, immutable forever.
+#
+# The SHA tag is the one that matters when something has gone wrong. A version
+# tag is a label a human chose and can in principle be moved or re-pushed; the
+# SHA tag answers "what code is actually running" with no ambiguity, and it is
+# what the release manifest records.
+#
+# There is deliberately NO `latest`. Production pins an exact version in .env so
+# that a deployment is reproducible and a rollback is editing one line back.
+# `latest` would quietly reintroduce "whatever was built most recently" as the
+# deployed version, which is precisely what pinning exists to prevent.
+
+name: Publish image
+
+on:
+  release:
+    types: [published]
+  # Manual re-publish, for when a release exists but the push failed — a registry
+  # outage, an expired token. Rebuilding the same tag from the same commit
+  # produces the same image.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to (re)publish, e.g. v1.4.0"
+        required: true
+
+# Least privilege, and both scopes are used:
+#   contents: read   -> checking out the tagged commit
+#   packages: write  -> pushing to GHCR
+#
+# GITHUB_TOKEN rather than a personal access token: it is scoped to this
+# repository, it expires when the job ends, and there is no long-lived
+# credential to rotate or leak.
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and push to GHCR
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Resolve the tag being published
+        id: resolve
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$TAG" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "::error::'$TAG' is not vMAJOR.MINOR.PATCH."
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the released commit
+        uses: actions/checkout@v7
+        with:
+          # The tag, not the default branch. Building from the branch would
+          # publish whatever has landed since the release was cut, under the
+          # released version's name.
+          ref: ${{ steps.resolve.outputs.tag }}
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # GHCR requires a lowercase image name and the organisation is
+      # "Manara-Education", so this cannot just interpolate github.repository.
+      - name: Compute the image name
+        id: image
+        run: echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:${{ steps.resolve.outputs.tag }}
+            ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+          # Standard provenance labels, so `docker inspect` on the server can
+          # answer which commit and which release an image came from without
+          # consulting anything else.
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.resolve.outputs.tag }}
+
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summarise what was published
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          SHA: ${{ github.sha }}
+        run: |
+          {
+            echo "### Published"
+            echo
+            echo '```'
+            echo "$IMAGE:$TAG"
+            echo "$IMAGE:sha-$SHA"
+            echo "digest: $DIGEST"
+            echo '```'
+            echo
+            echo "Pin this in the production .env:"
+            echo
+            echo '```'
+            echo "BACKEND_IMAGE=$IMAGE:$TAG"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

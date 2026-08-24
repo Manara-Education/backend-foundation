@@ -1,0 +1,100 @@
+# Dependabot configuration — backend-foundation
+#
+# Branch behaviour
+#   This repository's DEFAULT branch is `develop` (confirmed via the GitHub API,
+#   not the stale local `origin/HEAD` ref which still points at `main`; `main` is
+#   the frozen pre-session-auth branch described in workflows/deploy.yml).
+#
+#   `target-branch` is deliberately NOT set. Dependabot already raises version
+#   updates against the default branch, so `develop` is targeted without it, and
+#   omitting it keeps this configuration applying to SECURITY updates as well.
+#   Per GitHub's option reference, a configuration that sets `target-branch` to a
+#   non-default branch stops governing security updates — those always target the
+#   default branch. Since the default branch is the branch we want anyway, adding
+#   `target-branch` could only lose behaviour, never gain it.
+#
+# Grouping
+#   patch  -> one grouped PR   (low risk, auto-merge eligible)
+#   minor  -> one grouped PR   (reviewed by a human)
+#   major  -> NOT grouped, so Dependabot opens one PR per dependency. That matters
+#             most here: a Spring Boot major is a migration, not a version bump,
+#             and must never be batched with unrelated upgrades.
+#   Security updates are intentionally left ungrouped so every advisory lands in
+#   its own reviewable, independently mergeable PR.
+#
+# Labels
+#   No custom `labels:` key: Dependabot applies its own `dependencies` / `java`
+#   labels. The repository's human label set (bug, enhancement, feature,
+#   documentation, refactor) describes product work and is not reused for bots.
+
+version: 2
+
+updates:
+  # ---------------------------------------------------------------------------
+  # Application dependencies — Maven (pom.xml, Spring Boot parent)
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "maven"
+    directory: "/"
+
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Africa/Cairo"
+
+    open-pull-requests-limit: 10
+
+    # Repository convention: the PR owner is assigned to their own PR.
+    # NOTE: `reviewers` is no longer a supported dependabot.yml option, so the
+    # human reviewer (Mohamed-Hamza) is requested by the auto-merge workflow on
+    # exactly the PRs that need review. See .github/workflows/dependabot-auto-merge.yml
+    assignees:
+      - "Hamed-mohamed-Git"
+
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
+    groups:
+      maven-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
+
+      maven-minor:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+
+  # ---------------------------------------------------------------------------
+  # GitHub Actions used by this repository's workflows
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "github-actions"
+    directory: "/"
+
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Africa/Cairo"
+
+    open-pull-requests-limit: 5
+
+    assignees:
+      - "Hamed-mohamed-Git"
+
+    commit-message:
+      prefix: "chore(ci)"
+
+    groups:
+      github-actions:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
+          - "minor"

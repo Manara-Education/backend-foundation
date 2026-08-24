@@ -5,7 +5,7 @@
 	<parent>
 		<groupId>org.springframework.boot</groupId>
 		<artifactId>spring-boot-starter-parent</artifactId>
-		<version>4.0.0</version>
+		<version>4.1.1</version>
 		<relativePath/> <!-- lookup parent from repository -->
 	</parent>
 	<groupId>com.manara</groupId>
@@ -33,10 +33,45 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-validation</artifactId>
 		</dependency>
+		<!--
+			Actuator, for one thing only: a health endpoint the container runtime and the
+			deployment can ask "is this instance actually serving?". Its DataSource and Redis
+			health indicators are what make that answer meaningful — a JVM that is up but
+			cannot reach Postgres is not healthy, and without this it would look fine.
+			Everything except /actuator/health stays unexposed; see application.properties.
+		-->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.postgresql</groupId>
 			<artifactId>postgresql</artifactId>
 			<scope>runtime</scope>
+		</dependency>
+		<!--
+			Flyway owns the schema.
+
+			Use the STARTER, not a bare flyway-core. Spring Boot 4 split autoconfiguration
+			out of spring-boot-autoconfigure into per-technology modules, so unlike Boot 3
+			putting flyway-core on the classpath no longer brings FlywayAutoConfiguration
+			with it. The failure mode is silent and dangerous: the application starts
+			normally, logs nothing about Flyway, and simply never migrates — which was
+			observed here before the switch, with ddl-auto=validate then failing on an
+			empty database with "missing table [banner_dismissals]". The starter pulls in
+			spring-boot-flyway, which carries the autoconfiguration.
+
+			flyway-database-postgresql is separate because since Flyway 10 each database's
+			support lives in its own artifact; flyway-core alone does not recognise
+			PostgreSQL. Every version here is managed by the Spring Boot parent.
+		-->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-flyway</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-database-postgresql</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>org.projectlombok</groupId>
@@ -44,20 +79,53 @@
 			<optional>true</optional>
 		</dependency>
 		<dependency>
-			<groupId>io.jsonwebtoken</groupId>
-			<artifactId>jjwt-api</artifactId>
-			<version>0.12.3</version>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-redis</artifactId>
 		</dependency>
 		<dependency>
-			<groupId>io.jsonwebtoken</groupId>
-			<artifactId>jjwt-impl</artifactId>
-			<version>0.12.3</version>
-			<scope>runtime</scope>
+			<groupId>org.springframework.session</groupId>
+			<artifactId>spring-session-data-redis</artifactId>
 		</dependency>
 		<dependency>
-			<groupId>io.jsonwebtoken</groupId>
-			<artifactId>jjwt-jackson</artifactId>
-			<version>0.12.3</version>
+			<groupId>org.springframework.session</groupId>
+			<artifactId>spring-session-core</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springdoc</groupId>
+			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+			<version>3.1.0</version>
+		</dependency>
+		<dependency>
+			<groupId>com.resend</groupId>
+			<artifactId>resend-java</artifactId>
+			<version>4.19.0</version>
+			<exclusions>
+				<!-- Replaced by okhttp-jvm below; see the comment on that dependency. -->
+				<exclusion>
+					<groupId>com.squareup.okhttp3</groupId>
+					<artifactId>okhttp</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+		<!--
+			resend-java 4.19.0 moved from okhttp 4.12.0 to okhttp 5.4.0, and okhttp 5.x is
+			published as a Kotlin Multiplatform module. Its `okhttp` artifact is now an empty
+			754-byte stub containing only KMP metadata — the JVM classes were moved to
+			`okhttp-jvm`. Gradle follows that redirect via Gradle Module Metadata (.module);
+			Maven does not read that file, so it resolves the stub and every okhttp class is
+			missing at runtime (NoClassDefFoundError: okhttp3/RequestBody when Spring builds
+			the Resend Emails bean). The same applies to okio, which okhttp-jvm pulls in
+			correctly as okio-jvm.
+
+			So we exclude the stub above and depend on the real JVM artifact here. Scope is
+			runtime because no code in this repository imports okhttp directly — only
+			resend-java does. Keep this version in step with the okhttp version declared by
+			resend-java, and drop both blocks once resend-java depends on okhttp-jvm itself.
+		-->
+		<dependency>
+			<groupId>com.squareup.okhttp3</groupId>
+			<artifactId>okhttp-jvm</artifactId>
+			<version>5.5.0</version>
 			<scope>runtime</scope>
 		</dependency>
 		<dependency>
@@ -68,6 +136,30 @@
 		<dependency>
 			<groupId>org.springframework.security</groupId>
 			<artifactId>spring-security-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<!--
+			Testcontainers, for the tests that cannot be written against a mock.
+
+			Three of this project's guarantees are guarantees ABOUT PostgreSQL, and only a real
+			PostgreSQL can hold them up: that Flyway actually migrates a fresh database on
+			startup, that flyway_schema_history ends up with the expected versions, and that the
+			database itself rejects a second account whose address differs only in case. H2 or a
+			mocked repository would pass all three while the real thing was broken — which is the
+			exact failure this work exists to close, so the test for it may not be able to fail
+			the same way.
+
+			Test scope only, and nothing here ships. Versions come from the Spring Boot parent's
+			dependency management. These need a Docker daemon, which the CI runner provides.
+		-->
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers-postgresql</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers-junit-jupiter</artifactId>
 			<scope>test</scope>
 		</dependency>
 	</dependencies>

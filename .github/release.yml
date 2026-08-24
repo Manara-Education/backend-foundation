@@ -1,0 +1,60 @@
+# Categories for GitHub's automatically generated release notes.
+#
+# GitHub builds the notes from the pull requests merged since the previous tag
+# and sorts them into the sections below by LABEL. So the quality of a release
+# note is decided when a PR is labelled, not when the release is cut — an
+# unlabelled PR lands in "Other Changes" rather than being lost, which is the
+# reason that catch-all exists.
+#
+# The categories match the ones agreed for Manara releases. Order here is the
+# order they appear in the notes: what a reader most needs to know first.
+changelog:
+  exclude:
+    labels:
+      # Housekeeping that belongs in the diff, not in release notes.
+      - ignore-for-release
+    authors:
+      # Dependency bumps are numerous and individually uninteresting. They are
+      # summarised by the dependencies category below instead of listing each.
+      - dependabot
+
+  categories:
+    - title: 🚀 Features
+      labels:
+        - feature
+        - enhancement
+
+    - title: 🐛 Bug Fixes
+      labels:
+        - bug
+
+    - title: 🔐 Security
+      labels:
+        - security
+
+    - title: ⚡ Performance
+      labels:
+        - performance
+
+    - title: 🔧 Infrastructure
+      labels:
+        - infrastructure
+        - github_actions
+
+    - title: ♻️ Refactoring
+      labels:
+        - refactor
+
+    - title: 📚 Documentation
+      labels:
+        - documentation
+
+    - title: 📦 Dependencies
+      labels:
+        - dependencies
+
+    # Catch-all. Anything unlabelled still appears, so nothing merged is
+    # silently missing from a release note.
+    - title: Other Changes
+      labels:
+        - "*"

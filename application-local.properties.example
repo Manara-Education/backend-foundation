@@ -1,0 +1,24 @@
+# Local developer secrets — NOT packaged into the jar and NOT committed.
+#
+# This file lives in the project root on purpose: anything under src/main/resources is copied
+# into target/classes and shipped inside the jar, which is the last place a real key belongs.
+# Spring Boot reads ./application-{profile}.properties from the working directory by default.
+#
+# Setup (one time):
+#
+#   cp application-local.properties.example application-local.properties
+#   # then paste your real key into the copy — application-local.properties is git-ignored
+#
+# Run with the profile active:
+#
+#   mvn spring-boot:run -Dspring-boot.run.profiles=local
+#
+# IntelliJ: Run/Debug Configurations → Active profiles: local
+#
+# Prefer an environment variable instead? That works with no profile and no file:
+#
+#   export RESEND_API_KEY=<your key>
+#
+# Replace the placeholder below with a real key from https://resend.com/api-keys (starts with
+# "re_"). Leaving it as-is makes sends fail at the provider instead of failing fast locally.
+resend.api-key=re_replace_me
