@@ -23,12 +23,27 @@
 
 name: Publish image
 
+# Triggered by the Release workflow finishing, NOT by `release: published`.
+#
+# That distinction is the whole reason this block looks the way it does. GitHub
+# deliberately does not start a workflow from an event raised using GITHUB_TOKEN
+# — it is the recursion guard that stops a workflow triggering itself forever.
+# release.yml creates the release with GITHUB_TOKEN, so `on: release: published`
+# NEVER FIRES. It fails silently: the release appears, and no image is ever
+# built. Verified the hard way on v1.0.0, which produced both releases and no
+# packages at all.
+#
+# `workflow_run` is not subject to that restriction, and it also gives the
+# property worth having: publishing happens only after release.yml has passed,
+# so the semver check and the "must be on main" guard live in exactly one place
+# rather than being duplicated here and drifting.
 on:
-  release:
-    types: [published]
-  # Manual re-publish, for when a release exists but the push failed — a registry
-  # outage, an expired token. Rebuilding the same tag from the same commit
-  # produces the same image.
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  # Manual (re)publish. Covers a push that failed on a registry outage or an
+  # expired token, and any release created before this trigger was fixed.
+  # Rebuilding the same tag from the same commit produces the same image.
   workflow_dispatch:
     inputs:
       tag:
@@ -47,7 +62,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: publish-${{ github.event.release.tag_name || inputs.tag }}
+  group: publish-${{ github.event.workflow_run.head_branch || inputs.tag }}
   cancel-in-progress: false
 
 jobs:
@@ -55,12 +70,20 @@ jobs:
     name: Build and push to GHCR
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # A failed release must not publish an image. workflow_run fires on
+    # completion regardless of outcome, so the conclusion has to be checked
+    # explicitly. A manual dispatch has no workflow_run to inspect and is
+    # allowed through on the operator's judgement.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
 
     steps:
       - name: Resolve the tag being published
         id: resolve
         env:
-          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          # For a tag push, workflow_run.head_branch is the TAG name, not a branch.
+          TAG: ${{ github.event.workflow_run.head_branch || inputs.tag }}
         run: |
           set -euo pipefail
           if ! printf '%s' "$TAG" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
@@ -77,6 +100,13 @@ jobs:
           # released version's name.
           ref: ${{ steps.resolve.outputs.tag }}
           persist-credentials: false
+
+      # Under workflow_run, github.sha is the DEFAULT BRANCH's head, not the
+      # tagged commit — so it cannot be used to label or tag the image. This
+      # resolves the real commit from the checkout above.
+      - name: Resolve the tagged commit
+        id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -102,13 +132,13 @@ jobs:
           push: true
           tags: |
             ${{ steps.image.outputs.name }}:${{ steps.resolve.outputs.tag }}
-            ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+            ${{ steps.image.outputs.name }}:sha-${{ steps.commit.outputs.sha }}
           # Standard provenance labels, so `docker inspect` on the server can
           # answer which commit and which release an image came from without
           # consulting anything else.
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.commit.outputs.sha }}
             org.opencontainers.image.version=${{ steps.resolve.outputs.tag }}
 
           cache-from: type=gha
@@ -119,7 +149,7 @@ jobs:
           IMAGE: ${{ steps.image.outputs.name }}
           TAG: ${{ steps.resolve.outputs.tag }}
           DIGEST: ${{ steps.push.outputs.digest }}
-          SHA: ${{ github.sha }}
+          SHA: ${{ steps.commit.outputs.sha }}
         run: |
           {
             echo "### Published"
