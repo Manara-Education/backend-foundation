@@ -13,6 +13,7 @@ import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.List;
 
@@ -28,6 +29,25 @@ public class GlobalExceptionHandler {
         String message = messageService.get(ex.getMessageCode(), ex.getArgs());
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(ApiResponse.error(message));
+    }
+
+    /**
+     * A request for a path that does not exist is a 404, not a server error.
+     *
+     * <p>Without this handler {@link NoResourceFoundException} falls through to the catch-all
+     * below, so every request for a missing static resource returned <strong>500</strong> and
+     * logged a full stack trace at ERROR. That is wrong twice over: it tells the caller the
+     * server broke when it did not, and it lets anyone fill the logs — and the disk — by
+     * requesting nonexistent paths in a loop. Observed while confirming Swagger is disabled in
+     * production: {@code GET /v3/api-docs} correctly found nothing, and reported 500.
+     *
+     * <p>Logged at DEBUG: a 404 is routine and says nothing about the server's health.
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<@NonNull ApiResponse<Void>> handleNoResource(NoResourceFoundException ex) {
+        log.debug("No resource found: {}", ex.getResourcePath());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ApiResponse.error(messageService.get("error.notFound")));
     }
 
     @ExceptionHandler(BusinessException.class)

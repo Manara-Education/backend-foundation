@@ -31,6 +31,17 @@ public class Otp {
     @Column(nullable = false)
     private boolean used = false;
 
+    /**
+     * Failed verification attempts against this specific code.
+     *
+     * <p>Counted on the row rather than in Redis so the limit survives a restart of the session
+     * store and stays bound to the code being guessed — an attacker cannot reset it by rotating
+     * IP addresses or asking for a new session.
+     */
+    @Builder.Default
+    @Column(nullable = false)
+    private int attempts = 0;
+
     @Column(nullable = false)
     private LocalDateTime expiresAt;
 

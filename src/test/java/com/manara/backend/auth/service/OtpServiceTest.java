@@ -39,6 +39,7 @@ import static org.mockito.Mockito.verify;
 class OtpServiceTest {
 
     private static final int EXPIRATION_MINUTES = 10;
+    private static final int MAX_ATTEMPTS = 5;
 
     @Mock
     private OtpRepository otpRepository;
@@ -52,6 +53,9 @@ class OtpServiceTest {
     @Mock
     private EmailService emailService;
 
+    @Mock
+    private OtpAttemptRecorder attemptRecorder;
+
     @Captor
     private ArgumentCaptor<String> codeCaptor;
 
@@ -62,8 +66,9 @@ class OtpServiceTest {
     @BeforeEach
     void setUp() {
         otpService = new OtpService(otpRepository, otpMapper, new SecureRandom(),
-                otpEmailFactory, emailService);
+                otpEmailFactory, emailService, attemptRecorder);
         ReflectionTestUtils.setField(otpService, "expirationMinutes", EXPIRATION_MINUTES);
+        ReflectionTestUtils.setField(otpService, "maxAttempts", MAX_ATTEMPTS);
     }
 
     @Test
@@ -126,5 +131,78 @@ class OtpServiceTest {
     void returnsNothingToCallers() throws Exception {
         assertThat(OtpService.class.getMethod("generateAndSend", User.class, OtpType.class)
                 .getReturnType()).isEqualTo(void.class);
+    }
+
+    // ── Attempt limiting ──────────────────────────────────────────────────────
+    // A six-digit code has a million possibilities and a ten-minute life. Without a ceiling on
+    // guesses that is not a secret, and these codes gate both registration and password reset.
+
+    @Test
+    void aWrongCodeIsCountedAgainstTheAllowance() {
+        given(otpRepository.findTopByUserEmailAndTypeAndUsedFalseOrderByCreatedAtDesc(
+                "student@manara.com", OtpType.EMAIL_VERIFICATION))
+                .willReturn(java.util.Optional.of(activeCode("123456")));
+        given(attemptRecorder.recordFailure(99L, MAX_ATTEMPTS)).willReturn(1);
+
+        assertThatThrownBy(() -> otpService.validateCode(
+                "student@manara.com", "000000", OtpType.EMAIL_VERIFICATION))
+                .hasMessage("auth.otp.invalid");
+
+        verify(attemptRecorder).recordFailure(99L, MAX_ATTEMPTS);
+    }
+
+    @Test
+    void exhaustingTheAllowanceReportsTooManyAttemptsRatherThanAnotherInvalidCode() {
+        given(otpRepository.findTopByUserEmailAndTypeAndUsedFalseOrderByCreatedAtDesc(
+                "student@manara.com", OtpType.EMAIL_VERIFICATION))
+                .willReturn(java.util.Optional.of(activeCode("123456")));
+        given(attemptRecorder.recordFailure(99L, MAX_ATTEMPTS)).willReturn(MAX_ATTEMPTS);
+
+        assertThatThrownBy(() -> otpService.validateCode(
+                "student@manara.com", "000000", OtpType.EMAIL_VERIFICATION))
+                .hasMessage("auth.otp.tooManyAttempts");
+    }
+
+    @Test
+    void aCorrectCodeIsAcceptedAndCostsNoAttempt() {
+        Otp otp = activeCode("123456");
+        given(otpRepository.findTopByUserEmailAndTypeAndUsedFalseOrderByCreatedAtDesc(
+                "student@manara.com", OtpType.EMAIL_VERIFICATION))
+                .willReturn(java.util.Optional.of(otp));
+
+        assertThat(otpService.validateCode(
+                "student@manara.com", "123456", OtpType.EMAIL_VERIFICATION)).isSameAs(otp);
+
+        verify(attemptRecorder, org.mockito.Mockito.never())
+                .recordFailure(org.mockito.ArgumentMatchers.anyLong(), anyInt());
+    }
+
+    /** An expired code is rejected before any attempt is spent — it is already worthless. */
+    @Test
+    void anExpiredCodeIsRejectedWithoutSpendingAnAttempt() {
+        Otp expired = activeCode("123456");
+        expired.setExpiresAt(LocalDateTime.now().minusMinutes(1));
+        given(otpRepository.findTopByUserEmailAndTypeAndUsedFalseOrderByCreatedAtDesc(
+                "student@manara.com", OtpType.EMAIL_VERIFICATION))
+                .willReturn(java.util.Optional.of(expired));
+
+        assertThatThrownBy(() -> otpService.validateCode(
+                "student@manara.com", "000000", OtpType.EMAIL_VERIFICATION))
+                .hasMessage("auth.otp.expired");
+
+        verify(attemptRecorder, org.mockito.Mockito.never())
+                .recordFailure(org.mockito.ArgumentMatchers.anyLong(), anyInt());
+    }
+
+    private Otp activeCode(String code) {
+        return Otp.builder()
+                .id(99L)
+                .code(code)
+                .type(OtpType.EMAIL_VERIFICATION)
+                .used(false)
+                .attempts(0)
+                .expiresAt(LocalDateTime.now().plusMinutes(EXPIRATION_MINUTES))
+                .user(user)
+                .build();
     }
 }

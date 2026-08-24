@@ -168,24 +168,30 @@ class CheckoutProcessorTest {
         assertThat(response.getPaymentReference()).isEqualTo("sim_test");
     }
 
-    /** The previous flat card payload still works, so a client deployed against it keeps buying. */
+    /**
+     * A client still sending the old flat card payload no longer gets a purchase — and, more to
+     * the point, its card number no longer reaches this application at all.
+     *
+     * <p>This replaces a test that asserted the opposite. The flat {@code cardNumber} /
+     * {@code expiry} / {@code cvc} fields were removed from {@link CheckoutRequest} together with
+     * the same fields on {@link PaymentMethodRequest}: with no payment provider behind this
+     * application, every one of those values was a real card number arriving at a server with no
+     * acquirer and no PCI DSS scope. Jackson drops the unknown properties, so such a request
+     * arrives carrying no instrument and is refused as one — which is the correct outcome.
+     */
     @Test
-    void theLegacyFlatCardFieldsAreStillAccepted() {
+    void aLegacyFlatCardPayloadNoLongerBuysAnythingAndItsCardDataIsNotAccepted() {
         givenCourse(CourseAccessType.PURCHASE, BigDecimal.valueOf(490));
         givenNoExistingAccess();
-        givenPaymentAccepted();
+        given(paymentGateway.charge(any(), isNull()))
+                .willThrow(new BusinessException("error.payment.required"));
 
+        // What a legacy client's body deserialises to now: the card fields simply do not exist.
         var legacy = new CheckoutRequest();
-        legacy.setCardNumber("4242 4242 4242 4242");
-        legacy.setExpiry("12 / 30");
-        legacy.setCvc("123");
-        legacy.setName("Learner");
 
-        checkoutProcessor.checkout(studentUser, COURSE_ID, legacy);
-
-        var method = ArgumentCaptor.forClass(PaymentMethodRequest.class);
-        verify(paymentGateway).charge(any(), method.capture());
-        assertThat(method.getValue().getCardNumber()).isEqualTo("4242 4242 4242 4242");
+        assertThatThrownBy(() -> checkoutProcessor.checkout(studentUser, COURSE_ID, legacy))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("error.payment.required");
     }
 
     /**
@@ -452,8 +458,8 @@ class CheckoutProcessorTest {
     }
 
     private PaymentMethodRequest card() {
-        return PaymentMethodRequest.builder()
-                .cardNumber("4242424242424242").expiry("12 / 30").cvc("123").name("Learner").build();
+        // No card fields: the instrument carries contact details only. See PaymentMethodRequest.
+        return PaymentMethodRequest.builder().name("Learner").email("learner@example.com").build();
     }
 
     private CourseEntitlement perpetual(Course course, EntitlementSource source) {

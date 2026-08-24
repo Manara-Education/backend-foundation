@@ -15,14 +15,20 @@ import java.util.UUID;
 /**
  * A gateway that takes no money.
  *
- * <p><strong>This is a simulation.</strong> No provider is contacted, no card is authorized and no
- * funds move. What it does is real: it applies the card-shape checks the checkout form already
- * enforces on the client, so a malformed instrument is refused server-side too, and it issues a
- * reference that the entitlement and subscription rows store — giving every grant in the database a
- * traceable origin from the day a real provider replaces this class.
+ * <p><strong>This is a simulation.</strong> No provider is contacted, no instrument is authorised
+ * and no funds move. It records that a learner asked to proceed, and issues a reference that the
+ * entitlement and subscription rows store — so every grant in the database has a traceable origin
+ * from the day a real provider replaces this class.
  *
  * <p>The {@code sim_} prefix on every reference is the point: no row created by this gateway can
  * ever be mistaken for one backed by an actual charge.
+ *
+ * <p><strong>It no longer inspects card details, because it no longer receives any.</strong> This
+ * class used to validate a card number's length, a CVC's length and an expiry's shape. Since
+ * nothing here authorises a payment, those checks proved nothing — but accepting the data meant
+ * real primary account numbers and CVCs were transmitted to and held by a server with no acquirer
+ * and no PCI DSS scope. The checks went when the fields did. The client-side form remains free to
+ * validate whatever it collects; the difference is that it is no longer sent here.
  */
 @Slf4j
 @Component
@@ -30,14 +36,16 @@ import java.util.UUID;
 public class SimulatedPaymentGateway implements PaymentGateway {
 
     private static final String REFERENCE_PREFIX = "sim_";
-    private static final int MIN_CARD_DIGITS = 15;
-    private static final int MAX_CARD_DIGITS = 19;
 
     private final Clock clock;
 
     @Override
     public PaymentReceipt charge(PaymentCharge charge, PaymentMethodRequest paymentMethod) {
-        validate(paymentMethod);
+        // A missing instrument is still refused. It is the learner's explicit "yes, proceed", and
+        // it is the field a real provider's token will arrive in.
+        if (paymentMethod == null) {
+            throw new BusinessException("error.payment.required");
+        }
 
         PaymentReceipt receipt = new PaymentReceipt(
                 REFERENCE_PREFIX + UUID.randomUUID(),
@@ -48,24 +56,5 @@ public class SimulatedPaymentGateway implements PaymentGateway {
                 receipt.reference(), charge.amount(), charge.idempotencyKey(), charge.description());
 
         return receipt;
-    }
-
-    private void validate(PaymentMethodRequest paymentMethod) {
-        if (paymentMethod == null) {
-            throw new BusinessException("error.payment.required");
-        }
-        String digits = paymentMethod.getCardNumber() == null
-                ? ""
-                : paymentMethod.getCardNumber().replaceAll("\\D", "");
-        if (digits.length() < MIN_CARD_DIGITS || digits.length() > MAX_CARD_DIGITS) {
-            throw new BusinessException("error.payment.invalidCard");
-        }
-        String cvc = paymentMethod.getCvc();
-        if (cvc == null || cvc.length() < 3 || cvc.length() > 4) {
-            throw new BusinessException("error.payment.invalidCvc");
-        }
-        if (paymentMethod.getExpiry() == null || !paymentMethod.getExpiry().contains("/")) {
-            throw new BusinessException("error.payment.invalidExpiry");
-        }
     }
 }

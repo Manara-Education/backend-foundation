@@ -2,7 +2,6 @@ package com.manara.backend.course.dto;
 
 import com.manara.backend.payment.dto.PaymentMethodRequest;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.Email;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -41,28 +40,13 @@ public class CheckoutRequest {
     private PaymentMethodRequest paymentMethod;
 
     // ── Previous contract ─────────────────────────────────────────────────────
-    // The card fields used to sit at the top level. They are still accepted so a client deployed
-    // against the old shape keeps working, and are folded into `paymentMethod` when that object is
-    // absent. New clients send `paymentMethod`.
+    // The card fields (cardNumber, expiry, cvc) that used to sit at the top level are GONE, along
+    // with the same fields inside PaymentMethodRequest. There is no payment provider behind this
+    // application, so those values were real card numbers and CVCs arriving at a server with no
+    // acquirer and no PCI DSS scope, to be checked for plausible shape and then discarded.
+    //
+    // Nothing breaks by removing them: the client sends the nested `paymentMethod` object, and
+    // Jackson ignores unknown properties, so a client still transmitting the old fields simply has
+    // them dropped rather than rejected.
 
-    /** @deprecated Send {@code paymentMethod.cardNumber}. */
-    @Deprecated(since = "enrollment lifecycle")
-    private String cardNumber;
-
-    /** @deprecated Send {@code paymentMethod.expiry}. */
-    @Deprecated(since = "enrollment lifecycle")
-    private String expiry;
-
-    /** @deprecated Send {@code paymentMethod.cvc}. */
-    @Deprecated(since = "enrollment lifecycle")
-    private String cvc;
-
-    /** @deprecated Send {@code paymentMethod.name}. */
-    @Deprecated(since = "enrollment lifecycle")
-    private String name;
-
-    /** @deprecated Send {@code paymentMethod.email}. */
-    @Deprecated(since = "enrollment lifecycle")
-    @Email
-    private String email;
 }
