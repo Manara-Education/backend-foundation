@@ -38,6 +38,30 @@
 			<artifactId>postgresql</artifactId>
 			<scope>runtime</scope>
 		</dependency>
+		<!--
+			Flyway owns the schema.
+
+			Use the STARTER, not a bare flyway-core. Spring Boot 4 split autoconfiguration
+			out of spring-boot-autoconfigure into per-technology modules, so unlike Boot 3
+			putting flyway-core on the classpath no longer brings FlywayAutoConfiguration
+			with it. The failure mode is silent and dangerous: the application starts
+			normally, logs nothing about Flyway, and simply never migrates — which was
+			observed here before the switch, with ddl-auto=validate then failing on an
+			empty database with "missing table [banner_dismissals]". The starter pulls in
+			spring-boot-flyway, which carries the autoconfiguration.
+
+			flyway-database-postgresql is separate because since Flyway 10 each database's
+			support lives in its own artifact; flyway-core alone does not recognise
+			PostgreSQL. Every version here is managed by the Spring Boot parent.
+		-->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-flyway</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-database-postgresql</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.projectlombok</groupId>
 			<artifactId>lombok</artifactId>

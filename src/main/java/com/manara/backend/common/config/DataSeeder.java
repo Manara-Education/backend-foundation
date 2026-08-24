@@ -18,13 +18,30 @@ import com.manara.backend.video.service.VideoProviderResolver;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.context.annotation.Profile;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 
+/**
+ * Seeds the demo accounts and sample content a developer needs on a fresh database.
+ *
+ * <p><strong>Never runs in production.</strong> This class had no profile guard, so a
+ * production start inserted {@code instructor@manara.com} and {@code student@manara.com} —
+ * real, loginable accounts with a password that is written in this file and published in a
+ * public repository — straight into the production database, along with sample courses. That
+ * was verified by running the container with {@code SPRING_PROFILES_ACTIVE=prod}: it seeded
+ * both accounts and the sample catalogue.
+ *
+ * <p>{@code @Profile("!prod")} is the fix. Note that it excludes the seeder from the
+ * production profile specifically, rather than requiring an opt-in profile: a deployment that
+ * forgets to set a flag must fail safe, and the failure mode here is "no demo data", not
+ * "known credentials in production".
+ */
 @Component
+@Profile("!prod")
 @RequiredArgsConstructor
 @Slf4j
 public class DataSeeder implements CommandLineRunner {
