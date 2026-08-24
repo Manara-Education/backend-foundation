@@ -1,6 +1,7 @@
 package com.manara.backend.common.config;
 
 import com.manara.backend.auth.config.AuthSecurityConfig;
+import com.manara.backend.auth.security.PasswordResetRequiredFilter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -14,6 +15,7 @@ import org.springframework.security.config.annotation.web.configurers.CsrfConfig
 import org.springframework.security.config.annotation.web.configurers.ExceptionHandlingConfigurer;
 import org.springframework.security.config.annotation.web.configurers.SessionManagementConfigurer;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.intercept.AuthorizationFilter;
 
 import java.util.List;
 
@@ -26,6 +28,7 @@ public class SecurityConfig {
     private final Customizer<CsrfConfigurer<HttpSecurity>> csrfCustomizer;
     private final Customizer<SessionManagementConfigurer<HttpSecurity>> sessionManagementCustomizer;
     private final Customizer<ExceptionHandlingConfigurer<HttpSecurity>> exceptionHandlingCustomizer;
+    private final PasswordResetRequiredFilter passwordResetRequiredFilter;
 
     @Bean
     public SecurityFilterChain securityFilterChain(
@@ -38,6 +41,10 @@ public class SecurityConfig {
                 .authorizeHttpRequests(AuthSecurityConfig.compose(authorizeCustomizers))
                 .sessionManagement(sessionManagementCustomizer)
                 .exceptionHandling(exceptionHandlingCustomizer)
+                // After AuthorizationFilter: the request has already been authenticated and
+                // allowed, and only then is it asked whether the account still owes a password
+                // change. Anonymous and public traffic never reaches the check.
+                .addFilterAfter(passwordResetRequiredFilter, AuthorizationFilter.class)
                 .logout(AbstractHttpConfigurer::disable)
                 .authenticationProvider(authenticationProvider)
                 .build();

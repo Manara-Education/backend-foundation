@@ -137,12 +137,60 @@ public class AuthService {
                 .build();
     }
 
+    /**
+     * The authoritative view of the signed-in account.
+     *
+     * Deliberately re-reads the row instead of mapping the principal the session handed over.
+     * That principal was serialised when the session was established and never changes again,
+     * so it would answer "reset required" forever -- including on the reload immediately after
+     * the password was changed, which is exactly when the client asks.
+     */
+    public AuthResponse currentUser(User principal) {
+        return authMapper.toAuthResponse(findUserByEmail(principal.getUsername()));
+    }
+
+    /**
+     * Changes the password of the signed-in account, and with it clears any forced-reset flag.
+     *
+     * Separate from {@link #resetPassword} on purpose: that one serves the anonymous
+     * forgot-password flow and proves identity with an emailed OTP. This one serves a caller who
+     * is already authenticated and knows the current password -- the case where an operator has
+     * required the account to move off a provisioned or compromised password.
+     *
+     * The hash and the flag are written together, in this one transaction. If the new password
+     * is rejected, nothing is persisted and the account still owes the change.
+     */
+    @Transactional
+    public MessageResponse changePassword(User principal, ChangePasswordRequest request) {
+        var user = findUserByEmail(principal.getUsername());
+
+        if (!passwordEncoder.matches(request.getCurrentPassword(), user.getPassword())) {
+            throw new BusinessException("auth.password.currentInvalid");
+        }
+
+        if (passwordEncoder.matches(request.getNewPassword(), user.getPassword())) {
+            throw new BusinessException("auth.password.sameAsCurrent");
+        }
+
+        user.setPassword(passwordEncoder.encode(request.getNewPassword()));
+        user.setRequiresPasswordReset(false);
+        userRepository.save(user);
+
+        return MessageResponse.builder()
+                .message(messageService.get("auth.password.changeSuccess"))
+                .build();
+    }
+
     @Transactional
     public MessageResponse resetPassword(ResetPasswordRequest request) {
         otpService.verify(request.getEmail(), request.getCode(), OtpType.PASSWORD_RESET);
 
         var user = findUserByEmail(request.getEmail());
         user.setPassword(passwordEncoder.encode(request.getNewPassword()));
+        // Clears a forced-reset requirement too. The emailed code proves the account, and a
+        // password just chosen through it is a password the account has moved off of -- leaving
+        // the flag set here would strand the user: new password, still locked out.
+        user.setRequiresPasswordReset(false);
         userRepository.save(user);
 
         return MessageResponse.builder()

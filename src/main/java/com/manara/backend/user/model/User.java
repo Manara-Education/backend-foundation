@@ -42,6 +42,18 @@ public class User implements UserDetails {
     @Column(nullable = false)
     private boolean emailVerified = false;
 
+    /**
+     * Whether this account must pick a new password before it may use the application.
+     *
+     * Set out of band -- by an operator handing over a provisioned account, or by a support
+     * reset -- and cleared only by {@code AuthService#changePassword}, in the same transaction
+     * that persists the new hash. Sign-in still succeeds while it is {@code true}; what the
+     * flag withholds is everything after it.
+     */
+    @Builder.Default
+    @Column(nullable = false)
+    private boolean requiresPasswordReset = false;
+
     @Builder.Default
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
