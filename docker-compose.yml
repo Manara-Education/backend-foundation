@@ -3,9 +3,9 @@ services:
     container_name: manara_db
     image: postgres:17.5
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: manara_db
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-manara_db}
     ports:
       - "5432:5432"
     volumes:
@@ -31,9 +31,16 @@ services:
       - postgres
       - redis
     environment:
-      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/manara_db
-      - SPRING_DATASOURCE_USERNAME=postgres
-      - SPRING_DATASOURCE_PASSWORD=password
+      # Variable names match .env.example and application.properties one-for-one,
+      # so the same names work locally, in compose and in production.
+      #
+      # The published port above is 8080, so the app must listen on 8080 inside
+      # the container. Without this it binds application.properties' local
+      # default of 8081 and the published port reaches nothing.
+      - SERVER_PORT=8080
+      - DATABASE_URL=jdbc:postgresql://postgres:5432/${POSTGRES_DB:-manara_db}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - COOKIE_SECURE=true
