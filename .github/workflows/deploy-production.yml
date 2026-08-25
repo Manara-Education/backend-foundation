@@ -23,13 +23,23 @@ name: Deploy to production
 #      exactly that way. This is not theoretical: v1.0.0 shipped a release with
 #      no image because publish.yml was originally written that way.
 #
-#   2. Chaining to "Release" instead of "Publish image" would start a deployment
-#      while the image was still being built, and `docker pull` would fail on a
-#      tag that does not exist yet. The image existing is the precondition for
-#      deploying, so the workflow that creates it is the one to wait for.
+#   2. Chaining to "Publish image" — the obvious choice, since the image existing
+#      is the precondition for deploying — LOSES THE VERSION. A workflow_run-
+#      triggered run's own `head_branch` is the DEFAULT BRANCH, not the tag that
+#      started the chain. Publish can still see the tag because it reads the
+#      *Release* run's head_branch; a third workflow chained behind Publish reads
+#      Publish's own, which is `develop`. Observed exactly that on frontend
+#      v1.0.1:
+#
+#          RAW_TAG: develop
+#          ##[error]Resolved 'develop', which is not a vMAJOR.MINOR.PATCH tag.
+#
+#      So this chains to "Release", whose head_branch IS the tag, and waits for
+#      the image to appear rather than assuming it already has. The wait is the
+#      step below, and it is a guard worth having regardless.
 on:
   workflow_run:
-    workflows: ["Publish image"]
+    workflows: ["Release"]
     types: [completed]
   # Redeploy an existing release: a deployment that failed on a transient error,
   # or a rollback to a known-good tag. Re-running the same tag is safe — it pulls
@@ -56,7 +66,7 @@ jobs:
   deploy:
     name: Deploy the backend
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     # Scopes the deployment secrets to this job and applies whatever protection
     # rules the Production environment carries.
@@ -100,7 +110,7 @@ jobs:
       # still happily serving the previous version, rather than mid-deployment.
       # It also records the digest, which is what actually identifies the
       # artifact — a tag is a movable label, a digest is not.
-      - name: Verify the image is in GHCR
+      - name: Wait for the image to be published to GHCR
         id: image
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -109,10 +119,21 @@ jobs:
           set -euo pipefail
           IMAGE="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
           echo "$GH_TOKEN" | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
-          if ! docker manifest inspect "$IMAGE:$TAG" > /dev/null 2>&1; then
-            echo "::error::$IMAGE:$TAG is not in GHCR. Did 'Publish image' succeed for this tag?"
-            exit 1
-          fi
+          # "Publish image" starts from the same Release run this workflow did, so
+          # it is usually still building. Polling for the tag is what synchronises
+          # the two without needing the version to survive a second workflow_run
+          # hop — and it fails on the runner, with production still serving the
+          # previous version, rather than part-way through a deployment.
+          deadline=$(( SECONDS + 900 ))
+          until docker manifest inspect "$IMAGE:$TAG" > /dev/null 2>&1; do
+            if (( SECONDS >= deadline )); then
+              echo "::error::$IMAGE:$TAG never appeared in GHCR after 15 minutes."
+              echo "::error::Check whether the 'Publish image' run for $TAG succeeded."
+              exit 1
+            fi
+            echo "waiting for $IMAGE:$TAG ..."
+            sleep 20
+          done
           DIGEST="$(docker buildx imagetools inspect "$IMAGE:$TAG" --format '{{.Manifest.Digest}}')"
           echo "image=$IMAGE"   >> "$GITHUB_OUTPUT"
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
