@@ -11,6 +11,7 @@ import com.manara.backend.course.dto.InstructorCourseResponse;
 import com.manara.backend.course.dto.LessonOrderRequest;
 import com.manara.backend.course.dto.ModuleOrderRequest;
 import com.manara.backend.course.model.CourseModule;
+import com.manara.backend.course.model.TrackedContent;
 import com.manara.backend.course.repository.CourseModuleRepository;
 import com.manara.backend.course.mapper.CourseAggregateMapper;
 import com.manara.backend.course.mapper.CourseMapper;
@@ -63,9 +64,20 @@ import java.util.stream.Collectors;
  * What learners are told about is a third thing again, tracked by two timestamps on the course:
  * {@code lastPublishedAt} (the baseline) and {@code contentUpdatedAt} (the last real, instructor-made,
  * learner-visible change). Everything that mutates a course through this service records whether it
- * actually changed anything, and the timestamp is written once, here, inside the same transaction as
- * the change — so a rolled-back edit cannot leave a course claiming to be updated, and a committed
- * one cannot fail to say so.
+ * actually changed anything, and {@link CourseContentJournal} writes the timestamps once, inside the
+ * same transaction as the change — so a rolled-back edit cannot leave a course claiming to be
+ * updated, and a committed one cannot fail to say so.
+ *
+ * <p>{@code contentUpdatedAt} answers two different questions depending on what it is compared to.
+ * Against {@code lastPublishedAt} it answers the instructor's — "have I edited since I published?".
+ * Against an enrollment's {@code enrolledAt} it answers each learner's, separately, which is what
+ * {@link CourseUpdateResolver} builds for the course-details screen.
+ *
+ * <h2>Pricing is not content</h2>
+ * Repricing a course, changing its access type or editing its subscription plans never moves the
+ * content version and never reaches an existing learner. That is enforced structurally rather than
+ * remembered: those fields are applied through {@link #applyPricing}, which has no change recorder
+ * to record into. See its Javadoc for what an existing enrollment is and is not affected by.
  */
 @Slf4j
 @Service
@@ -81,6 +93,8 @@ public class CourseService {
     private final CourseAggregateLoader courseAggregateLoader;
     private final CourseValidator courseValidator;
     private final CourseContentSynchronizer courseContentSynchronizer;
+    private final CourseContentJournal courseContentJournal;
+    private final CourseUpdateResolver courseUpdateResolver;
     private final CourseDetailsViewRegistry courseDetailsViewRegistry;
     private final EntitlementMapper entitlementMapper;
     private final EntitlementPolicy entitlementPolicy;
@@ -115,7 +129,11 @@ public class CourseService {
         var aggregate = courseAggregateLoader.load(course);
         var progression = courseDetailsViewRegistry.get(mode).resolveProgression(user, aggregate);
         var access = entitlementMapper.toCourseAccessResponse(entitlementPolicy.accessOf(user, courseId));
-        return courseAggregateMapper.toCourseDetailsResponse(aggregate, progression, access);
+        // Resolved from the authenticated user's own enrollment, in both view modes. Somebody who
+        // holds the course and reached it from the catalogue is still its learner, and a visitor
+        // who does not gets the window that reports nothing.
+        var updates = courseUpdateResolver.resolve(user, aggregate);
+        return courseAggregateMapper.toCourseDetailsResponse(aggregate, progression, access, updates);
     }
 
     public List<CourseResponse> getMyCourses(User user) {
@@ -144,7 +162,7 @@ public class CourseService {
         courseContentSynchronizer.sync(course, request, settings, changes);
 
         LocalDateTime now = LocalDateTime.now(clock);
-        course.markContentChanged(now);
+        courseContentJournal.commit(course, changes, now);
         // Creating a course straight into PUBLISHED is the wizard's "publish" action, and it is the
         // course's first publication — so it establishes the baseline rather than announcing itself
         // as an update to learners who have never seen it.
@@ -185,22 +203,23 @@ public class CourseService {
         // true for a course that had just been published with those very edits in it.
         LocalDateTime now = LocalDateTime.now(clock);
 
-        changes.set(course.getTitle(), request.getTitle().trim(), course::setTitle);
-        changes.set(course.getDescription(), request.getDescription(), course::setDescription);
+        var onCourse = changes.of(course);
+        onCourse.metadata(course.getTitle(), request.getTitle().trim(), course::setTitle);
+        onCourse.content(course.getDescription(), request.getDescription(), course::setDescription);
         if (request.carries(CourseRequest.Field.SUBTITLE)) {
-            changes.set(course.getSubtitle(), request.getSubtitle(), course::setSubtitle);
+            onCourse.metadata(course.getSubtitle(), request.getSubtitle(), course::setSubtitle);
         }
         if (request.carries(CourseRequest.Field.IMAGE)) {
-            changes.set(course.getImage(), request.getImage(), course::setImage);
+            onCourse.metadata(course.getImage(), request.getImage(), course::setImage);
         }
-        changes.set(course.getStructure(), settings.structure(), course::setStructure);
-        changes.set(course.getAccessType(), settings.accessType(), course::setAccessType);
-        changes.recordIf(!sameAmount(course.getPurchasePrice(), settings.purchasePrice()));
-        course.setPurchasePrice(settings.purchasePrice());
+        // A structure switch re-parents or discards content, so it is curriculum, not commerce.
+        onCourse.content(course.getStructure(), settings.structure(), course::setStructure);
+
+        applyPricing(course, settings);
 
         courseContentSynchronizer.sync(course, request, settings, changes);
 
-        markContentChangedIfNeeded(course, changes, now, "updateCourse", user, courseId);
+        courseContentJournal.commit(course, changes, now);
 
         // Last, and after the content it may be publishing. The status the validator resolved is
         // the course's own unless the payload named a different one, so an ordinary save is a no-op
@@ -340,10 +359,11 @@ public class CourseService {
      * proved the instructor owns, so nothing here has to be told which course it is working on:
      * an id that is not in {@code siblings} is unreachable, whoever it belongs to.
      */
-    private <T> InstructorCourseResponse applyOrder(Course course, User user, String operation,
-                                                    List<Long> requestedIds, List<T> siblings,
-                                                    Function<T, Long> idOf, ToIntFunction<T> positionOf,
-                                                    BiConsumer<T, Integer> setPosition, OrderCodes codes) {
+    private <T extends TrackedContent> InstructorCourseResponse applyOrder(
+            Course course, User user, String operation,
+            List<Long> requestedIds, List<T> siblings,
+            Function<T, Long> idOf, ToIntFunction<T> positionOf,
+            BiConsumer<T, Integer> setPosition, OrderCodes codes) {
         List<Long> ids = requireWellFormedOrder(requestedIds, codes);
         requireCompleteOrder(ids, siblings, idOf, codes);
 
@@ -354,13 +374,15 @@ public class CourseService {
             T sibling = byId.get(ids.get(position));
             int current = positionOf.applyAsInt(sibling);
             int next = position;
-            changes.set(current, next, value -> setPosition.accept(sibling, value));
+            // Recorded against the sibling that actually moved, so a learner is pointed at the two
+            // rows that swapped rather than at every row in the scope.
+            changes.of(sibling).reordered(current, next, value -> setPosition.accept(sibling, value));
         }
 
         // A reorder that asked for the order the scope is already in writes nothing and, crucially,
         // does not tell every enrolled learner the course changed.
-        markContentChangedIfNeeded(course, changes, LocalDateTime.now(clock), operation, user, course.getId());
-        if (changes.hasChanges()) {
+        boolean recorded = courseContentJournal.commit(course, changes, LocalDateTime.now(clock));
+        if (recorded) {
             log.info("Course content reordered: courseId={} instructorUserId={} operation={} siblingCount={}",
                     course.getId(), user.getId(), operation, ids.size());
         }
@@ -439,22 +461,25 @@ public class CourseService {
             "error.course.lessonOrderIncomplete");
 
     /**
-     * Moves the content version — once per request, and only when something really changed.
+     * Applies what the course costs — deliberately without the change recorder in reach.
      *
-     * <p>Inside the caller's transaction by construction, so the timestamp and the change it
-     * describes commit or roll back together. A save that turns out to be a no-op leaves the
-     * previous value alone, which is what stops re-submitting a course unchanged from announcing a
-     * new version to its learners.
+     * <h4>Repricing is not editing</h4>
+     * A learner who paid 500 for this course is unaffected by it becoming 700: their
+     * {@code CourseEntitlement} is a standing grant that is never re-read against the current price,
+     * their {@code Enrollment} is untouched, and what they were charged is recorded on their own
+     * {@code CoursePurchase} or {@code CourseSubscription} row rather than derived from here. What
+     * must also not happen is the third thing — telling them the course they are studying has
+     * changed, when the only thing that changed is what it would cost somebody else today.
+     *
+     * <p>Before this separation existed, {@code changes.recordIf(!sameAmount(...))} sat inline with
+     * the title and description and did exactly that. The fix is not to remember to leave price out;
+     * it is that price is applied here, where the recorder is not a parameter and cannot be reached.
+     * The same holds for {@code accessType} and for the subscription plans, which
+     * {@code CourseContentSynchronizer} applies through its own pricing path.
      */
-    private void markContentChangedIfNeeded(Course course, CourseContentChanges changes, LocalDateTime at,
-                                            String operation, User user, Long courseId) {
-        if (!changes.hasChanges()) {
-            return;
-        }
-        course.markContentChanged(at);
-        log.info("Course content changed: courseId={} instructorUserId={} operation={} status={} "
-                        + "hasUpdatesSincePublish={}",
-                courseId, user.getId(), operation, course.getStatus(), course.hasUpdatesSincePublish());
+    private void applyPricing(Course course, ResolvedCourseSettings settings) {
+        course.setAccessType(settings.accessType());
+        course.setPurchasePrice(settings.purchasePrice());
     }
 
     /**
@@ -474,14 +499,6 @@ public class CourseService {
         } else {
             course.markUnpublished();
         }
-    }
-
-    /** {@code null}-safe numeric equality, so 100 and 100.00 are not a price change. */
-    private boolean sameAmount(java.math.BigDecimal left, java.math.BigDecimal right) {
-        if (left == null || right == null) {
-            return left == right;
-        }
-        return left.compareTo(right) == 0;
     }
 
     /**

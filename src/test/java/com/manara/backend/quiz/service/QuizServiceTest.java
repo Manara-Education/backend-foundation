@@ -83,15 +83,26 @@ class QuizServiceTest {
                 .extracting(QuizOption::getOrderIndex).containsExactly(0, 1);
     }
 
+    /**
+     * A removal reports the quiz it removed.
+     *
+     * <p>It used to answer {@code null}, which was tidy and lost the only thing the caller needed.
+     * A course records "this exam was removed" against something, and after this method returns
+     * there is nothing left to record it against — so the deleted quiz comes back, with
+     * {@code REMOVED} beside it, and the caller reads its id and title before the transaction
+     * commits.
+     */
     @Test
-    void removesTheQuizWhenTheOwnerSendsNone() {
+    void removesTheQuizWhenTheOwnerSendsNoneAndReportsWhatItRemoved() {
         Quiz existing = persistedQuiz();
         given(quizRepository.findByOwnerTypeAndOwnerId(QuizOwnerType.MODULE, 5L)).willReturn(Optional.of(existing));
 
-        Quiz result = quizService.sync(QuizOwnerType.MODULE, 5L, null).quiz();
+        var result = quizService.sync(QuizOwnerType.MODULE, 5L, null);
 
-        assertThat(result).isNull();
         verify(quizRepository).delete(existing);
+        assertThat(result.changed()).isTrue();
+        assertThat(result.outcome()).isEqualTo(com.manara.backend.course.model.ContentChangeType.REMOVED);
+        assertThat(result.quiz()).isSameAs(existing);
     }
 
     @Test

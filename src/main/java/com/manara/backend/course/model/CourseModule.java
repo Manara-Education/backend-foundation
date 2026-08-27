@@ -40,7 +40,7 @@ import java.util.Objects;
         name = "course_modules",
         indexes = @Index(name = "idx_course_modules_course_id", columnList = "course_id")
 )
-public class CourseModule {
+public class CourseModule implements TrackedContent {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -64,9 +64,40 @@ public class CourseModule {
 
     private LocalDateTime updatedAt;
 
+    /**
+     * When an instructor last changed something about this module a learner can see.
+     *
+     * <p>Starts equal to {@link #createdAt} rather than null, which is what makes
+     * {@code NEW} and {@code UPDATED} mutually exclusive by construction: a module cannot report a
+     * content change older than its own creation, so an entity that is new to a learner can never
+     * also read as updated to them.
+     *
+     * @see TrackedContent
+     */
+    @Column(name = "content_updated_at", nullable = false)
+    private LocalDateTime contentUpdatedAt;
+
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();
+        if (contentUpdatedAt == null) {
+            contentUpdatedAt = createdAt;
+        }
+    }
+
+    @Override
+    public ContentEntityType contentType() {
+        return ContentEntityType.MODULE;
+    }
+
+    @Override
+    public String contentTitle() {
+        return title;
+    }
+
+    @Override
+    public void markContentChanged(LocalDateTime at) {
+        this.contentUpdatedAt = at;
     }
 
     @PreUpdate

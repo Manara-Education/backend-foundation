@@ -13,6 +13,8 @@ import com.manara.backend.course.repository.EnrollmentRepository;
 import com.manara.backend.course.service.CourseAggregate;
 import com.manara.backend.course.service.CourseProgression;
 import com.manara.backend.course.service.CourseProgressionCalculator;
+import com.manara.backend.course.repository.CourseChangeRepository;
+import com.manara.backend.course.service.CourseContentJournal;
 import com.manara.backend.course.service.CourseProgressionService;
 import com.manara.backend.course.service.CourseViewer;
 import com.manara.backend.course.service.LearnerCourseAccess;
@@ -99,6 +101,9 @@ class LessonProgressionTest {
     @Mock
     private MessageService messageService;
 
+    @Mock
+    private CourseChangeRepository courseChangeRepository;
+
     private LessonService lessonService;
 
     private final CourseProgressionCalculator calculator = new CourseProgressionCalculator();
@@ -112,6 +117,7 @@ class LessonProgressionTest {
         lessonService = new LessonService(
                 lessonRepository, courseRepository, courseModuleRepository, completedLessonRepository,
                 enrollmentRepository, learnerCourseAccess, courseProgressionService,
+                new CourseContentJournal(courseChangeRepository),
                 new LessonMapper(durationFormatter, VideoProviderFixtures.resolver()), quizService,
                 new QuizMapper(), videoMetadataService, VideoProviderFixtures.resolver(),
                 java.time.Clock.systemUTC());

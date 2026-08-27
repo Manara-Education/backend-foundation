@@ -1,5 +1,6 @@
 package com.manara.backend.lesson.dto;
 
+import com.manara.backend.course.dto.ContentChangeResponse;
 import com.manara.backend.quiz.dto.LearnerQuizResponse;
 import com.manara.backend.video.model.VideoProvider;
 import lombok.AllArgsConstructor;
@@ -63,5 +64,20 @@ public class LessonResponse {
     private Boolean locked;
 
     private LearnerQuizResponse quiz;
+
+    /**
+     * Whether this lesson is new or updated <em>to the learner reading it</em>, and what to say
+     * about it.
+     *
+     * <p>Present on the enrolled course-details tree. Absent everywhere the question has no answer:
+     * for a visitor browsing the catalogue, and on the endpoints that serve a single lesson rather
+     * than a curriculum.
+     *
+     * <p>Deliberately a decision rather than a timestamp. Shipping {@code contentUpdatedAt} and
+     * letting the client compare it to an enrollment date would put the rule in two places, and the
+     * two would drift.
+     */
+    private ContentChangeResponse change;
+
     private LocalDateTime createdAt;
 }

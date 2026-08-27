@@ -318,9 +318,23 @@ class CourseMutationMatrixTest extends AbstractCourseAuthoringTest {
                                 .isEqualTo(c.getFinalQuiz().getQuestions().get(0).getOptions().get(1).getId())),
                 mutation("final quiz: delete",
                         r -> r.setFinalQuiz(null),
-                        c -> assertThat(c.getFinalQuiz()).isNull()),
+                        c -> assertThat(c.getFinalQuiz()).isNull()));
+    }
 
-                // I. Pricing and access --------------------------------------
+    /**
+     * Changes to what a course costs — which are not changes to the course.
+     *
+     * <p>Split out of {@link #mutations()} deliberately, because they are the same operation with
+     * the opposite expectation. Each of these persists exactly like a content edit and each must
+     * leave the update signal alone: an instructor adjusting next quarter's pricing has not changed
+     * a single thing an enrolled learner is studying, and telling them the course was updated sends
+     * them looking through a curriculum in which nothing has moved.
+     *
+     * <p>A plan's name, duration and unit are here too, not only its price. What a plan is called
+     * and how long it lasts is what the course costs and for how long — commerce, not curriculum.
+     */
+    private Stream<Mutation> pricingMutations() {
+        return Stream.of(
                 mutation("access: SUBSCRIPTION to FREE",
                         r -> {
                             r.setAccessType(CourseAccessType.FREE);
@@ -377,6 +391,34 @@ class CourseMutationMatrixTest extends AbstractCourseAuthoringTest {
                         },
                         c -> assertThat(c.getSubscriptionPlans()).extracting(p -> p.getName())
                                 .containsExactly("Yearly", "Monthly")));
+    }
+
+    /**
+     * Repricing persists, keeps the course published, and says nothing to anybody.
+     *
+     * <p>The assertion that {@code contentUpdatedAt} did not move is the whole of it. Before the
+     * pricing fields were taken out of the change recorder's reach, this ran through the same path
+     * as a title change and every enrolled learner was told their course had been updated because
+     * the instructor had put the price up.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("pricingMutations")
+    @DisplayName("repricing persists and stays published without announcing anything")
+    void aPriceChangePersistsAndStaysSilent(Mutation mutation) {
+        var course = fullCourse();
+        courseService.publish(instructorUser, course.getId());
+        var before = reload(course.getId());
+
+        var request = echoOf(course);
+        mutation.apply().accept(request);
+        courseService.updateCourse(instructorUser, course.getId(), request);
+
+        mutation.verify().accept(reloadForEditing(course.getId()));
+
+        var after = reload(course.getId());
+        assertThat(after.getStatus()).isEqualTo(CourseStatus.PUBLISHED);
+        assertThat(after.getContentUpdatedAt()).isEqualTo(before.getContentUpdatedAt());
+        assertThat(after.hasUpdatesSincePublish()).isFalse();
     }
 
     @ParameterizedTest(name = "{0}")

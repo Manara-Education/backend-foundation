@@ -1,7 +1,9 @@
 package com.manara.backend.lesson.model;
 
+import com.manara.backend.course.model.ContentEntityType;
 import com.manara.backend.course.model.Course;
 import com.manara.backend.course.model.CourseModule;
+import com.manara.backend.course.model.TrackedContent;
 import com.manara.backend.video.model.VideoSource;
 import org.hibernate.annotations.DynamicUpdate;
 import jakarta.persistence.*;
@@ -38,7 +40,7 @@ import java.util.Objects;
                 @Index(name = "idx_lessons_module_id", columnList = "module_id")
         }
 )
-public class Lesson {
+public class Lesson implements TrackedContent {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -87,9 +89,41 @@ public class Lesson {
 
     private LocalDateTime updatedAt;
 
+    /**
+     * When an instructor last changed something about this lesson a learner can see.
+     *
+     * <p>The distinction from {@link #updatedAt} matters more here than anywhere else in the
+     * schema. A lesson's {@code updated_at} is moved by {@code VideoMetadataService}, which writes
+     * the real {@link #duration} back from a background thread once a provider lookup lands —
+     * minutes after the instructor closed the form, and sometimes for a lesson nobody edited at
+     * all. A learner badge driven by it would announce a change that never happened.
+     *
+     * <p>Starts equal to {@link #createdAt}; see {@link TrackedContent}.
+     */
+    @Column(name = "content_updated_at", nullable = false)
+    private LocalDateTime contentUpdatedAt;
+
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();
+        if (contentUpdatedAt == null) {
+            contentUpdatedAt = createdAt;
+        }
+    }
+
+    @Override
+    public ContentEntityType contentType() {
+        return ContentEntityType.LESSON;
+    }
+
+    @Override
+    public String contentTitle() {
+        return title;
+    }
+
+    @Override
+    public void markContentChanged(LocalDateTime at) {
+        this.contentUpdatedAt = at;
     }
 
     @PreUpdate

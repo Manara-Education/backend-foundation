@@ -8,6 +8,7 @@ import com.manara.backend.course.mapper.CourseMapper;
 import com.manara.backend.course.mapper.EntitlementMapper;
 import com.manara.backend.course.model.Course;
 import com.manara.backend.course.model.CourseEntitlement;
+import com.manara.backend.course.model.CoursePurchase;
 import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseSubscription;
 import com.manara.backend.course.model.EntitlementSource;
@@ -15,6 +16,7 @@ import com.manara.backend.course.model.Enrollment;
 import com.manara.backend.course.model.SubscriptionPlan;
 import com.manara.backend.course.model.SubscriptionStatus;
 import com.manara.backend.course.repository.CourseEntitlementRepository;
+import com.manara.backend.course.repository.CoursePurchaseRepository;
 import com.manara.backend.course.repository.CourseRepository;
 import com.manara.backend.course.repository.CourseSubscriptionRepository;
 import com.manara.backend.course.repository.EnrollmentRepository;
@@ -49,6 +51,13 @@ import java.util.List;
  * belong to this course. The request carries an identifier and an instrument, and nothing else the
  * server acts on.
  *
+ * <p><strong>A later price change reaches none of it.</strong> What a learner may open is
+ * {@link CourseEntitlement}, a standing grant that is never re-read against the course's current
+ * price; that they joined is {@link Enrollment}, which nothing here rewrites; and what they were
+ * charged is on their own {@link CoursePurchase} or {@link CourseSubscription} row rather than
+ * derived from the course. Repricing therefore cannot charge a difference, cancel access, or
+ * require a repurchase — it decides what the next buyer pays and nothing else.
+ *
  * <p>Repeat calls are safe by construction. The first thing this does is take a write lock on the
  * learner's entitlement row; if the access it would grant is already open, it returns the current
  * state and charges nothing. A double-clicked purchase therefore cannot buy the same course twice,
@@ -65,6 +74,7 @@ public class CheckoutProcessor {
     private final StudentRepository studentRepository;
     private final EnrollmentRepository enrollmentRepository;
     private final CourseEntitlementRepository courseEntitlementRepository;
+    private final CoursePurchaseRepository coursePurchaseRepository;
     private final CourseSubscriptionRepository courseSubscriptionRepository;
     private final SubscriptionPlanRepository subscriptionPlanRepository;
     private final CourseMapper courseMapper;
@@ -73,6 +83,13 @@ public class CheckoutProcessor {
     private final SubscriptionWindow subscriptionWindow;
     private final PaymentGateway paymentGateway;
     private final Clock clock;
+
+    /**
+     * The platform prices in Egyptian pounds and nothing configures otherwise. Named rather than
+     * inlined so the day a second currency appears there is one place that has to answer for it —
+     * and so the rows written before that day say what they meant.
+     */
+    private static final String CURRENCY = "EGP";
 
     @Transactional
     public CheckoutResponse checkout(User user, Long courseId, CheckoutRequest request) {
@@ -120,6 +137,21 @@ public class CheckoutProcessor {
         PaymentReceipt receipt = paymentGateway.charge(
                 new PaymentCharge(price, course.getTitle(), idempotencyKey(course, student, "purchase")),
                 paymentMethodOf(request));
+
+        // Written in the same transaction as the entitlement it paid for, so a charge can never
+        // grant access without leaving a record of itself, and a rolled-back grant can never leave
+        // a receipt for access nobody has. Until this row existed the purchase path kept nothing at
+        // all, and repricing the course destroyed the only remaining evidence of what its existing
+        // buyers were charged.
+        coursePurchaseRepository.save(CoursePurchase.builder()
+                .course(course)
+                .student(student)
+                .listPrice(price)
+                .amountPaid(receipt.amount())
+                .currency(CURRENCY)
+                .paymentReference(receipt.reference())
+                .purchasedAt(receipt.paidAt())
+                .build());
 
         upsertPerpetual(course, student, existing, EntitlementSource.PURCHASE, now);
         return receipt;

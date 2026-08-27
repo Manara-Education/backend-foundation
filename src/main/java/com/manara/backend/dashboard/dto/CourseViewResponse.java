@@ -23,15 +23,30 @@ public class CourseViewResponse {
     private String duration;
 
     /**
-     * Whether the course has changed in a way its learners should be told about.
+     * Whether the instructor has edited this course since they last published it.
      *
-     * <p>The server's answer, derived from the publication baseline and the content version, so
-     * every screen that shows an "Updated" badge shows the same thing. Deliberately not a pair of
-     * timestamps for clients to compare: two clients comparing them would eventually disagree, and
-     * the rule ("published, and edited since it was last published") belongs in one place.
+     * <p>The same value for every card of this course on every learner's screen, because it is a
+     * statement about the instructor's workflow. Kept so clients written against the previous
+     * contract keep working.
      *
-     * <p>False for a draft, false for a course that was never published, and false for every course
-     * that already existed when this was introduced.
+     * @deprecated for learner-facing use. A card belongs to one learner and should show
+     * {@link #hasUpdatesSinceEnrollment}, which answers their question rather than the author's.
      */
+    @Deprecated
     private Boolean hasUpdatesSincePublish;
+
+    /**
+     * Whether this course has changed since <em>this learner</em> enrolled.
+     *
+     * <pre>{@code course.contentUpdatedAt > enrollment.enrolledAt}</pre>
+     *
+     * <p>What the "Updated" badge on the card reads. Two students of the same course get different
+     * answers on their own dashboards, which is the entire point: the one who enrolled this morning
+     * bought the version that already contained everything.
+     *
+     * <p>Costs nothing extra to answer — both halves of the comparison are already loaded with the
+     * enrollment this card was built from, so the learner's course list makes no additional query.
+     * Which lesson changed is a question for the course-details screen, not for a list of cards.
+     */
+    private Boolean hasUpdatesSinceEnrollment;
 }

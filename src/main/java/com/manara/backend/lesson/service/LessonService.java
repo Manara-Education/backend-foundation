@@ -9,6 +9,7 @@ import com.manara.backend.course.repository.CourseModuleRepository;
 import com.manara.backend.course.repository.CourseRepository;
 import com.manara.backend.course.repository.EnrollmentRepository;
 import com.manara.backend.course.service.CourseContentChanges;
+import com.manara.backend.course.service.CourseContentJournal;
 import com.manara.backend.course.service.CourseProgression;
 import com.manara.backend.course.service.CourseProgressionService;
 import com.manara.backend.course.service.CourseViewer;
@@ -59,6 +60,7 @@ public class LessonService {
     private final EnrollmentRepository enrollmentRepository;
     private final LearnerCourseAccess learnerCourseAccess;
     private final CourseProgressionService courseProgressionService;
+    private final CourseContentJournal courseContentJournal;
     private final LessonMapper lessonMapper;
     private final QuizService quizService;
     private final QuizMapper quizMapper;
@@ -121,8 +123,14 @@ public class LessonService {
 
         // A new lesson is new content by definition, whichever endpoint created it. Learners of a
         // published course have to be told the same thing whether the instructor used the course
-        // editor or this endpoint.
-        markCourseContentChanged(course);
+        // editor or this endpoint — and the lesson itself has to carry the same "new" state, so a
+        // learner is pointed at the row that appeared rather than at the course in general.
+        var changes = new CourseContentChanges();
+        changes.of(lesson).created();
+        if (quiz != null) {
+            changes.of(quiz).created();
+        }
+        commitContentChanges(course, changes);
 
         return lessonMapper.toLessonResponse(lesson, null, quizMapper.toLearnerResponse(quiz));
     }
@@ -141,23 +149,27 @@ public class LessonService {
         // Compared before assigned throughout, so a form re-submitted unchanged does not announce a
         // new version of the course to everyone enrolled in it.
         var changes = new CourseContentChanges();
-        changes.set(lesson.getTitle(), request.getTitle(), lesson::setTitle);
-        changes.set(lesson.getSummary(), request.getSummary(), lesson::setSummary);
-        changes.set(lesson.getDescription(), request.getDescription(), lesson::setDescription);
-        changes.set(lesson.getOrderIndex(), request.getOrderIndex(), lesson::setOrderIndex);
+        changes.of(lesson)
+                .metadata(lesson.getTitle(), request.getTitle(), lesson::setTitle)
+                .metadata(lesson.getSummary(), request.getSummary(), lesson::setSummary)
+                .content(lesson.getDescription(), request.getDescription(), lesson::setDescription)
+                .reordered(lesson.getOrderIndex(), request.getOrderIndex(), lesson::setOrderIndex);
 
         Long currentModuleId = lesson.getModule() == null ? null : lesson.getModule().getId();
         Long nextModuleId = module == null ? null : module.getId();
         if (!java.util.Objects.equals(currentModuleId, nextModuleId)) {
+            // Read before the write: the module a lesson came from is the only fact about a move
+            // that no longer exists once it has been made.
+            String from = lesson.getModule() == null ? null : lesson.getModule().getTitle();
             lesson.setModule(module);
-            changes.record();
+            changes.of(lesson).moved(from);
         }
 
         // Rewritten on every save, not only when the URL changed: a lesson stored before providers
         // existed picks up its provider, id and thumbnail the first time it is edited, with no
         // migration and no separate back-fill pass. A still that had to be fetched is carried over
         // rather than thrown away — see ResolvedVideo#toVideoSource(VideoSource).
-        changes.set(lesson.getVideo(), video.toVideoSource(lesson.getVideo()), lesson::setVideo);
+        changes.of(lesson).content(lesson.getVideo(), video.toVideoSource(lesson.getVideo()), lesson::setVideo);
 
         if (videoUrlChanged) {
             lesson.setDuration(0);
@@ -173,9 +185,7 @@ public class LessonService {
             recalculateCourseDuration(lesson.getCourse());
         }
 
-        if (changes.hasChanges()) {
-            markCourseContentChanged(course);
-        }
+        commitContentChanges(course, changes);
 
         return lessonMapper.toLessonResponse(lesson, null, quizMapper.toLearnerResponse(quiz));
     }
@@ -186,25 +196,36 @@ public class LessonService {
         Lesson lesson = requireLessonOfCourse(courseId, lessonId);
 
         Course course = lesson.getCourse();
+        // Recorded before the delete, while there is still something to read a title off. This row
+        // is what stops a learner's curriculum quietly losing a lesson between two visits.
+        var changes = new CourseContentChanges();
+        changes.of(lesson).removed();
+
         // The quiz owner reference is polymorphic and carries no foreign key, so its cleanup is
         // this method's responsibility — nothing in the database would do it.
         quizService.deleteByOwner(QuizOwnerType.LESSON, lessonId);
         completedLessonRepository.deleteByLessonId(lessonId);
         lessonRepository.delete(lesson);
         recalculateCourseDuration(course);
-        markCourseContentChanged(course);
+        commitContentChanges(course, changes);
     }
 
     /**
-     * Records that this course's learner-visible content changed, in the caller's transaction.
+     * Records what this request changed, in the caller's transaction.
      *
      * <p>These endpoints edit one lesson, but a lesson is course content, so the course's version
      * has to move with it — otherwise an instructor who adds a lesson here rather than through the
      * course editor changes what learners see without any of them being told.
+     *
+     * <p>Through the same {@link CourseContentJournal} the course editor uses, so a lesson edited
+     * from either surface produces the same timestamps and the same log row. Two paths writing the
+     * signal two ways is how the same edit ends up described differently depending on which screen
+     * made it.
      */
-    private void markCourseContentChanged(Course course) {
-        course.markContentChanged(LocalDateTime.now(clock));
-        courseRepository.save(course);
+    private void commitContentChanges(Course course, CourseContentChanges changes) {
+        if (courseContentJournal.commit(course, changes, LocalDateTime.now(clock))) {
+            courseRepository.save(course);
+        }
     }
 
     public LessonDetailsResponse getLesson(User user, Long courseId, Long lessonId) {
@@ -315,7 +336,12 @@ public class LessonService {
             return quizService.findByOwner(QuizOwnerType.LESSON, lesson.getId()).orElse(null);
         }
         var result = quizService.sync(QuizOwnerType.LESSON, lesson.getId(), request.getQuiz());
-        changes.recordIf(result.changed());
+        if (result.quiz() != null && result.changed()) {
+            // Against the quiz, not the lesson: editing a lesson's questions is a change to its
+            // quiz, and marking the lesson updated for it would point the learner at a video that
+            // has not moved.
+            changes.of(result.quiz()).recordIf(true, result.outcome());
+        }
         return result.quiz();
     }
 

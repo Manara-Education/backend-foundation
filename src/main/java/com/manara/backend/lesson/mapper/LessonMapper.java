@@ -1,6 +1,7 @@
 package com.manara.backend.lesson.mapper;
 
 import com.manara.backend.common.util.DurationFormatter;
+import com.manara.backend.course.dto.ContentChangeResponse;
 import com.manara.backend.course.model.Course;
 import com.manara.backend.course.model.CourseModule;
 import com.manara.backend.lesson.dto.InstructorLessonResponse;
@@ -81,10 +82,21 @@ public class LessonMapper {
     }
 
     public LessonResponse toLessonResponse(Lesson lesson, Boolean isCompleted, LearnerQuizResponse quiz) {
+        return toLessonResponse(lesson, isCompleted, quiz, null);
+    }
+
+    /**
+     * @param change what to say about this lesson to the learner reading it, or {@code null} on the
+     *               paths where the question has no answer — a single-lesson endpoint, or a visitor
+     *               who has not enrolled
+     */
+    public LessonResponse toLessonResponse(Lesson lesson, Boolean isCompleted, LearnerQuizResponse quiz,
+                                           ContentChangeResponse change) {
         LessonResponse.LessonResponseBuilder builder = baseLessonResponse(lesson, isCompleted)
                 .locked(false)
                 .description(lesson.getDescription())
-                .quiz(quiz);
+                .quiz(quiz)
+                .change(change);
         return withVideo(builder, lesson).build();
     }
 
@@ -95,8 +107,19 @@ public class LessonMapper {
      * value to leak and nothing for a client to accidentally render.
      */
     public LessonResponse toLockedLessonResponse(Lesson lesson, Boolean isCompleted) {
+        return toLockedLessonResponse(lesson, isCompleted, null);
+    }
+
+    /**
+     * A locked lesson still carries its change state. It is a row in the curriculum the learner can
+     * see, and "this lesson is new since you enrolled" is a fact about the listing rather than about
+     * the content behind it — withholding it would hide the very thing the badge exists to point at.
+     */
+    public LessonResponse toLockedLessonResponse(Lesson lesson, Boolean isCompleted,
+                                                 ContentChangeResponse change) {
         return baseLessonResponse(lesson, isCompleted)
                 .locked(true)
+                .change(change)
                 .build();
     }
 
