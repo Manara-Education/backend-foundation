@@ -87,6 +87,31 @@ public class Course {
     @Column(name = "students_count", nullable = false)
     private Integer studentsCount = 0;
 
+    /**
+     * When this course last became publicly visible, or {@code null} if it never has.
+     *
+     * <p>The baseline {@link #hasUpdatesSincePublish()} is measured against. Moved only by
+     * {@link #markPublished(LocalDateTime)} — publishing is the only thing that defines a new
+     * version of a course as far as its learners are concerned.
+     */
+    @Column(name = "last_published_at")
+    private LocalDateTime lastPublishedAt;
+
+    /**
+     * When an instructor last changed something a learner can see.
+     *
+     * <p>Deliberately not {@link #updatedAt}. That column is Hibernate's {@code @PreUpdate} stamp
+     * and it moves for reasons that have nothing to do with authoring: {@code CheckoutProcessor}
+     * increments {@link #studentsCount} on every purchase, and {@code VideoMetadataService}
+     * rewrites {@link #duration} from a background thread once a video lookup lands. A learner
+     * badge driven by {@code updatedAt} would light up because somebody else bought the course.
+     *
+     * <p>Moved only by {@link #markContentChanged(LocalDateTime)}, which the authoring services
+     * call once per request and only when something actually changed.
+     */
+    @Column(name = "content_updated_at")
+    private LocalDateTime contentUpdatedAt;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -100,6 +125,57 @@ public class Course {
     @PreUpdate
     protected void onUpdate() {
         updatedAt = LocalDateTime.now();
+    }
+
+    /**
+     * Records that an instructor changed student-facing content.
+     *
+     * <p>The single place the content version moves. Callers pass the transaction's own instant
+     * rather than reading the clock here, so every change made by one request carries one
+     * timestamp and a publish in that same request lands exactly on it rather than a microsecond
+     * behind it.
+     *
+     * <p>Never called for student progress, enrolment, purchases, analytics, or the background
+     * video lookup — none of those is a change to the course.
+     */
+    public void markContentChanged(LocalDateTime at) {
+        this.contentUpdatedAt = at;
+    }
+
+    /**
+     * Publishes the course and makes now the version baseline.
+     *
+     * <p>{@code contentUpdatedAt} is pulled back to the baseline when it is not already behind it,
+     * which is what makes a publish that carries edits — the ordinary case, since the editor saves
+     * before it publishes — come out at "no updates since publish" rather than instantly
+     * announcing itself as updated.
+     */
+    public void markPublished(LocalDateTime at) {
+        this.status = CourseStatus.PUBLISHED;
+        this.lastPublishedAt = at;
+        if (contentUpdatedAt == null || contentUpdatedAt.isAfter(at)) {
+            this.contentUpdatedAt = at;
+        }
+    }
+
+    /** Withdraws the course from the catalogue. The publication baseline is deliberately kept. */
+    public void markUnpublished() {
+        this.status = CourseStatus.DRAFT;
+    }
+
+    /**
+     * Whether learners should be told this course has changed since they could last have seen it.
+     *
+     * <p>Derived, never stored, so it can never disagree with the timestamps it is derived from.
+     * False for a draft (nobody is looking at it), false for a course that was never published
+     * (there is no baseline to be newer than), and false for legacy rows the V5 back-fill gave an
+     * equal pair of timestamps.
+     */
+    public boolean hasUpdatesSincePublish() {
+        return status == CourseStatus.PUBLISHED
+                && lastPublishedAt != null
+                && contentUpdatedAt != null
+                && contentUpdatedAt.isAfter(lastPublishedAt);
     }
 
     @Override

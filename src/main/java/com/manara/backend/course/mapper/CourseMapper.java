@@ -62,10 +62,12 @@ public class CourseMapper {
                 .accessType(course.getAccessType())
                 .structure(course.getStructure())
                 .status(course.getStatus())
+                .hasUpdatesSincePublish(course.hasUpdatesSincePublish())
                 .studentsCount(course.getStudentsCount())
                 .instructorId(course.getInstructor().getId())
                 .instructorName(course.getInstructor().getUser().getFullName())
                 .createdAt(course.getCreatedAt())
+                .updatedAt(course.getUpdatedAt())
                 .lessons(lessons)
                 .build();
     }

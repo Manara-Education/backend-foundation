@@ -210,6 +210,29 @@ public class CourseValidator {
     }
 
     /**
+     * The completeness rules a course has to satisfy to go live, checked against what is stored.
+     *
+     * <p>Entry point for the explicit publish operation, which has no payload to check. It is the
+     * same single rule the payload path applies, stated once — a published course must actually
+     * teach something.
+     *
+     * <p>Deliberately <em>not</em> reused as a gate on later edits. Publication validation says what
+     * a course needs to become visible; treating it as a standing precondition for every subsequent
+     * save is how "published" turns into "read-only", which is the coupling this work exists to
+     * remove. What a published course may not do is edit its way into an invalid public state, and
+     * that is enforced where it belongs: {@code validatePublishable(request, ...)} runs on every
+     * update that leaves the course published, so deleting the last lesson of a live course is
+     * refused while every other edit goes through.
+     *
+     * @param activeLessonCount lessons the course currently has in its active structure
+     */
+    public void validatePublishable(int activeLessonCount) {
+        if (activeLessonCount == 0) {
+            throw new BusinessException("error.course.publishRequiresLesson");
+        }
+    }
+
+    /**
      * A published course must actually teach something. An empty module does not count — only real
      * lessons do, wherever they sit.
      */
@@ -250,10 +273,17 @@ public class CourseValidator {
 
         return switch (accessType) {
             case PURCHASE -> {
-                if (purchasePrice == null || purchasePrice.compareTo(BigDecimal.ZERO) <= 0) {
+                // Same "absent means untouched" rule the plans and the content tree follow. A
+                // course that is already sold outright and says nothing about its price keeps the
+                // price it has — without this, a metadata-only save of any paid course was refused
+                // outright with "a purchase course must have a price", which made every published
+                // paid course impossible to rename.
+                BigDecimal effective = purchasePrice != null ? purchasePrice : existingPurchasePrice(existing);
+
+                if (effective == null || effective.compareTo(BigDecimal.ZERO) <= 0) {
                     throw new BusinessException("error.course.purchasePriceRequired");
                 }
-                yield purchasePrice;
+                yield effective;
             }
             case SUBSCRIPTION -> {
                 // Same "absent means untouched" rule the content tree follows: a course that is
@@ -268,6 +298,13 @@ public class CourseValidator {
             }
             case FREE -> null;
         };
+    }
+
+    /** The price a course already carries, but only while it is genuinely a purchase course. */
+    private BigDecimal existingPurchasePrice(Course existing) {
+        return existing != null && existing.getAccessType() == CourseAccessType.PURCHASE
+                ? existing.getPurchasePrice()
+                : null;
     }
 
     private void validateSubscriptionPlans(List<SubscriptionPlanRequest> plans) {

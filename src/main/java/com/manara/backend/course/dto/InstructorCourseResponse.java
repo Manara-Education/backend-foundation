@@ -43,6 +43,19 @@ public class InstructorCourseResponse {
     private CourseStructure structure;
     private CourseStatus status;
 
+    /**
+     * Whether the course has changed in a way its learners should be told about.
+     *
+     * <p>The server's answer, derived from the publication baseline and the content version, so
+     * every screen that shows an "Updated" badge shows the same thing. Deliberately not a pair of
+     * timestamps for clients to compare: two clients comparing them would eventually disagree, and
+     * the rule ("published, and edited since it was last published") belongs in one place.
+     *
+     * <p>False for a draft, false for a course that was never published, and false for every course
+     * that already existed when this was introduced.
+     */
+    private Boolean hasUpdatesSincePublish;
+
     private List<InstructorLessonResponse> lessons;
     private List<InstructorModuleResponse> modules;
     private InstructorQuizResponse finalQuiz;

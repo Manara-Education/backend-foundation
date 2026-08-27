@@ -8,6 +8,7 @@ import com.manara.backend.course.model.CourseStructure;
 import com.manara.backend.course.repository.CourseModuleRepository;
 import com.manara.backend.course.repository.CourseRepository;
 import com.manara.backend.course.repository.EnrollmentRepository;
+import com.manara.backend.course.service.CourseContentChanges;
 import com.manara.backend.course.service.CourseProgression;
 import com.manara.backend.course.service.CourseProgressionService;
 import com.manara.backend.course.service.CourseViewer;
@@ -33,6 +34,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
+import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -61,6 +64,7 @@ public class LessonService {
     private final QuizMapper quizMapper;
     private final VideoMetadataService videoMetadataService;
     private final VideoProviderResolver videoProviderResolver;
+    private final Clock clock;
 
     private Course getCourseAndVerifyInstructor(User user, Long courseId) {
         if (user.getRole() != Role.INSTRUCTOR) {
@@ -115,6 +119,11 @@ public class LessonService {
 
         videoMetadataService.refreshAsync(lesson.getId(), lesson.getVideo());
 
+        // A new lesson is new content by definition, whichever endpoint created it. Learners of a
+        // published course have to be told the same thing whether the instructor used the course
+        // editor or this endpoint.
+        markCourseContentChanged(course);
+
         return lessonMapper.toLessonResponse(lesson, null, quizMapper.toLearnerResponse(quiz));
     }
 
@@ -129,16 +138,26 @@ public class LessonService {
         ResolvedVideo video = videoProviderResolver.resolve(request.getVideoUrl(), request.getVideoProvider());
         boolean videoUrlChanged = !video.url().equals(lesson.getVideo().getUrl());
 
-        lesson.setTitle(request.getTitle());
-        lesson.setSummary(request.getSummary());
-        lesson.setDescription(request.getDescription());
-        lesson.setOrderIndex(request.getOrderIndex());
-        lesson.setModule(module);
+        // Compared before assigned throughout, so a form re-submitted unchanged does not announce a
+        // new version of the course to everyone enrolled in it.
+        var changes = new CourseContentChanges();
+        changes.set(lesson.getTitle(), request.getTitle(), lesson::setTitle);
+        changes.set(lesson.getSummary(), request.getSummary(), lesson::setSummary);
+        changes.set(lesson.getDescription(), request.getDescription(), lesson::setDescription);
+        changes.set(lesson.getOrderIndex(), request.getOrderIndex(), lesson::setOrderIndex);
+
+        Long currentModuleId = lesson.getModule() == null ? null : lesson.getModule().getId();
+        Long nextModuleId = module == null ? null : module.getId();
+        if (!java.util.Objects.equals(currentModuleId, nextModuleId)) {
+            lesson.setModule(module);
+            changes.record();
+        }
 
         // Rewritten on every save, not only when the URL changed: a lesson stored before providers
         // existed picks up its provider, id and thumbnail the first time it is edited, with no
-        // migration and no separate back-fill pass.
-        lesson.setVideo(video.toVideoSource());
+        // migration and no separate back-fill pass. A still that had to be fetched is carried over
+        // rather than thrown away — see ResolvedVideo#toVideoSource(VideoSource).
+        changes.set(lesson.getVideo(), video.toVideoSource(lesson.getVideo()), lesson::setVideo);
 
         if (videoUrlChanged) {
             lesson.setDuration(0);
@@ -146,12 +165,16 @@ public class LessonService {
 
         lesson = lessonRepository.save(lesson);
 
-        Quiz quiz = syncQuizIfProvided(lesson, request);
+        Quiz quiz = syncQuizIfProvided(lesson, request, changes);
 
         if (videoUrlChanged) {
             videoMetadataService.refreshAsync(lesson.getId(), lesson.getVideo());
         } else {
             recalculateCourseDuration(lesson.getCourse());
+        }
+
+        if (changes.hasChanges()) {
+            markCourseContentChanged(course);
         }
 
         return lessonMapper.toLessonResponse(lesson, null, quizMapper.toLearnerResponse(quiz));
@@ -169,6 +192,19 @@ public class LessonService {
         completedLessonRepository.deleteByLessonId(lessonId);
         lessonRepository.delete(lesson);
         recalculateCourseDuration(course);
+        markCourseContentChanged(course);
+    }
+
+    /**
+     * Records that this course's learner-visible content changed, in the caller's transaction.
+     *
+     * <p>These endpoints edit one lesson, but a lesson is course content, so the course's version
+     * has to move with it — otherwise an instructor who adds a lesson here rather than through the
+     * course editor changes what learners see without any of them being told.
+     */
+    private void markCourseContentChanged(Course course) {
+        course.markContentChanged(LocalDateTime.now(clock));
+        courseRepository.save(course);
     }
 
     public LessonDetailsResponse getLesson(User user, Long courseId, Long lessonId) {
@@ -271,10 +307,16 @@ public class LessonService {
      * aggregate, whose payload is a deliberate full replacement.
      */
     private Quiz syncQuizIfProvided(Lesson lesson, LessonRequest request) {
+        return syncQuizIfProvided(lesson, request, new CourseContentChanges());
+    }
+
+    private Quiz syncQuizIfProvided(Lesson lesson, LessonRequest request, CourseContentChanges changes) {
         if (request.getQuiz() == null) {
             return quizService.findByOwner(QuizOwnerType.LESSON, lesson.getId()).orElse(null);
         }
-        return quizService.sync(QuizOwnerType.LESSON, lesson.getId(), request.getQuiz());
+        var result = quizService.sync(QuizOwnerType.LESSON, lesson.getId(), request.getQuiz());
+        changes.recordIf(result.changed());
+        return result.quiz();
     }
 
     private Lesson requireLessonOfCourse(Long courseId, Long lessonId) {

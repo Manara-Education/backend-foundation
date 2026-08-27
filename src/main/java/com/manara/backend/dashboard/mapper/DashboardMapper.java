@@ -26,6 +26,9 @@ public class DashboardMapper {
                 .status(resolveStatus(progress))
                 .category(course.getSubtitle())
                 .duration(formatDuration(course.getDuration()))
+                // Read straight off the course the enrolment already points at, so the learner's
+                // course list costs no extra query to answer "has this changed since I enrolled?".
+                .hasUpdatesSincePublish(course.hasUpdatesSincePublish())
                 .build();
     }
 

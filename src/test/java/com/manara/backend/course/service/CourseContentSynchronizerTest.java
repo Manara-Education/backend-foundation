@@ -93,6 +93,11 @@ class CourseContentSynchronizerTest {
                 .accessType(CourseAccessType.FREE)
                 .build();
 
+        // The synchronizer now reads whether a quiz sync changed anything, so the mock has to
+        // answer with a result rather than null. "Nothing changed" is the neutral default; the
+        // tests that care about change detection say so themselves.
+        given(quizService.sync(any(), any(), any()))
+                .willReturn(new com.manara.backend.quiz.service.QuizSyncResult(null, false));
         given(lessonRepository.save(any(Lesson.class))).willAnswer(invocation -> invocation.getArgument(0));
         given(courseModuleRepository.save(any(CourseModule.class))).willAnswer(invocation -> invocation.getArgument(0));
         given(subscriptionPlanRepository.findByCourseIdOrderByOrderIndexAsc(COURSE_ID)).willReturn(List.of());
@@ -107,7 +112,7 @@ class CourseContentSynchronizerTest {
         // 999 exists — it just belongs to somebody else's course, so it was never in the lookup map.
         CourseRequest request = flatCourse(lessonRequest(999L));
 
-        assertThatThrownBy(() -> synchronizer.sync(course, request, flatSettings()))
+        assertThatThrownBy(() -> synchronizer.sync(course, request, flatSettings(), new CourseContentChanges()))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("error.course.lessonNotInCourse");
     }
@@ -121,7 +126,7 @@ class CourseContentSynchronizerTest {
                 .modules(List.of(ModuleRequest.builder().id(999L).title("Hijacked").lessons(List.of()).build()))
                 .build();
 
-        assertThatThrownBy(() -> synchronizer.sync(course, request, modulesSettings()))
+        assertThatThrownBy(() -> synchronizer.sync(course, request, modulesSettings(), new CourseContentChanges()))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("error.course.moduleNotInCourse");
     }
@@ -132,7 +137,7 @@ class CourseContentSynchronizerTest {
 
         CourseRequest request = flatCourse(lessonRequest(10L), lessonRequest(10L));
 
-        assertThatThrownBy(() -> synchronizer.sync(course, request, flatSettings()))
+        assertThatThrownBy(() -> synchronizer.sync(course, request, flatSettings(), new CourseContentChanges()))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("error.course.lessonDuplicate");
     }
@@ -145,7 +150,7 @@ class CourseContentSynchronizerTest {
         LessonRequest update = lessonRequest(10L);
         update.setTitle("Renamed lesson");
 
-        synchronizer.sync(course, flatCourse(update), flatSettings());
+        synchronizer.sync(course, flatCourse(update), flatSettings(), new CourseContentChanges());
 
         assertThat(existing.getTitle()).isEqualTo("Renamed lesson");
         verify(lessonRepository, never()).save(any(Lesson.class));
@@ -158,7 +163,7 @@ class CourseContentSynchronizerTest {
         Lesson dropped = lesson(11L, null, 1);
         given(lessonRepository.findCourseLessonsInReadingOrder(COURSE_ID)).willReturn(List.of(kept, dropped));
 
-        synchronizer.sync(course, flatCourse(lessonRequest(10L)), flatSettings());
+        synchronizer.sync(course, flatCourse(lessonRequest(10L)), flatSettings(), new CourseContentChanges());
 
         // No foreign key would have cleaned the quiz up, and one would have blocked the lesson
         // delete until the completion rows were gone — both are this method's responsibility.
@@ -175,7 +180,7 @@ class CourseContentSynchronizerTest {
         given(courseModuleRepository.findByCourseIdOrderByOrderIndexAsc(COURSE_ID)).willReturn(List.of(module));
         given(lessonRepository.findCourseLessonsInReadingOrder(COURSE_ID)).willReturn(List.of(lessonUnderModule));
 
-        synchronizer.sync(course, flatCourse(lessonRequest(10L)), flatSettings());
+        synchronizer.sync(course, flatCourse(lessonRequest(10L)), flatSettings(), new CourseContentChanges());
 
         assertThat(lessonUnderModule.getModule()).isNull();
         verify(lessonRepository, never()).deleteAll(any());
@@ -189,7 +194,7 @@ class CourseContentSynchronizerTest {
         // would wipe a whole course for any client that has not been updated yet.
         CourseRequest request = CourseRequest.builder().title("Renamed").description("Still the same course").build();
 
-        synchronizer.sync(course, request, flatSettings());
+        synchronizer.sync(course, request, flatSettings(), new CourseContentChanges());
 
         verify(lessonRepository, never()).findCourseLessonsInReadingOrder(any());
         verify(lessonRepository, never()).deleteAll(any());
@@ -202,7 +207,7 @@ class CourseContentSynchronizerTest {
         Lesson existing = lesson(10L, null, 0);
         given(lessonRepository.findCourseLessonsInReadingOrder(COURSE_ID)).willReturn(List.of(existing));
 
-        synchronizer.sync(course, flatCourse(), flatSettings());
+        synchronizer.sync(course, flatCourse(), flatSettings(), new CourseContentChanges());
 
         verify(lessonRepository).deleteAll(List.of(existing));
     }
@@ -218,7 +223,7 @@ class CourseContentSynchronizerTest {
         CourseRequest request = flatCourse(lessonWithQuiz);
         request.setFinalQuiz(quiz("Final Exam"));
 
-        synchronizer.sync(course, request, flatSettings());
+        synchronizer.sync(course, request, flatSettings(), new CourseContentChanges());
 
         verify(quizService).sync(eq(QuizOwnerType.LESSON), eq(10L), any(QuizRequest.class));
         verify(quizService).sync(eq(QuizOwnerType.COURSE), eq(COURSE_ID), any(QuizRequest.class));
@@ -230,7 +235,7 @@ class CourseContentSynchronizerTest {
         Lesson second = lesson(11L, null, 1);
         given(lessonRepository.findCourseLessonsInReadingOrder(COURSE_ID)).willReturn(List.of(first, second));
 
-        synchronizer.sync(course, flatCourse(lessonRequest(11L), lessonRequest(10L)), flatSettings());
+        synchronizer.sync(course, flatCourse(lessonRequest(11L), lessonRequest(10L)), flatSettings(), new CourseContentChanges());
 
         assertThat(second.getOrderIndex()).isZero();
         assertThat(first.getOrderIndex()).isEqualTo(1);

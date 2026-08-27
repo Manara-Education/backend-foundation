@@ -90,7 +90,7 @@ class LessonVideoLifecycleTest {
                 lessonRepository, courseRepository, courseModuleRepository, completedLessonRepository,
                 enrollmentRepository, learnerCourseAccess, courseProgressionService,
                 new LessonMapper(durationFormatter, resolver), quizService, new QuizMapper(),
-                videoMetadataService, resolver);
+                videoMetadataService, resolver, java.time.Clock.systemUTC());
 
         course = Course.builder()
                 .id(COURSE_ID)

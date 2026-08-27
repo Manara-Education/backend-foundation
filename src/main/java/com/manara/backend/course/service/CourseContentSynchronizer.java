@@ -78,14 +78,16 @@ public class CourseContentSynchronizer {
     private final VideoMetadataService videoMetadataService;
     private final VideoProviderResolver videoProviderResolver;
 
-    public void sync(Course course, CourseRequest request, ResolvedCourseSettings settings) {
+    public void sync(Course course, CourseRequest request, ResolvedCourseSettings settings,
+                     CourseContentChanges changes) {
         if (request.carriesContentFor(settings.structure())) {
-            syncContent(course, request, settings.structure());
+            syncContent(course, request, settings.structure(), changes);
         }
-        syncSubscriptionPlans(course, request, settings);
+        syncSubscriptionPlans(course, request, settings, changes);
     }
 
-    private void syncContent(Course course, CourseRequest request, CourseStructure structure) {
+    private void syncContent(Course course, CourseRequest request, CourseStructure structure,
+                             CourseContentChanges changes) {
         List<CourseModule> persistedModules = courseModuleRepository.findByCourseIdOrderByOrderIndexAsc(course.getId());
         List<Lesson> persistedLessons = lessonRepository.findCourseLessonsInReadingOrder(course.getId());
 
@@ -95,28 +97,32 @@ public class CourseContentSynchronizer {
         SyncState state = new SyncState();
 
         if (structure == CourseStructure.MODULES) {
-            syncModules(course, request.getModules(), modulesById, lessonsById, state);
+            syncModules(course, request.getModules(), modulesById, lessonsById, state, changes);
         } else {
-            syncLessons(course, null, request.getLessons(), lessonsById, state);
+            syncLessons(course, null, request.getLessons(), lessonsById, state, changes);
         }
 
-        removeStaleLessons(persistedLessons, state.retainedLessonIds);
-        removeStaleModules(persistedModules, state.retainedModuleIds);
+        removeStaleLessons(persistedLessons, state.retainedLessonIds, changes);
+        removeStaleModules(persistedModules, state.retainedModuleIds, changes);
 
         // Newly created modules and lessons need their generated ids before a quiz can name them
         // as its owner.
         lessonRepository.flush();
 
         for (QuizAttachment attachment : state.quizAttachments) {
-            quizService.sync(attachment.ownerType(), attachment.ownerId().get(), attachment.request());
+            changes.recordIf(quizService
+                    .sync(attachment.ownerType(), attachment.ownerId().get(), attachment.request())
+                    .changed());
         }
-        quizService.sync(QuizOwnerType.COURSE, course.getId(), request.getFinalQuiz());
+        changes.recordIf(quizService
+                .sync(QuizOwnerType.COURSE, course.getId(), request.getFinalQuiz())
+                .changed());
 
         refreshDurations(course, state.videoRefreshTargets);
     }
 
     private void syncModules(Course course, List<ModuleRequest> requests, Map<Long, CourseModule> modulesById,
-                             Map<Long, Lesson> lessonsById, SyncState state) {
+                             Map<Long, Lesson> lessonsById, SyncState state, CourseContentChanges changes) {
         Set<Long> seen = new HashSet<>();
 
         for (int order = 0; order < requests.size(); order++) {
@@ -125,23 +131,28 @@ public class CourseContentSynchronizer {
 
             if (request.getId() == null) {
                 // Saved eagerly so the lessons created underneath it have a parent id to point at.
+                // Position is the array index, which is what makes the stored order contiguous
+                // 0..N-1 whatever the payload claimed: the first module of an empty course lands on
+                // 0 without anyone asking the database for a max, and an appended one lands on the
+                // next free position without inheriting a legacy gap.
                 module = courseModuleRepository.save(courseModuleMapper.toCourseModule(request, course, order));
+                changes.record();
             } else {
                 module = resolveOwnChild(modulesById, seen, request.getId(),
                         "error.course.moduleNotInCourse", "error.course.moduleDuplicate");
-                module.setTitle(request.getTitle().trim());
-                module.setDescription(trimToNull(request.getDescription()));
-                module.setOrderIndex(order);
+                changes.set(module.getTitle(), request.getTitle().trim(), module::setTitle);
+                changes.set(module.getDescription(), trimToNull(request.getDescription()), module::setDescription);
+                changes.set(module.getOrderIndex(), order, module::setOrderIndex);
             }
 
             state.retainedModuleIds.add(module.getId());
-            syncLessons(course, module, request.getLessons(), lessonsById, state);
+            syncLessons(course, module, request.getLessons(), lessonsById, state, changes);
             state.quizAttachments.add(new QuizAttachment(QuizOwnerType.MODULE, module::getId, request.getQuiz()));
         }
     }
 
     private void syncLessons(Course course, CourseModule module, List<LessonRequest> requests,
-                             Map<Long, Lesson> lessonsById, SyncState state) {
+                             Map<Long, Lesson> lessonsById, SyncState state, CourseContentChanges changes) {
         if (requests == null) {
             return;
         }
@@ -153,6 +164,7 @@ public class CourseContentSynchronizer {
             if (request.getId() == null) {
                 lesson = lessonRepository.save(lessonMapper.toLesson(request, course, module, order));
                 state.videoRefreshTargets.add(lesson);
+                changes.record();
             } else {
                 lesson = resolveOwnChild(lessonsById, state.seenLessonIds, request.getId(),
                         "error.course.lessonNotInCourse", "error.course.lessonDuplicate");
@@ -164,15 +176,24 @@ public class CourseContentSynchronizer {
                         request.getVideoUrl(), request.getVideoProvider());
 
                 boolean videoChanged = !video.url().equals(lesson.getVideo().getUrl());
-                lesson.setTitle(request.getTitle().trim());
-                lesson.setSummary(request.getSummary());
-                lesson.setDescription(request.getDescription());
-                lesson.setVideo(video.toVideoSource());
-                lesson.setOrderIndex(order);
+                changes.set(lesson.getTitle(), request.getTitle().trim(), lesson::setTitle);
+                changes.set(lesson.getSummary(), request.getSummary(), lesson::setSummary);
+                changes.set(lesson.getDescription(), request.getDescription(), lesson::setDescription);
+                changes.set(lesson.getVideo(), video.toVideoSource(lesson.getVideo()), lesson::setVideo);
+                changes.set(lesson.getOrderIndex(), order, lesson::setOrderIndex);
                 // Re-parenting is how a structure switch keeps a lesson the payload still wants.
-                lesson.setModule(module);
+                // Compared by id rather than by entity: `lesson.getModule()` can be an uninitialised
+                // proxy, whose id-based equals reads a field that is not there yet.
+                Long currentModuleId = lesson.getModule() == null ? null : lesson.getModule().getId();
+                Long nextModuleId = module == null ? null : module.getId();
+                if (!java.util.Objects.equals(currentModuleId, nextModuleId)) {
+                    lesson.setModule(module);
+                    changes.record();
+                }
 
                 if (videoChanged) {
+                    // Not a content change of its own — the duration is derived, and the real
+                    // change (a different video) has already been recorded above.
                     lesson.setDuration(0);
                     state.videoRefreshTargets.add(lesson);
                 }
@@ -188,7 +209,8 @@ public class CourseContentSynchronizer {
      * quiz, which no foreign key would have cleaned up, and their learners' completion rows, which
      * one would have blocked.
      */
-    private void removeStaleLessons(List<Lesson> persisted, Set<Long> retainedIds) {
+    private void removeStaleLessons(List<Lesson> persisted, Set<Long> retainedIds,
+                                    CourseContentChanges changes) {
         List<Lesson> stale = persisted.stream()
                 .filter(lesson -> !retainedIds.contains(lesson.getId()))
                 .toList();
@@ -196,6 +218,7 @@ public class CourseContentSynchronizer {
             return;
         }
 
+        changes.record();
         List<Long> staleIds = stale.stream().map(Lesson::getId).toList();
         quizService.deleteByOwners(QuizOwnerType.LESSON, staleIds);
         completedLessonRepository.deleteByLessonIdIn(staleIds);
@@ -204,7 +227,8 @@ public class CourseContentSynchronizer {
         lessonRepository.flush();
     }
 
-    private void removeStaleModules(List<CourseModule> persisted, Set<Long> retainedIds) {
+    private void removeStaleModules(List<CourseModule> persisted, Set<Long> retainedIds,
+                                    CourseContentChanges changes) {
         List<CourseModule> stale = persisted.stream()
                 .filter(module -> !retainedIds.contains(module.getId()))
                 .toList();
@@ -212,6 +236,7 @@ public class CourseContentSynchronizer {
             return;
         }
 
+        changes.record();
         quizService.deleteByOwners(QuizOwnerType.MODULE, stale.stream().map(CourseModule::getId).toList());
         courseModuleRepository.deleteAll(stale);
         courseModuleRepository.flush();
@@ -222,7 +247,8 @@ public class CourseContentSynchronizer {
      * A subscription course whose payload omits the collection keeps what it has — that is the
      * same "absent means untouched" rule the content tree follows.
      */
-    private void syncSubscriptionPlans(Course course, CourseRequest request, ResolvedCourseSettings settings) {
+    private void syncSubscriptionPlans(Course course, CourseRequest request, ResolvedCourseSettings settings,
+                                       CourseContentChanges changes) {
         List<SubscriptionPlanRequest> requests = request.getSubscriptionPlans();
         boolean subscription = settings.accessType() == CourseAccessType.SUBSCRIPTION;
 
@@ -244,14 +270,18 @@ public class CourseContentSynchronizer {
             if (planRequest.getId() == null) {
                 plan = subscriptionPlanRepository.save(
                         subscriptionPlanMapper.toSubscriptionPlan(planRequest, course, order));
+                changes.record();
             } else {
                 plan = resolveOwnChild(plansById, seen, planRequest.getId(),
                         "error.course.planNotInCourse", "error.course.planDuplicate");
-                plan.setName(planRequest.getName().trim());
-                plan.setDuration(planRequest.getDuration());
-                plan.setUnit(planRequest.getUnit());
+                changes.set(plan.getName(), planRequest.getName().trim(), plan::setName);
+                changes.set(plan.getDuration(), planRequest.getDuration(), plan::setDuration);
+                changes.set(plan.getUnit(), planRequest.getUnit(), plan::setUnit);
+                // Compared by value: a scale-only difference between 100 and 100.00 is not a
+                // price change, and BigDecimal.equals would call it one.
+                changes.recordIf(!sameAmount(plan.getPrice(), planRequest.getPrice()));
                 plan.setPrice(planRequest.getPrice());
-                plan.setOrderIndex(order);
+                changes.set(plan.getOrderIndex(), order, plan::setOrderIndex);
             }
             retained.add(plan.getId());
         }
@@ -260,8 +290,17 @@ public class CourseContentSynchronizer {
                 .filter(plan -> !retained.contains(plan.getId()))
                 .toList();
         if (!stale.isEmpty()) {
+            changes.record();
             subscriptionPlanRepository.deleteAll(stale);
         }
+    }
+
+    /** {@code null}-safe numeric equality, so 100 and 100.00 are the same price. */
+    private boolean sameAmount(java.math.BigDecimal left, java.math.BigDecimal right) {
+        if (left == null || right == null) {
+            return left == right;
+        }
+        return left.compareTo(right) == 0;
     }
 
     /**

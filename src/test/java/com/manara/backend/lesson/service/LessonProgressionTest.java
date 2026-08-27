@@ -113,7 +113,8 @@ class LessonProgressionTest {
                 lessonRepository, courseRepository, courseModuleRepository, completedLessonRepository,
                 enrollmentRepository, learnerCourseAccess, courseProgressionService,
                 new LessonMapper(durationFormatter, VideoProviderFixtures.resolver()), quizService,
-                new QuizMapper(), videoMetadataService, VideoProviderFixtures.resolver());
+                new QuizMapper(), videoMetadataService, VideoProviderFixtures.resolver(),
+                java.time.Clock.systemUTC());
         lenient().when(messageService.get(any(), any())).thenReturn("0s");
     }
 

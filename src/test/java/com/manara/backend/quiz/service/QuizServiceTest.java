@@ -59,7 +59,7 @@ class QuizServiceTest {
         given(quizRepository.findByOwnerTypeAndOwnerId(QuizOwnerType.LESSON, 7L)).willReturn(Optional.empty());
 
         Quiz quiz = quizService.sync(QuizOwnerType.LESSON, 7L, quiz(
-                question(null, "option-2", option("option-1", "Answer 1"), option("option-2", "Answer 2"))));
+                question(null, "option-2", option("option-1", "Answer 1"), option("option-2", "Answer 2")))).quiz();
 
         assertThat(quiz.getOwnerType()).isEqualTo(QuizOwnerType.LESSON);
         assertThat(quiz.getOwnerId()).isEqualTo(7L);
@@ -76,7 +76,7 @@ class QuizServiceTest {
 
         Quiz quiz = quizService.sync(QuizOwnerType.COURSE, 3L, quiz(
                 question(null, "a", option("a", "A"), option("b", "B")),
-                question(null, "c", option("c", "C"), option("d", "D"))));
+                question(null, "c", option("c", "C"), option("d", "D")))).quiz();
 
         assertThat(quiz.getQuestions()).extracting(QuizQuestion::getOrderIndex).containsExactly(0, 1);
         assertThat(quiz.getQuestions().getFirst().getOptions())
@@ -88,7 +88,7 @@ class QuizServiceTest {
         Quiz existing = persistedQuiz();
         given(quizRepository.findByOwnerTypeAndOwnerId(QuizOwnerType.MODULE, 5L)).willReturn(Optional.of(existing));
 
-        Quiz result = quizService.sync(QuizOwnerType.MODULE, 5L, null);
+        Quiz result = quizService.sync(QuizOwnerType.MODULE, 5L, null).quiz();
 
         assertThat(result).isNull();
         verify(quizRepository).delete(existing);
@@ -98,7 +98,7 @@ class QuizServiceTest {
     void doesNothingWhenAnOwnerWithoutAQuizStillHasNone() {
         given(quizRepository.findByOwnerTypeAndOwnerId(QuizOwnerType.MODULE, 5L)).willReturn(Optional.empty());
 
-        assertThat(quizService.sync(QuizOwnerType.MODULE, 5L, null)).isNull();
+        assertThat(quizService.sync(QuizOwnerType.MODULE, 5L, null).quiz()).isNull();
         verify(quizRepository, never()).delete(any());
     }
 
@@ -112,7 +112,7 @@ class QuizServiceTest {
         Quiz updated = quizService.sync(QuizOwnerType.LESSON, 1L, quiz(
                 question(String.valueOf(questionId), String.valueOf(optionId),
                         option(String.valueOf(optionId), "Edited answer"),
-                        option(String.valueOf(existing.getQuestions().getFirst().getOptions().get(1).getId()), "B"))));
+                        option(String.valueOf(existing.getQuestions().getFirst().getOptions().get(1).getId()), "B")))).quiz();
 
         assertThat(updated.getQuestions()).hasSize(1);
         assertThat(updated.getQuestions().getFirst().getId()).isEqualTo(questionId);
@@ -132,7 +132,7 @@ class QuizServiceTest {
                 question(String.valueOf(keptQuestionId), String.valueOf(keptOptionId),
                         option(String.valueOf(keptOptionId), "A"),
                         option("new-option", "B")),
-                question(null, "x", option("x", "X"), option("y", "Y"))));
+                question(null, "x", option("x", "X"), option("y", "Y")))).quiz();
 
         assertThat(updated.getQuestions()).hasSize(2);
         assertThat(updated.getQuestions()).extracting(QuizQuestion::getId).containsExactly(keptQuestionId, null);
@@ -152,7 +152,7 @@ class QuizServiceTest {
         Quiz updated = quizService.sync(QuizOwnerType.LESSON, 1L, quiz(
                 question(String.valueOf(question.getId()), String.valueOf(secondOptionId),
                         option(String.valueOf(firstOptionId), "A"),
-                        option(String.valueOf(secondOptionId), "B"))));
+                        option(String.valueOf(secondOptionId), "B")))).quiz();
 
         assertThat(updated.getQuestions().getFirst().getOptions())
                 .extracting(QuizOption::getCorrect).containsExactly(false, true);

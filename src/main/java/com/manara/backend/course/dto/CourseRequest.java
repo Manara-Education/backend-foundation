@@ -6,7 +6,8 @@ import com.manara.backend.course.model.CourseStructure;
 import com.manara.backend.lesson.dto.LessonRequest;
 import com.manara.backend.quiz.dto.QuizRequest;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.PositiveOrZero;
+import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -14,6 +15,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import java.math.BigDecimal;
+import java.util.EnumSet;
 import java.util.List;
 
 /**
@@ -47,7 +49,22 @@ public class CourseRequest {
     @NotBlank(message = "{validation.course.description.required}")
     private String description;
 
-    @Positive(message = "{validation.course.duration.positive}")
+    /**
+     * Accepted, and then ignored on update.
+     *
+     * <p>A course's duration is the sum of its lessons' durations, which only the video providers
+     * know. The server recomputes it from the lessons after every content change and hands the
+     * result back in the response — so the value a client sends is at best a stale echo of the
+     * server's own figure, and honouring it would let a client that omitted the field wipe it.
+     *
+     * <p>{@code @PositiveOrZero}, not {@code @Positive}. A course whose videos have not been
+     * measured yet legitimately has a duration of {@code 0} — every lesson starts there and stays
+     * there until an out-of-band lookup lands. {@code @Positive} rejected exactly the value the API
+     * had just returned, which meant a client that echoed the aggregate back verbatim, as the
+     * editor does, was answered {@code 400} on every save. That made a course permanently
+     * uneditable through its own editor.
+     */
+    @PositiveOrZero(message = "{validation.course.duration.positive}")
     private Integer duration;
 
     /** Defaults to {@link CourseStructure#FLAT} when omitted, matching pre-existing courses. */
@@ -90,6 +107,85 @@ public class CourseRequest {
      */
     public BigDecimal resolvePurchasePrice() {
         return purchasePrice != null ? purchasePrice : price;
+    }
+
+    /**
+     * Which optional metadata fields the payload actually mentioned.
+     *
+     * <p>A Java bean cannot tell "absent" from "explicitly null" on its own, and for two of these
+     * fields the difference matters a great deal: an update that says nothing about {@code image}
+     * meant to leave the cover alone, and clearing it instead is how a metadata-only save blanked
+     * a published course's thumbnail. Recording presence in the setters — which Jackson calls only
+     * for keys that are in the JSON — is what separates the two without changing the wire format
+     * or adding a dependency.
+     *
+     * <p>The fields that are not tracked do not need to be: {@code title} and {@code description}
+     * are required, and {@code status}, {@code structure}, {@code accessType}, the prices, the
+     * plans and the content tree all already read {@code null} as "leave it alone" in
+     * {@code CourseValidator} and {@code CourseContentSynchronizer}.
+     */
+    @Getter(AccessLevel.NONE)
+    @Setter(AccessLevel.NONE)
+    private EnumSet<Field> presentFields;
+
+    /** The optional metadata fields whose presence is tracked. */
+    public enum Field {
+        SUBTITLE, IMAGE, DURATION
+    }
+
+    public void setSubtitle(String subtitle) {
+        this.subtitle = subtitle;
+        this.presentFields = mark(this.presentFields, Field.SUBTITLE);
+    }
+
+    public void setImage(String image) {
+        this.image = image;
+        this.presentFields = mark(this.presentFields, Field.IMAGE);
+    }
+
+    public void setDuration(Integer duration) {
+        this.duration = duration;
+        this.presentFields = mark(this.presentFields, Field.DURATION);
+    }
+
+    /** Whether the payload mentioned this field at all, whatever value it gave it. */
+    public boolean carries(Field field) {
+        return presentFields != null && presentFields.contains(field);
+    }
+
+    private static EnumSet<Field> mark(EnumSet<Field> fields, Field field) {
+        EnumSet<Field> next = fields == null ? EnumSet.noneOf(Field.class) : fields;
+        next.add(field);
+        return next;
+    }
+
+    /**
+     * The generated builder, with the three tracked fields taught to record themselves.
+     *
+     * <p>Lombok's builder assigns fields directly rather than through setters, so without these a
+     * request built in Java — every test, and any future server-side caller — would look as though
+     * it had mentioned nothing. Hand-writing the three suppresses Lombok's versions and leaves the
+     * rest of the builder generated as before.
+     */
+    public static class CourseRequestBuilder {
+
+        public CourseRequestBuilder subtitle(String subtitle) {
+            this.subtitle = subtitle;
+            this.presentFields = mark(this.presentFields, Field.SUBTITLE);
+            return this;
+        }
+
+        public CourseRequestBuilder image(String image) {
+            this.image = image;
+            this.presentFields = mark(this.presentFields, Field.IMAGE);
+            return this;
+        }
+
+        public CourseRequestBuilder duration(Integer duration) {
+            this.duration = duration;
+            this.presentFields = mark(this.presentFields, Field.DURATION);
+            return this;
+        }
     }
 
     /**

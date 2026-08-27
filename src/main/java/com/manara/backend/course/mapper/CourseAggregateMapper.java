@@ -57,6 +57,7 @@ public class CourseAggregateMapper {
                 .instructorName(course.getInstructor().getUser().getFullName())
                 .structure(course.getStructure())
                 .status(course.getStatus())
+                .hasUpdatesSincePublish(course.hasUpdatesSincePublish())
                 // A module course reaches its lessons through its modules; the flat branch stays
                 // empty so no response ever describes a course as being both shapes at once.
                 .lessons(flat ? instructorLessons(aggregate, aggregate.lessons()) : List.of())
@@ -107,6 +108,7 @@ public class CourseAggregateMapper {
                 .subscriptionPlans(planResponses(aggregate))
                 .studentsCount(course.getStudentsCount())
                 .createdAt(course.getCreatedAt())
+                .hasUpdatesSincePublish(course.hasUpdatesSincePublish())
                 .build();
 
         var instructorInfo = CourseDetailsResponse.InstructorInfo.builder()

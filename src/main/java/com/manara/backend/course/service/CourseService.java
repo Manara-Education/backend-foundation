@@ -8,6 +8,9 @@ import com.manara.backend.course.dto.CourseRequest;
 import com.manara.backend.course.dto.CourseResponse;
 import com.manara.backend.course.dto.CourseViewMode;
 import com.manara.backend.course.dto.InstructorCourseResponse;
+import com.manara.backend.course.dto.ModuleOrderRequest;
+import com.manara.backend.course.model.CourseModule;
+import com.manara.backend.course.repository.CourseModuleRepository;
 import com.manara.backend.course.mapper.CourseAggregateMapper;
 import com.manara.backend.course.mapper.CourseMapper;
 import com.manara.backend.course.mapper.EntitlementMapper;
@@ -22,10 +25,21 @@ import com.manara.backend.profile.repository.InstructorRepository;
 import com.manara.backend.user.model.Role;
 import com.manara.backend.user.model.User;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * Course authoring and browsing.
@@ -34,7 +48,22 @@ import java.util.List;
  * quizzes, questions, options and plans. Validation is complete before synchronization starts, so a
  * rejected payload never leaves a half-rearranged course behind, and a failure anywhere in the
  * nested content rolls the whole edit back.
+ *
+ * <h2>Publication is not editability</h2>
+ * A published course is fully editable by its instructor. Publication decides who can <em>see</em>
+ * the course, not whether its author may change it, and the two are kept apart deliberately:
+ * {@link #updateCourse} never changes the status by itself, and {@link #publish} / {@link #unpublish}
+ * never touch content. A published course that is edited stays published.
+ *
+ * <h2>Publication is not the content version</h2>
+ * What learners are told about is a third thing again, tracked by two timestamps on the course:
+ * {@code lastPublishedAt} (the baseline) and {@code contentUpdatedAt} (the last real, instructor-made,
+ * learner-visible change). Everything that mutates a course through this service records whether it
+ * actually changed anything, and the timestamp is written once, here, inside the same transaction as
+ * the change — so a rolled-back edit cannot leave a course claiming to be updated, and a committed
+ * one cannot fail to say so.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
@@ -52,6 +81,8 @@ public class CourseService {
     private final EntitlementMapper entitlementMapper;
     private final EntitlementPolicy entitlementPolicy;
     private final FileUploadService fileUploadService;
+    private final CourseModuleRepository courseModuleRepository;
+    private final Clock clock;
 
     /** Catalogue for instructors and admins — drafts included. */
     public List<CourseResponse> getAllCourses() {
@@ -102,38 +133,253 @@ public class CourseService {
         var settings = courseValidator.resolveAndValidate(request, null, () -> 0);
 
         var course = courseRepository.save(courseMapper.toCourse(request, instructor, settings));
-        courseContentSynchronizer.sync(course, request, settings);
+
+        // A brand-new course is entirely new content, so the recorder's answer is a foregone
+        // conclusion; it is threaded through anyway so there is one synchronization path, not two.
+        var changes = new CourseContentChanges();
+        courseContentSynchronizer.sync(course, request, settings, changes);
+
+        LocalDateTime now = LocalDateTime.now(clock);
+        course.markContentChanged(now);
+        // Creating a course straight into PUBLISHED is the wizard's "publish" action, and it is the
+        // course's first publication — so it establishes the baseline rather than announcing itself
+        // as an update to learners who have never seen it.
+        if (settings.status() == CourseStatus.PUBLISHED) {
+            course.markPublished(now);
+        }
 
         return saveAndRespond(course);
     }
 
+    /**
+     * Applies an edit to a course, whatever its publication state.
+     *
+     * <p>Three rules hold here regardless of whether the course is a draft or live:
+     *
+     * <ul>
+     *   <li><strong>Publication is untouched by default.</strong> A payload that says nothing about
+     *       {@code status} leaves the course exactly as published or unpublished as it was. The
+     *       field is still honoured when a client sends it, for the wizard and for clients written
+     *       against the previous contract, but no ordinary content save carries it and nothing here
+     *       ever infers it.
+     *   <li><strong>Omitted is not empty.</strong> {@code subtitle} and {@code image} are only
+     *       written when the payload actually mentioned them. Before that distinction existed, a
+     *       metadata-only save blanked a published course's cover image.
+     *   <li><strong>Duration is derived, never accepted.</strong> It is the sum of the lessons'
+     *       durations and belongs to the server.
+     * </ul>
+     */
     @Transactional
     public InstructorCourseResponse updateCourse(User user, Long courseId, CourseRequest request) {
         var course = requireOwnedCourse(user, courseId);
         var settings = courseValidator.resolveAndValidate(request, course, () -> activeLessonCount(course));
 
         String previousImage = course.getImage();
+        var changes = new CourseContentChanges();
+        // One instant for the whole request. Reading the clock twice would put a publish a few
+        // microseconds after the edit it carries, and "content newer than baseline" would then be
+        // true for a course that had just been published with those very edits in it.
+        LocalDateTime now = LocalDateTime.now(clock);
 
-        course.setTitle(request.getTitle().trim());
-        course.setSubtitle(request.getSubtitle());
-        course.setImage(request.getImage());
-        course.setDescription(request.getDescription());
-        course.setDuration(request.getDuration());
-        course.setStructure(settings.structure());
-        course.setStatus(settings.status());
-        course.setAccessType(settings.accessType());
+        changes.set(course.getTitle(), request.getTitle().trim(), course::setTitle);
+        changes.set(course.getDescription(), request.getDescription(), course::setDescription);
+        if (request.carries(CourseRequest.Field.SUBTITLE)) {
+            changes.set(course.getSubtitle(), request.getSubtitle(), course::setSubtitle);
+        }
+        if (request.carries(CourseRequest.Field.IMAGE)) {
+            changes.set(course.getImage(), request.getImage(), course::setImage);
+        }
+        changes.set(course.getStructure(), settings.structure(), course::setStructure);
+        changes.set(course.getAccessType(), settings.accessType(), course::setAccessType);
+        changes.recordIf(!sameAmount(course.getPurchasePrice(), settings.purchasePrice()));
         course.setPurchasePrice(settings.purchasePrice());
 
-        courseContentSynchronizer.sync(course, request, settings);
+        courseContentSynchronizer.sync(course, request, settings, changes);
+
+        markContentChangedIfNeeded(course, changes, now, "updateCourse", user, courseId);
+
+        // Last, and after the content it may be publishing. The status the validator resolved is
+        // the course's own unless the payload named a different one, so an ordinary save is a no-op
+        // here. A genuine transition goes through the lifecycle methods, which is what lets a
+        // publish carrying edits establish its baseline on top of them rather than a moment before
+        // them — publishing is not an edit, and must not announce itself as one.
+        applyStatus(course, settings.status(), now);
 
         var response = saveAndRespond(course);
 
         // Deleting the replaced upload last: the file is gone for good, so it only happens once the
-        // rest of the edit has been accepted.
-        if (previousImage != null && request.getImage() != null && !previousImage.equals(request.getImage())) {
+        // rest of the edit has been accepted. Only a payload that actually named a new image can
+        // retire the old one — an update that never mentioned the cover leaves the file alone.
+        if (previousImage != null
+                && request.carries(CourseRequest.Field.IMAGE)
+                && request.getImage() != null
+                && !previousImage.equals(request.getImage())) {
             fileUploadService.deleteFile(previousImage);
         }
         return response;
+    }
+
+    /**
+     * Publishes a course. The one operation that makes a new version baseline.
+     *
+     * <p>Idempotent: re-publishing an already-published course is how an instructor says "what is
+     * there now is the version I stand behind", which clears the Updated badge. That is a
+     * deliberate product decision rather than an accident of the implementation, and it is the only
+     * thing that clears it.
+     */
+    @Transactional
+    public InstructorCourseResponse publish(User user, Long courseId) {
+        var course = requireOwnedCourse(user, courseId);
+
+        // Publishing is where the completeness rules bite. An empty draft is a perfectly legal
+        // draft; an empty published course is a broken catalogue entry.
+        courseValidator.validatePublishable(activeLessonCount(course));
+
+        course.markPublished(LocalDateTime.now(clock));
+        log.info("Course published: courseId={} instructorUserId={}", courseId, user.getId());
+
+        return saveAndRespond(course);
+    }
+
+    /** Withdraws a course from the catalogue. Content, learners and their history are untouched. */
+    @Transactional
+    public InstructorCourseResponse unpublish(User user, Long courseId) {
+        var course = requireOwnedCourse(user, courseId);
+        course.markUnpublished();
+        log.info("Course unpublished: courseId={} instructorUserId={}", courseId, user.getId());
+        return saveAndRespond(course);
+    }
+
+    /**
+     * Rewrites the order of a course's modules from a list of ids.
+     *
+     * <p>A focused command rather than an aggregate save, and that is the point of it. Reordering
+     * through the full-replacement {@code PUT} means shipping the whole course back — so a tab that
+     * loaded the course before someone else renamed it would undo the rename just by dragging a
+     * module. This touches {@code order_index} and nothing else.
+     *
+     * <p>Positions are derived from the array, never taken from the client: the first id becomes 0,
+     * the second 1, and so on. A submitted position cannot therefore be duplicated, negative or
+     * leave a gap, and the stored order comes out contiguous by construction.
+     *
+     * <p>The list has to name every module of the course exactly once. That is what makes a stale
+     * reorder — one sent by a client whose module list has since changed — a rejection rather than a
+     * half-applied order, and it is why a reorder that arrives after a module was deleted elsewhere
+     * fails loudly instead of quietly dropping it.
+     */
+    @Transactional
+    public InstructorCourseResponse reorderModules(User user, Long courseId, ModuleOrderRequest request) {
+        var course = requireOwnedCourse(user, courseId);
+
+        List<Long> requestedIds = requireWellFormedOrder(request);
+        // Locked for the rest of the transaction: two reorders of one course arriving together
+        // would otherwise interleave into an order neither instructor asked for.
+        List<CourseModule> modules = courseModuleRepository.findByCourseIdForUpdate(courseId);
+
+        requireCompleteOrder(requestedIds, modules);
+
+        Map<Long, CourseModule> byId = modules.stream()
+                .collect(Collectors.toMap(CourseModule::getId, Function.identity()));
+
+        var changes = new CourseContentChanges();
+        for (int position = 0; position < requestedIds.size(); position++) {
+            CourseModule module = byId.get(requestedIds.get(position));
+            changes.set(module.getOrderIndex(), position, module::setOrderIndex);
+        }
+
+        // A reorder that asked for the order the course is already in writes nothing and, crucially,
+        // does not tell every enrolled learner the course changed.
+        markContentChangedIfNeeded(course, changes, LocalDateTime.now(clock), "reorderModules", user, courseId);
+        if (changes.hasChanges()) {
+            log.info("Course modules reordered: courseId={} instructorUserId={} moduleCount={}",
+                    courseId, user.getId(), requestedIds.size());
+        }
+
+        return saveAndRespond(course);
+    }
+
+    /** Rejects a malformed payload before it is ever compared against the course. */
+    private List<Long> requireWellFormedOrder(ModuleOrderRequest request) {
+        List<Long> ids = request.getModuleIds();
+        if (ids == null) {
+            throw new BusinessException("error.course.moduleOrderRequired");
+        }
+        if (ids.stream().anyMatch(Objects::isNull)) {
+            throw new BusinessException("error.course.moduleOrderNullId");
+        }
+        if (new HashSet<>(ids).size() != ids.size()) {
+            throw new BusinessException("error.course.moduleOrderDuplicate");
+        }
+        return ids;
+    }
+
+    /**
+     * The whole course, exactly once.
+     *
+     * <p>Set equality, not merely "every id exists": an id from another instructor's course is not
+     * in this course's modules and is rejected here, and a list that silently omits a module is
+     * rejected too rather than leaving that module stranded at whatever position it happened to
+     * hold.
+     */
+    private void requireCompleteOrder(List<Long> requestedIds, List<CourseModule> modules) {
+        Set<Long> owned = modules.stream().map(CourseModule::getId).collect(Collectors.toCollection(LinkedHashSet::new));
+        Set<Long> requested = new LinkedHashSet<>(requestedIds);
+
+        List<Long> unknown = new ArrayList<>(requested);
+        unknown.removeAll(owned);
+        if (!unknown.isEmpty()) {
+            throw new BusinessException("error.course.moduleNotInCourse", unknown.get(0));
+        }
+
+        if (requested.size() != owned.size()) {
+            throw new BusinessException("error.course.moduleOrderIncomplete", owned.size(), requested.size());
+        }
+    }
+
+    /**
+     * Moves the content version — once per request, and only when something really changed.
+     *
+     * <p>Inside the caller's transaction by construction, so the timestamp and the change it
+     * describes commit or roll back together. A save that turns out to be a no-op leaves the
+     * previous value alone, which is what stops re-submitting a course unchanged from announcing a
+     * new version to its learners.
+     */
+    private void markContentChangedIfNeeded(Course course, CourseContentChanges changes, LocalDateTime at,
+                                            String operation, User user, Long courseId) {
+        if (!changes.hasChanges()) {
+            return;
+        }
+        course.markContentChanged(at);
+        log.info("Course content changed: courseId={} instructorUserId={} operation={} status={} "
+                        + "hasUpdatesSincePublish={}",
+                courseId, user.getId(), operation, course.getStatus(), course.hasUpdatesSincePublish());
+    }
+
+    /**
+     * Applies a status the payload asked for, through the lifecycle methods.
+     *
+     * <p>Same status in, nothing happens — which is the case for every ordinary content save, since
+     * the validator resolves an absent status to the course's own. A genuine transition still runs
+     * the publication rules: publishing this way sets a baseline exactly as the dedicated endpoint
+     * does, so the two can never disagree.
+     */
+    private void applyStatus(Course course, CourseStatus status, LocalDateTime at) {
+        if (course.getStatus() == status) {
+            return;
+        }
+        if (status == CourseStatus.PUBLISHED) {
+            course.markPublished(at);
+        } else {
+            course.markUnpublished();
+        }
+    }
+
+    /** {@code null}-safe numeric equality, so 100 and 100.00 are not a price change. */
+    private boolean sameAmount(java.math.BigDecimal left, java.math.BigDecimal right) {
+        if (left == null || right == null) {
+            return left == right;
+        }
+        return left.compareTo(right) == 0;
     }
 
     /**
