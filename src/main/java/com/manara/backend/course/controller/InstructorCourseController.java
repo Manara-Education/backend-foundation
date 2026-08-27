@@ -4,6 +4,7 @@ import com.manara.backend.common.dto.ApiResponse;
 import com.manara.backend.course.dto.CourseRequest;
 import com.manara.backend.course.dto.CourseResponse;
 import com.manara.backend.course.dto.InstructorCourseResponse;
+import com.manara.backend.course.dto.LessonOrderRequest;
 import com.manara.backend.course.dto.ModuleOrderRequest;
 import com.manara.backend.course.service.CourseService;
 import com.manara.backend.user.model.User;
@@ -28,9 +29,13 @@ import java.util.List;
  *       holding a stale copy of the course must not be able to unpublish it by saving a lesson.
  *       Making it an operation of its own is what separates "I edited this" from "I published
  *       this".
- *   <li><strong>Module order</strong> — a focused command carrying ids and nothing else. Reordering
- *       through the aggregate means posting the whole course back, so one tab dragging a module
- *       would overwrite the title another tab had just changed.
+ *   <li><strong>Order</strong> — three focused commands, one per ordered scope a course has:
+ *       its modules, the root lessons of a flat course, and the lessons inside one module. Each
+ *       carries ids and nothing else. Reordering through the aggregate means posting the whole
+ *       course back, so one tab dragging a module would overwrite the title another tab had just
+ *       changed. Because all three exist, the aggregate save no longer has to be the authority on
+ *       order at all: it keeps the stored order of content it is merely editing, and these
+ *       commands are the only way an instructor-initiated reorder is expressed.
  * </ul>
  */
 @RestController
@@ -113,5 +118,35 @@ public class InstructorCourseController {
             @PathVariable Long courseId,
             @Valid @RequestBody ModuleOrderRequest request) {
         return ApiResponse.success(courseService.reorderModules(user, courseId, request));
+    }
+
+    /**
+     * Rewrites the order of a flat course's root lessons.
+     *
+     * <p>The scope is the lessons that sit under no module. A modular course has none, so the same
+     * call against one is refused rather than quietly doing nothing.
+     */
+    @PatchMapping("/{courseId}/lessons/order")
+    public ApiResponse<InstructorCourseResponse> reorderLessons(
+            @AuthenticationPrincipal User user,
+            @PathVariable Long courseId,
+            @Valid @RequestBody LessonOrderRequest request) {
+        return ApiResponse.success(courseService.reorderLessons(user, courseId, request));
+    }
+
+    /**
+     * Rewrites the order of one module's lessons.
+     *
+     * <p>The module is named by the path, not the body, so this command can only ever arrange
+     * siblings — a lesson cannot be moved into another module by reordering. Re-parenting is a
+     * structural edit and goes through the aggregate save.
+     */
+    @PatchMapping("/{courseId}/modules/{moduleId}/lessons/order")
+    public ApiResponse<InstructorCourseResponse> reorderModuleLessons(
+            @AuthenticationPrincipal User user,
+            @PathVariable Long courseId,
+            @PathVariable Long moduleId,
+            @Valid @RequestBody LessonOrderRequest request) {
+        return ApiResponse.success(courseService.reorderModuleLessons(user, courseId, moduleId, request));
     }
 }

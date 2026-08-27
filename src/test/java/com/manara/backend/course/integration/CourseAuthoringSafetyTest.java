@@ -11,6 +11,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.ArrayList;
@@ -22,6 +25,7 @@ import java.util.concurrent.TimeUnit;
 
 import static com.manara.backend.course.integration.CourseAuthoringFixtures.echoOf;
 import static com.manara.backend.course.integration.CourseAuthoringFixtures.lesson;
+import static com.manara.backend.course.integration.CourseAuthoringFixtures.lessonOrder;
 import static com.manara.backend.course.integration.CourseAuthoringFixtures.module;
 import static com.manara.backend.course.integration.CourseAuthoringFixtures.modularCourse;
 import static com.manara.backend.course.integration.CourseAuthoringFixtures.order;
@@ -35,6 +39,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class CourseAuthoringSafetyTest extends AbstractCourseAuthoringTest {
 
     @Autowired TransactionTemplate transactionTemplate;
+    @Autowired JdbcTemplate jdbc;
+    @Autowired PlatformTransactionManager transactionManager;
 
     private InstructorCourseResponse publishedCourse() {
         return courseService.createCourse(instructorUser,
@@ -210,6 +216,102 @@ class CourseAuthoringSafetyTest extends AbstractCourseAuthoringTest {
     }
 
     @Nested
+    @DisplayName("a focused command writes only what it touched")
+    class NarrowWrites {
+
+        /**
+         * The interleaving the threaded tests can only stumble on, forced to happen every time.
+         *
+         * <p>Hibernate's default UPDATE lists every column of the entity, so a transaction that
+         * changed one field writes back every other field as <em>it</em> read them. That turns any
+         * focused command into a whole-row overwrite of a snapshot that may already be out of date —
+         * a reorder that started before a rename committed would undo the rename on its way out,
+         * having never touched the title. Which is exactly what the focused commands exist to
+         * prevent, so they do not work at all without {@code @DynamicUpdate}.
+         *
+         * <p>Staged rather than raced: the course is read into one transaction, renamed and
+         * committed by another, and only then does the first transaction dirty the row it is
+         * holding and commit. Without the annotation the rename is gone; with it, it stands.
+         */
+        @Test
+        @DisplayName("a course update does not write back columns the transaction never changed")
+        void anUpdateDoesNotClobberColumnsItNeverTouched() {
+            var course = publishedCourse();
+            var externalWriter = new TransactionTemplate(transactionManager);
+            externalWriter.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+
+            transactionTemplate.executeWithoutResult(status -> {
+                // 1. This transaction reads the course, title included.
+                var held = courseRepository.findById(course.getId()).orElseThrow();
+                assertThat(held.getTitle()).isEqualTo("Guarded");
+
+                // 2. Somebody else renames it and commits, on a connection of their own.
+                externalWriter.executeWithoutResult(inner ->
+                        jdbc.update("UPDATE courses SET title = ? WHERE id = ?",
+                                "Renamed by another request", course.getId()));
+
+                // 3. This transaction now changes something else entirely and commits.
+                held.markContentChanged(java.time.LocalDateTime.now());
+            });
+
+            assertThat(reload(course.getId()).getTitle())
+                    .as("the rename must survive a transaction that only moved the content version")
+                    .isEqualTo("Renamed by another request");
+        }
+
+        @Test
+        @DisplayName("a module update does not write back columns the transaction never changed")
+        void aModuleUpdateDoesNotClobberColumnsItNeverTouched() {
+            var course = publishedCourse();
+            var moduleId = moduleIdsOf(course).get(0);
+            var externalWriter = new TransactionTemplate(transactionManager);
+            externalWriter.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+
+            transactionTemplate.executeWithoutResult(status -> {
+                var held = courseModuleRepository.findById(moduleId).orElseThrow();
+                assertThat(held.getTitle()).isEqualTo("One");
+
+                externalWriter.executeWithoutResult(inner ->
+                        jdbc.update("UPDATE course_modules SET title = ? WHERE id = ?",
+                                "Renamed by another request", moduleId));
+
+                // What a reorder does, and the only thing it should write.
+                held.setOrderIndex(held.getOrderIndex() + 10);
+            });
+
+            assertThat(courseModuleRepository.findById(moduleId).orElseThrow().getTitle())
+                    .as("a reorder must not carry a stale module title back into the database")
+                    .isEqualTo("Renamed by another request");
+        }
+
+        @Test
+        @DisplayName("a lesson update does not write back columns the transaction never changed")
+        void aLessonUpdateDoesNotClobberColumnsItNeverTouched() {
+            var course = courseService.createCourse(instructorUser,
+                    modularCourse("Nested", CourseStatus.PUBLISHED,
+                            module("Only", lesson("L1"), lesson("L2"))));
+            var lessonId = moduleLessonIdsOf(course, 0).get(0);
+            var externalWriter = new TransactionTemplate(transactionManager);
+            externalWriter.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+
+            transactionTemplate.executeWithoutResult(status -> {
+                var held = lessonRepository.findById(lessonId).orElseThrow();
+                assertThat(held.getTitle()).isEqualTo("L1");
+
+                externalWriter.executeWithoutResult(inner ->
+                        jdbc.update("UPDATE lessons SET title = ? WHERE id = ?",
+                                "Renamed by another request", lessonId));
+
+                held.setOrderIndex(held.getOrderIndex() + 10);
+            });
+
+            assertThat(lessonRepository.findById(lessonId).orElseThrow().getTitle())
+                    .as("a nested lesson reorder must not carry a stale lesson title back")
+                    .isEqualTo("Renamed by another request");
+        }
+    }
+
+    @Nested
     @DisplayName("concurrency")
     class Concurrency {
 
@@ -250,6 +352,132 @@ class CourseAuthoringSafetyTest extends AbstractCourseAuthoringTest {
             assertThat(finalIds)
                     .as("the stored order must be one of the two that were asked for, not a blend")
                     .isIn(reversed, rotated);
+        }
+
+        @Test
+        @DisplayName("two nested lesson reorders arriving together leave one whole order")
+        void concurrentLessonReordersCannotCorruptTheOrder() throws Exception {
+            var course = courseService.createCourse(instructorUser,
+                    modularCourse("Nested", CourseStatus.PUBLISHED,
+                            module("Only", lesson("L1"), lesson("L2"), lesson("L3"))));
+            var moduleId = moduleIdsOf(course).get(0);
+            var ids = moduleLessonIdsOf(course, 0);
+            List<Long> reversed = List.of(ids.get(2), ids.get(1), ids.get(0));
+            List<Long> rotated = List.of(ids.get(1), ids.get(2), ids.get(0));
+
+            var start = new CountDownLatch(1);
+            ExecutorService pool = Executors.newFixedThreadPool(2);
+            try {
+                var first = pool.submit(() -> {
+                    start.await();
+                    courseService.reorderModuleLessons(instructorUser, course.getId(), moduleId,
+                            lessonOrder(reversed));
+                    return null;
+                });
+                var second = pool.submit(() -> {
+                    start.await();
+                    courseService.reorderModuleLessons(instructorUser, course.getId(), moduleId,
+                            lessonOrder(rotated));
+                    return null;
+                });
+                start.countDown();
+                first.get(30, TimeUnit.SECONDS);
+                second.get(30, TimeUnit.SECONDS);
+            } finally {
+                pool.shutdownNow();
+            }
+
+            var finalIds = lessonRepository.findModuleLessons(course.getId(), moduleId)
+                    .stream().map(l -> l.getId()).toList();
+
+            assertThat(persistedModuleLessonPositions(course.getId(), moduleId))
+                    .as("whichever reorder won, the positions must still be a clean 0..N-1 run")
+                    .containsExactly(0, 1, 2);
+            assertThat(finalIds)
+                    .as("the stored order must be one of the two that were asked for, not a blend")
+                    .isIn(reversed, rotated);
+        }
+
+        @Test
+        @DisplayName("reorders of two different modules do not block or corrupt each other")
+        void concurrentReordersOfDifferentModulesAreIndependent() throws Exception {
+            var course = courseService.createCourse(instructorUser,
+                    modularCourse("Two scopes", CourseStatus.PUBLISHED,
+                            module("First", lesson("A1"), lesson("A2")),
+                            module("Second", lesson("B1"), lesson("B2"))));
+            var firstModuleId = moduleIdsOf(course).get(0);
+            var secondModuleId = moduleIdsOf(course).get(1);
+            var firstIds = moduleLessonIdsOf(course, 0);
+            var secondIds = moduleLessonIdsOf(course, 1);
+
+            var start = new CountDownLatch(1);
+            ExecutorService pool = Executors.newFixedThreadPool(2);
+            try {
+                var first = pool.submit(() -> {
+                    start.await();
+                    courseService.reorderModuleLessons(instructorUser, course.getId(), firstModuleId,
+                            lessonOrder(List.of(firstIds.get(1), firstIds.get(0))));
+                    return null;
+                });
+                var second = pool.submit(() -> {
+                    start.await();
+                    courseService.reorderModuleLessons(instructorUser, course.getId(), secondModuleId,
+                            lessonOrder(List.of(secondIds.get(1), secondIds.get(0))));
+                    return null;
+                });
+                start.countDown();
+                first.get(30, TimeUnit.SECONDS);
+                second.get(30, TimeUnit.SECONDS);
+            } finally {
+                pool.shutdownNow();
+            }
+
+            // Separate scopes, so both drags land in full — neither overwrote the other.
+            assertThat(persistedModuleLessonTitles(course.getId(), firstModuleId))
+                    .containsExactly("A2", "A1");
+            assertThat(persistedModuleLessonTitles(course.getId(), secondModuleId))
+                    .containsExactly("B2", "B1");
+        }
+
+        @Test
+        @DisplayName("a stale aggregate edit and a lesson reorder arriving together both survive")
+        void aConcurrentEditAndLessonReorderDoNotEraseEachOther() throws Exception {
+            var course = courseService.createCourse(instructorUser,
+                    modularCourse("Nested", CourseStatus.PUBLISHED,
+                            module("Only", lesson("L1"), lesson("L2"), lesson("L3"))));
+            var moduleId = moduleIdsOf(course).get(0);
+            var ids = moduleLessonIdsOf(course, 0);
+            var staleCopy = echoOf(course);
+
+            var start = new CountDownLatch(1);
+            ExecutorService pool = Executors.newFixedThreadPool(2);
+            try {
+                var edit = pool.submit(() -> {
+                    start.await();
+                    staleCopy.setTitle("Renamed concurrently");
+                    courseService.updateCourse(instructorUser, course.getId(), staleCopy);
+                    return null;
+                });
+                var reorder = pool.submit(() -> {
+                    start.await();
+                    courseService.reorderModuleLessons(instructorUser, course.getId(), moduleId,
+                            lessonOrder(List.of(ids.get(2), ids.get(0), ids.get(1))));
+                    return null;
+                });
+                start.countDown();
+                edit.get(30, TimeUnit.SECONDS);
+                reorder.get(30, TimeUnit.SECONDS);
+            } finally {
+                pool.shutdownNow();
+            }
+
+            // Whichever order the two landed in, the aggregate save carries no opinion about
+            // lesson order any more — so the reorder is the only thing that decided it.
+            assertThat(reload(course.getId()).getTitle()).isEqualTo("Renamed concurrently");
+            assertThat(persistedModuleLessonTitles(course.getId(), moduleId))
+                    .containsExactly("L3", "L1", "L2");
+            assertThat(persistedModuleLessonPositions(course.getId(), moduleId))
+                    .containsExactly(0, 1, 2);
         }
 
         @Test

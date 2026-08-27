@@ -1,6 +1,7 @@
 package com.manara.backend.course.model;
 
 import com.manara.backend.profile.model.Instructor;
+import org.hibernate.annotations.DynamicUpdate;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -18,7 +19,18 @@ import java.util.Objects;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
+/**
+ * Updates name only the columns that actually changed.
+ *
+ * <p>Not a performance tweak — a correctness one, and the focused ordering commands do not work
+ * without it. Hibernate's default UPDATE lists every column, so a command that changes one field
+ * also writes back every other field as its own transaction happened to read them. A reorder that
+ * began before a rename committed would therefore undo the rename on the way out: it never touched
+ * the title, but it wrote one. Which defeats the entire reason the reorder is a focused command
+ * rather than an aggregate save.
+ */
 @Entity
+@DynamicUpdate
 @Table(name = "courses")
 public class Course {
 

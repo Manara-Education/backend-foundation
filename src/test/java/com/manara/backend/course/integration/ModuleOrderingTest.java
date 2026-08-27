@@ -347,18 +347,68 @@ class ModuleOrderingTest extends AbstractCourseAuthoringTest {
         }
 
         @Test
-        @DisplayName("the aggregate save orders modules by their position in the payload")
-        void theAggregateSaveAlsoReordersDeterministically() {
+        @DisplayName("the aggregate save leaves the stored order of existing modules alone")
+        void theAggregateSaveDoesNotReorderExistingModules() {
             var course = threeModuleCourse();
 
+            // The same three modules, shuffled in the array. This used to be how a reorder was
+            // expressed, and honouring it is precisely what made a stale tab able to undo one:
+            // every save carries the whole course, so every save carried an opinion about order
+            // whether its author had touched the order or not. Reordering is `reorderModules` now,
+            // and an aggregate save says nothing about order at all.
             var reordered = echoOf(course);
             var modules = reordered.getModules();
             reordered.setModules(List.of(modules.get(2), modules.get(0), modules.get(1)));
             courseService.updateCourse(instructorUser, course.getId(), reordered);
 
             assertThat(persistedModuleTitles(course.getId()))
+                    .containsExactly("Introduction", "Basics", "Advanced");
+            assertThat(persistedModulePositions(course.getId())).containsExactly(0, 1, 2);
+        }
+
+        @Test
+        @DisplayName("a stale aggregate save cannot undo a reorder made after it loaded")
+        void aStaleAggregateSaveCannotUndoAReorder() {
+            var course = threeModuleCourse();
+
+            // Tab A loads the course and holds it.
+            var staleCopyHeldByTabA = echoOf(course);
+
+            // Tab B reorders. This is the authoritative order from here on.
+            var ids = moduleIdsOf(course);
+            courseService.reorderModules(instructorUser, course.getId(),
+                    order(List.of(ids.get(2), ids.get(0), ids.get(1))));
+
+            // Tab A now saves an unrelated edit, carrying its hour-old module array with it.
+            staleCopyHeldByTabA.setTitle("Retitled from a stale tab");
+            courseService.updateCourse(instructorUser, course.getId(), staleCopyHeldByTabA);
+
+            // The unrelated edit lands; the reorder survives it.
+            assertThat(courseRepository.findById(course.getId()).orElseThrow().getTitle())
+                    .isEqualTo("Retitled from a stale tab");
+            assertThat(persistedModuleTitles(course.getId()))
                     .containsExactly("Advanced", "Introduction", "Basics");
             assertThat(persistedModulePositions(course.getId())).containsExactly(0, 1, 2);
+        }
+
+        @Test
+        @DisplayName("a module added mid-list lands where the payload put it")
+        void aNewModuleIsPlacedRelativeToItsPayloadNeighbours() {
+            var course = threeModuleCourse();
+
+            // New siblings are the one thing the payload still decides, and it is not stale about
+            // them: the arrangement was built in the tab that is submitting it.
+            var withInsert = echoOf(course);
+            var modules = new java.util.ArrayList<>(withInsert.getModules());
+            var inserted = new com.manara.backend.course.dto.ModuleRequest();
+            inserted.setTitle("Inserted");
+            modules.add(1, inserted);
+            withInsert.setModules(modules);
+            courseService.updateCourse(instructorUser, course.getId(), withInsert);
+
+            assertThat(persistedModuleTitles(course.getId()))
+                    .containsExactly("Introduction", "Inserted", "Basics", "Advanced");
+            assertThat(persistedModulePositions(course.getId())).containsExactly(0, 1, 2, 3);
         }
     }
 

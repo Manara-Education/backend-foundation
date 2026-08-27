@@ -14,6 +14,7 @@ import org.springframework.web.context.WebApplicationContext;
 
 import java.util.List;
 
+import static com.manara.backend.course.integration.CourseAuthoringFixtures.flatCourse;
 import static com.manara.backend.course.integration.CourseAuthoringFixtures.lesson;
 import static com.manara.backend.course.integration.CourseAuthoringFixtures.module;
 import static com.manara.backend.course.integration.CourseAuthoringFixtures.modularCourse;
@@ -169,6 +170,101 @@ class CourseAuthoringApiTest extends AbstractCourseAuthoringTest {
                 .andExpect(jsonPath("$.data.modules[1].title").value("One"));
 
         assertThat(persistedModuleTitles(course.getId())).containsExactly("Two", "One");
+    }
+
+    @Test
+    @DisplayName("the root lesson order route takes lessonIds and answers with the reordered course")
+    void rootLessonOrderRoute() throws Exception {
+        var course = courseService.createCourse(instructorUser,
+                flatCourse("Flat", CourseStatus.PUBLISHED, lesson("One"), lesson("Two")));
+        var ids = lessonIdsOf(course);
+
+        mockMvc.perform(patch(BASE + "/{id}/lessons/order", course.getId())
+                        .with(user(instructorUser)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(
+                                java.util.Map.of("lessonIds", List.of(ids.get(1), ids.get(0))))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.lessons[0].title").value("Two"))
+                .andExpect(jsonPath("$.data.lessons[1].title").value("One"))
+                .andExpect(jsonPath("$.data.status").value("PUBLISHED"))
+                .andExpect(jsonPath("$.data.hasUpdatesSincePublish").value(true));
+
+        assertThat(persistedRootLessonTitles(course.getId())).containsExactly("Two", "One");
+    }
+
+    @Test
+    @DisplayName("the nested lesson order route is scoped by moduleId in the path")
+    void moduleLessonOrderRoute() throws Exception {
+        var course = courseService.createCourse(instructorUser,
+                modularCourse("Modular", CourseStatus.PUBLISHED,
+                        module("One", lesson("A1"), lesson("A2")),
+                        module("Two", lesson("B1"))));
+        var moduleId = moduleIdsOf(course).get(0);
+        var ids = moduleLessonIdsOf(course, 0);
+
+        mockMvc.perform(patch(BASE + "/{id}/modules/{moduleId}/lessons/order", course.getId(), moduleId)
+                        .with(user(instructorUser)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(
+                                java.util.Map.of("lessonIds", List.of(ids.get(1), ids.get(0))))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.modules[0].lessons[0].title").value("A2"))
+                .andExpect(jsonPath("$.data.modules[0].lessons[1].title").value("A1"))
+                // The sibling module is untouched, and so is the module order itself.
+                .andExpect(jsonPath("$.data.modules[0].title").value("One"))
+                .andExpect(jsonPath("$.data.modules[1].lessons[0].title").value("B1"));
+
+        assertThat(persistedModuleLessonTitles(course.getId(), moduleId)).containsExactly("A2", "A1");
+        assertThat(persistedModuleTitles(course.getId())).containsExactly("One", "Two");
+    }
+
+    @Test
+    @DisplayName("a lesson order body with no lessonIds is a validation failure, not a 500")
+    void lessonOrderRequiresTheField() throws Exception {
+        var course = courseService.createCourse(instructorUser,
+                flatCourse("Flat", CourseStatus.PUBLISHED, lesson("One"), lesson("Two")));
+
+        mockMvc.perform(patch(BASE + "/{id}/lessons/order", course.getId())
+                        .with(user(instructorUser)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest());
+
+        assertThat(persistedRootLessonTitles(course.getId())).containsExactly("One", "Two");
+    }
+
+    @Test
+    @DisplayName("a malformed lesson order body is refused before it reaches the service")
+    void malformedLessonOrderIsRefused() throws Exception {
+        var course = courseService.createCourse(instructorUser,
+                flatCourse("Flat", CourseStatus.PUBLISHED, lesson("One"), lesson("Two")));
+
+        mockMvc.perform(patch(BASE + "/{id}/lessons/order", course.getId())
+                        .with(user(instructorUser)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"lessonIds\": \"not-a-list\"}"))
+                .andExpect(status().isBadRequest());
+
+        assertThat(persistedRootLessonTitles(course.getId())).containsExactly("One", "Two");
+    }
+
+    @Test
+    @DisplayName("an anonymous caller cannot reorder lessons at either scope")
+    void anonymousCannotReorderLessons() throws Exception {
+        var course = courseService.createCourse(instructorUser,
+                flatCourse("Flat", CourseStatus.PUBLISHED, lesson("One"), lesson("Two")));
+        var ids = lessonIdsOf(course);
+        var body = objectMapper.writeValueAsString(
+                java.util.Map.of("lessonIds", List.of(ids.get(1), ids.get(0))));
+
+        mockMvc.perform(patch(BASE + "/{id}/lessons/order", course.getId())
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isUnauthorized());
+
+        assertThat(persistedRootLessonTitles(course.getId())).containsExactly("One", "Two");
     }
 
     @Test

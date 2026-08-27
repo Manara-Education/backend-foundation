@@ -230,15 +230,32 @@ class CourseContentSynchronizerTest {
     }
 
     @Test
-    void reordersLessonsByTheirPositionInThePayload() {
+    void keepsTheStoredOrderOfExistingLessonsWhateverOrderThePayloadIsIn() {
         Lesson first = lesson(10L, null, 0);
         Lesson second = lesson(11L, null, 1);
         given(lessonRepository.findCourseLessonsInReadingOrder(COURSE_ID)).willReturn(List.of(first, second));
 
+        // Submitted back to front. An aggregate save carries the whole course, so its arrays are
+        // only as fresh as the tab that built them — order comes from the reorder commands now.
         synchronizer.sync(course, flatCourse(lessonRequest(11L), lessonRequest(10L)), flatSettings(), new CourseContentChanges());
 
-        assertThat(second.getOrderIndex()).isZero();
-        assertThat(first.getOrderIndex()).isEqualTo(1);
+        assertThat(first.getOrderIndex()).isZero();
+        assertThat(second.getOrderIndex()).isEqualTo(1);
+    }
+
+    @Test
+    void reorderingNothingRecordsNoContentChange() {
+        Lesson first = lesson(10L, null, 0);
+        Lesson second = lesson(11L, null, 1);
+        given(lessonRepository.findCourseLessonsInReadingOrder(COURSE_ID)).willReturn(List.of(first, second));
+
+        // Echoed back exactly as stored, apart from the shuffle, so the only thing this payload
+        // could possibly be reporting is a reorder.
+        var changes = new CourseContentChanges();
+        synchronizer.sync(course, flatCourse(echoOf(second), echoOf(first)), flatSettings(), changes);
+
+        // The shuffled array is ignored rather than applied, so there is nothing to announce.
+        assertThat(changes.hasChanges()).isFalse();
     }
 
     // --- fixtures -----------------------------------------------------------
@@ -259,6 +276,17 @@ class CourseContentSynchronizerTest {
                 .description("Description")
                 .structure(CourseStructure.FLAT)
                 .lessons(List.of(lessons))
+                .build();
+    }
+
+    /** The request a client would send back for a lesson it has not touched. */
+    private LessonRequest echoOf(Lesson lesson) {
+        return LessonRequest.builder()
+                .id(lesson.getId())
+                .title(lesson.getTitle())
+                .summary(lesson.getSummary())
+                .description(lesson.getDescription())
+                .videoUrl(lesson.getVideo().getUrl())
                 .build();
     }
 

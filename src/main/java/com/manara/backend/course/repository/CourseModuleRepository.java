@@ -9,6 +9,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public interface CourseModuleRepository extends JpaRepository<CourseModule, Long> {
@@ -36,4 +37,14 @@ public interface CourseModuleRepository extends JpaRepository<CourseModule, Long
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select m from CourseModule m where m.course.id = :courseId order by m.orderIndex asc, m.id asc")
     List<CourseModule> findByCourseIdForUpdate(@Param("courseId") Long courseId);
+
+    /**
+     * One module, resolved against the course that claims to own it.
+     *
+     * <p>Both halves of the path are matched, so a module id from another instructor's course
+     * cannot be reached by pairing it with a course of one's own. The nested-lesson order command
+     * uses this as its ownership gate: the course is checked first, the module is checked against
+     * that course here, and only then is a lesson scope read.
+     */
+    Optional<CourseModule> findByIdAndCourseId(Long id, Long courseId);
 }

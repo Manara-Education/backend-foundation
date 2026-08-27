@@ -107,4 +107,41 @@ abstract class AbstractCourseAuthoringTest extends AbstractPostgresBackedTest {
     protected List<Long> moduleIdsOf(InstructorCourseResponse course) {
         return course.getModules().stream().map(module -> module.getId()).toList();
     }
+
+    /** The stored root-lesson order of a flat course, read back from the database. */
+    protected List<String> persistedRootLessonTitles(Long courseId) {
+        return lessonRepository.findRootLessons(courseId).stream()
+                .map(lesson -> lesson.getTitle())
+                .toList();
+    }
+
+    protected List<Integer> persistedRootLessonPositions(Long courseId) {
+        return lessonRepository.findRootLessons(courseId).stream()
+                .map(lesson -> lesson.getOrderIndex())
+                .toList();
+    }
+
+    /** The stored lesson order inside one module, read back from the database. */
+    protected List<String> persistedModuleLessonTitles(Long courseId, Long moduleId) {
+        return lessonRepository.findModuleLessons(courseId, moduleId).stream()
+                .map(lesson -> lesson.getTitle())
+                .toList();
+    }
+
+    protected List<Integer> persistedModuleLessonPositions(Long courseId, Long moduleId) {
+        return lessonRepository.findModuleLessons(courseId, moduleId).stream()
+                .map(lesson -> lesson.getOrderIndex())
+                .toList();
+    }
+
+    protected List<Long> lessonIdsOf(InstructorCourseResponse course) {
+        return course.getLessons().stream().map(lesson -> lesson.getId()).toList();
+    }
+
+    /** The lesson ids of one module of the editor response, in the order it returned them. */
+    protected List<Long> moduleLessonIdsOf(InstructorCourseResponse course, int moduleIndex) {
+        return course.getModules().get(moduleIndex).getLessons().stream()
+                .map(lesson -> lesson.getId())
+                .toList();
+    }
 }

@@ -33,8 +33,10 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.function.ToIntFunction;
 
 /**
  * Brings a course's stored content in line with a submitted payload.
@@ -54,6 +56,15 @@ import java.util.function.Supplier;
  * ({@code []}) means "remove everything". Without that distinction the previous metadata-only
  * update — which sent no lessons at all — would silently delete a whole course's content.
  * Changing structure while sending no content is rejected outright rather than guessed at.
+ *
+ * <h2>Order is not this class's to rewrite</h2>
+ * Positions of siblings that already exist are left exactly as the database holds them. An
+ * aggregate save carries the whole course, so its arrays are only as fresh as the tab that built
+ * them, and letting them dictate order meant any save could silently undo a reorder made
+ * elsewhere. Reordering has three commands of its own now — modules, root lessons, one module's
+ * lessons — and they are the only way an instructor-initiated reorder is expressed. What is still
+ * decided here is what {@link SiblingOrdering} decides: where a newly created or re-parented child
+ * lands, and how the remaining positions close up after a deletion.
  *
  * <h2>Structure switches</h2>
  * There is no special path for them. Lessons are diffed against every lesson of the course
@@ -105,6 +116,13 @@ public class CourseContentSynchronizer {
         removeStaleLessons(persistedLessons, state.retainedLessonIds, changes);
         removeStaleModules(persistedModules, state.retainedModuleIds, changes);
 
+        // After the removals, so "close the gap a deleted sibling left" is literally what happens
+        // rather than something that has to be arranged for separately.
+        applyPositions(state.moduleOrdering, CourseModule::getOrderIndex, CourseModule::setOrderIndex, changes);
+        for (List<SiblingOrdering.Slot<Lesson>> scope : state.lessonOrderings) {
+            applyPositions(scope, Lesson::getOrderIndex, Lesson::setOrderIndex, changes);
+        }
+
         // Newly created modules and lessons need their generated ids before a quiz can name them
         // as its owner.
         lessonRepository.flush();
@@ -124,6 +142,7 @@ public class CourseContentSynchronizer {
     private void syncModules(Course course, List<ModuleRequest> requests, Map<Long, CourseModule> modulesById,
                              Map<Long, Lesson> lessonsById, SyncState state, CourseContentChanges changes) {
         Set<Long> seen = new HashSet<>();
+        List<SiblingOrdering.Slot<CourseModule>> slots = new ArrayList<>(requests.size());
 
         for (int order = 0; order < requests.size(); order++) {
             ModuleRequest request = requests.get(order);
@@ -131,24 +150,29 @@ public class CourseContentSynchronizer {
 
             if (request.getId() == null) {
                 // Saved eagerly so the lessons created underneath it have a parent id to point at.
-                // Position is the array index, which is what makes the stored order contiguous
-                // 0..N-1 whatever the payload claimed: the first module of an empty course lands on
-                // 0 without anyone asking the database for a max, and an appended one lands on the
-                // next free position without inheriting a legacy gap.
+                // The position given here is provisional — the ordering pass below decides the real
+                // one — but it has to be something, and the array index is as good a placeholder as
+                // any. The per-course uniqueness constraint is deferred to COMMIT precisely so a
+                // placeholder that collides with a sibling's position is not an error before then.
                 module = courseModuleRepository.save(courseModuleMapper.toCourseModule(request, course, order));
                 changes.record();
+                slots.add(SiblingOrdering.Slot.unplaced(module));
             } else {
                 module = resolveOwnChild(modulesById, seen, request.getId(),
                         "error.course.moduleNotInCourse", "error.course.moduleDuplicate");
                 changes.set(module.getTitle(), request.getTitle().trim(), module::setTitle);
                 changes.set(module.getDescription(), trimToNull(request.getDescription()), module::setDescription);
-                changes.set(module.getOrderIndex(), order, module::setOrderIndex);
+                slots.add(SiblingOrdering.Slot.stored(module, module.getOrderIndex()));
             }
 
             state.retainedModuleIds.add(module.getId());
             syncLessons(course, module, request.getLessons(), lessonsById, state, changes);
             state.quizAttachments.add(new QuizAttachment(QuizOwnerType.MODULE, module::getId, request.getQuiz()));
         }
+
+        // Deferred to here rather than done in the loop: a module's final position depends on where
+        // every one of its siblings ended up, which is not known until the last one has been read.
+        state.moduleOrdering = slots;
     }
 
     private void syncLessons(Course course, CourseModule module, List<LessonRequest> requests,
@@ -156,6 +180,8 @@ public class CourseContentSynchronizer {
         if (requests == null) {
             return;
         }
+
+        List<SiblingOrdering.Slot<Lesson>> slots = new ArrayList<>(requests.size());
 
         for (int order = 0; order < requests.size(); order++) {
             LessonRequest request = requests.get(order);
@@ -165,6 +191,7 @@ public class CourseContentSynchronizer {
                 lesson = lessonRepository.save(lessonMapper.toLesson(request, course, module, order));
                 state.videoRefreshTargets.add(lesson);
                 changes.record();
+                slots.add(SiblingOrdering.Slot.unplaced(lesson));
             } else {
                 lesson = resolveOwnChild(lessonsById, state.seenLessonIds, request.getId(),
                         "error.course.lessonNotInCourse", "error.course.lessonDuplicate");
@@ -180,16 +207,24 @@ public class CourseContentSynchronizer {
                 changes.set(lesson.getSummary(), request.getSummary(), lesson::setSummary);
                 changes.set(lesson.getDescription(), request.getDescription(), lesson::setDescription);
                 changes.set(lesson.getVideo(), video.toVideoSource(lesson.getVideo()), lesson::setVideo);
-                changes.set(lesson.getOrderIndex(), order, lesson::setOrderIndex);
                 // Re-parenting is how a structure switch keeps a lesson the payload still wants.
                 // Compared by id rather than by entity: `lesson.getModule()` can be an uninitialised
                 // proxy, whose id-based equals reads a field that is not there yet.
                 Long currentModuleId = lesson.getModule() == null ? null : lesson.getModule().getId();
                 Long nextModuleId = module == null ? null : module.getId();
-                if (!java.util.Objects.equals(currentModuleId, nextModuleId)) {
+                boolean reparented = !java.util.Objects.equals(currentModuleId, nextModuleId);
+                if (reparented) {
                     lesson.setModule(module);
                     changes.record();
                 }
+
+                // A lesson arriving from another parent holds a position that belonged to a
+                // different list, so it is placed from the payload like a brand-new one. A lesson
+                // that stayed put keeps the position the database has for it, whatever order the
+                // submitted array happened to be in.
+                slots.add(reparented
+                        ? SiblingOrdering.Slot.unplaced(lesson)
+                        : SiblingOrdering.Slot.stored(lesson, lesson.getOrderIndex()));
 
                 if (videoChanged) {
                     // Not a content change of its own — the duration is derived, and the real
@@ -201,6 +236,26 @@ public class CourseContentSynchronizer {
 
             state.retainedLessonIds.add(lesson.getId());
             state.quizAttachments.add(new QuizAttachment(QuizOwnerType.LESSON, lesson::getId, request.getQuiz()));
+        }
+
+        state.lessonOrderings.add(slots);
+    }
+
+    /**
+     * Writes the positions {@link SiblingOrdering} resolved, contiguously from zero.
+     *
+     * <p>Compared before assigned like everything else on this path, so a scope that is already in
+     * the resolved order writes nothing and records nothing. That is what keeps re-saving an
+     * unchanged course out of the learners' "Updated" badge — and, now that stored siblings keep
+     * their stored order, what makes an ordinary edit to a course whose order changed elsewhere
+     * come out as a no-op here instead of a silent revert.
+     */
+    private <T> void applyPositions(List<SiblingOrdering.Slot<T>> slots, ToIntFunction<T> positionOf,
+                                    BiConsumer<T, Integer> setPosition, CourseContentChanges changes) {
+        List<T> resolved = SiblingOrdering.resolve(slots);
+        for (int position = 0; position < resolved.size(); position++) {
+            T entity = resolved.get(position);
+            changes.set(positionOf.applyAsInt(entity), position, value -> setPosition.accept(entity, value));
         }
     }
 
@@ -354,6 +409,16 @@ public class CourseContentSynchronizer {
         private final Set<Long> seenLessonIds = new HashSet<>();
         private final List<QuizAttachment> quizAttachments = new ArrayList<>();
         private final List<Lesson> videoRefreshTargets = new ArrayList<>();
+
+        /** The course's modules, awaiting the positions {@link SiblingOrdering} works out. */
+        private List<SiblingOrdering.Slot<CourseModule>> moduleOrdering = List.of();
+
+        /**
+         * One entry per lesson scope the payload described — a flat course's single root list, or
+         * one list per module. Kept apart rather than flattened: positions are per parent, so two
+         * modules both starting at 0 is correct and merging them would be nonsense.
+         */
+        private final List<List<SiblingOrdering.Slot<Lesson>>> lessonOrderings = new ArrayList<>();
     }
 
     /**

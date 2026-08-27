@@ -3,10 +3,20 @@ package com.manara.backend.course.integration;
 import com.manara.backend.course.dto.CourseRequest;
 import com.manara.backend.course.dto.InstructorCourseResponse;
 import com.manara.backend.course.dto.InstructorModuleResponse;
+import com.manara.backend.course.dto.LessonOrderRequest;
 import com.manara.backend.course.dto.ModuleOrderRequest;
+import com.manara.backend.course.dto.SubscriptionPlanRequest;
+import com.manara.backend.course.dto.SubscriptionPlanResponse;
+import com.manara.backend.quiz.dto.InstructorQuizQuestionResponse;
+import com.manara.backend.quiz.dto.InstructorQuizResponse;
+import com.manara.backend.quiz.dto.QuizOptionRequest;
+import com.manara.backend.quiz.dto.QuizOptionResponse;
+import com.manara.backend.quiz.dto.QuizQuestionRequest;
+import com.manara.backend.quiz.dto.QuizRequest;
 import com.manara.backend.course.dto.ModuleRequest;
 import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseStructure;
+import com.manara.backend.course.model.SubscriptionUnit;
 import com.manara.backend.lesson.dto.InstructorLessonResponse;
 import com.manara.backend.lesson.dto.LessonRequest;
 import com.manara.backend.profile.model.Instructor;
@@ -51,6 +61,52 @@ final class CourseAuthoringFixtures {
                 .title(title)
                 .description(title + " description")
                 .videoUrl("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+                .build();
+    }
+
+    /**
+     * A quiz with two questions of three options each, the first option of each being correct.
+     *
+     * <p>Deliberately not the minimum. A one-question, two-option quiz cannot tell a reorder from
+     * a no-op, and cannot express "delete an option" at all without emptying the question — so a
+     * matrix built on one would report coverage it does not have.
+     *
+     * <p>Client-supplied ids are how the aggregate save tells "edit this question" from "add one",
+     * and the answer key is an option id — so the fixture mints its own and points {@code
+     * correctOptionId} at one of them, exactly as the editor does for a quiz being written.
+     */
+    static QuizRequest quiz(String title) {
+        return QuizRequest.builder()
+                .title(title)
+                .instructions(title + " instructions")
+                .passingScore(60)
+                .questions(List.of(question(title + " question one"), question(title + " question two")))
+                .build();
+    }
+
+    private static QuizQuestionRequest question(String text) {
+        String right = "opt-" + SEQUENCE.incrementAndGet();
+        String wrong = "opt-" + SEQUENCE.incrementAndGet();
+        String alsoWrong = "opt-" + SEQUENCE.incrementAndGet();
+        return QuizQuestionRequest.builder()
+                .id("q-" + SEQUENCE.incrementAndGet())
+                .text(text)
+                .explanation(text + " explanation")
+                .hintByAiEnabled(false)
+                .correctOptionId(right)
+                .options(List.of(
+                        QuizOptionRequest.builder().id(right).text("Right").build(),
+                        QuizOptionRequest.builder().id(wrong).text("Wrong").build(),
+                        QuizOptionRequest.builder().id(alsoWrong).text("Also wrong").build()))
+                .build();
+    }
+
+    static SubscriptionPlanRequest plan(String name, int duration, SubscriptionUnit unit, String price) {
+        return SubscriptionPlanRequest.builder()
+                .name(name)
+                .duration(duration)
+                .unit(unit)
+                .price(new java.math.BigDecimal(price))
                 .build();
     }
 
@@ -102,6 +158,10 @@ final class CourseAuthoringFixtures {
                 .lessons(course.getStructure() == CourseStructure.MODULES
                         ? null
                         : course.getLessons().stream().map(CourseAuthoringFixtures::echoOf).toList())
+                .finalQuiz(echoOf(course.getFinalQuiz()))
+                .subscriptionPlans(course.getSubscriptionPlans() == null
+                        ? null
+                        : course.getSubscriptionPlans().stream().map(CourseAuthoringFixtures::echoOf).toList())
                 .build();
     }
 
@@ -111,6 +171,7 @@ final class CourseAuthoringFixtures {
                 .title(module.getTitle())
                 .description(module.getDescription())
                 .lessons(module.getLessons().stream().map(CourseAuthoringFixtures::echoOf).toList())
+                .quiz(echoOf(module.getQuiz()))
                 .build();
     }
 
@@ -121,6 +182,53 @@ final class CourseAuthoringFixtures {
                 .summary(lesson.getSummary())
                 .description(lesson.getDescription())
                 .videoUrl(lesson.getVideoUrl())
+                .quiz(echoOf(lesson.getQuiz()))
+                .build();
+    }
+
+    /**
+     * A quiz echoed back with every id intact — including each option's, which is what the answer
+     * key points at. An echo that dropped the quiz would not be an echo: the aggregate save reads
+     * an absent quiz as "delete it", so a fixture that forgot one would quietly test deletion.
+     */
+    static QuizRequest echoOf(InstructorQuizResponse quiz) {
+        if (quiz == null) {
+            return null;
+        }
+        return QuizRequest.builder()
+                .id(quiz.getId())
+                .title(quiz.getTitle())
+                .instructions(quiz.getInstructions())
+                .passingScore(quiz.getPassingScore())
+                .questions(quiz.getQuestions().stream().map(CourseAuthoringFixtures::echoOf).toList())
+                .build();
+    }
+
+    static QuizQuestionRequest echoOf(InstructorQuizQuestionResponse question) {
+        return QuizQuestionRequest.builder()
+                .id(question.getId())
+                .text(question.getText())
+                .correctOptionId(question.getCorrectOptionId())
+                .explanation(question.getExplanation())
+                .hintByAiEnabled(question.getHintByAiEnabled())
+                .options(question.getOptions().stream().map(CourseAuthoringFixtures::echoOf).toList())
+                .build();
+    }
+
+    static QuizOptionRequest echoOf(QuizOptionResponse option) {
+        return QuizOptionRequest.builder()
+                .id(option.getId())
+                .text(option.getText())
+                .build();
+    }
+
+    static SubscriptionPlanRequest echoOf(SubscriptionPlanResponse plan) {
+        return SubscriptionPlanRequest.builder()
+                .id(plan.getId())
+                .name(plan.getName())
+                .duration(plan.getDuration())
+                .unit(plan.getUnit())
+                .price(plan.getPrice())
                 .build();
     }
 
@@ -134,5 +242,9 @@ final class CourseAuthoringFixtures {
 
     static ModuleOrderRequest order(List<Long> moduleIds) {
         return new ModuleOrderRequest(moduleIds);
+    }
+
+    static LessonOrderRequest lessonOrder(List<Long> lessonIds) {
+        return new LessonOrderRequest(lessonIds);
     }
 }

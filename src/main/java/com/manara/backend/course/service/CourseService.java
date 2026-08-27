@@ -8,6 +8,7 @@ import com.manara.backend.course.dto.CourseRequest;
 import com.manara.backend.course.dto.CourseResponse;
 import com.manara.backend.course.dto.CourseViewMode;
 import com.manara.backend.course.dto.InstructorCourseResponse;
+import com.manara.backend.course.dto.LessonOrderRequest;
 import com.manara.backend.course.dto.ModuleOrderRequest;
 import com.manara.backend.course.model.CourseModule;
 import com.manara.backend.course.repository.CourseModuleRepository;
@@ -19,6 +20,7 @@ import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseStructure;
 import com.manara.backend.course.repository.CourseRepository;
 import com.manara.backend.course.service.view.CourseDetailsViewRegistry;
+import com.manara.backend.lesson.model.Lesson;
 import com.manara.backend.lesson.repository.LessonRepository;
 import com.manara.backend.profile.model.Instructor;
 import com.manara.backend.profile.repository.InstructorRepository;
@@ -38,7 +40,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.BiConsumer;
 import java.util.function.Function;
+import java.util.function.ToIntFunction;
 import java.util.stream.Collectors;
 
 /**
@@ -271,70 +275,168 @@ public class CourseService {
     public InstructorCourseResponse reorderModules(User user, Long courseId, ModuleOrderRequest request) {
         var course = requireOwnedCourse(user, courseId);
 
-        List<Long> requestedIds = requireWellFormedOrder(request);
         // Locked for the rest of the transaction: two reorders of one course arriving together
         // would otherwise interleave into an order neither instructor asked for.
-        List<CourseModule> modules = courseModuleRepository.findByCourseIdForUpdate(courseId);
+        return applyOrder(course, user, "reorderModules",
+                request.getModuleIds(), courseModuleRepository.findByCourseIdForUpdate(courseId),
+                CourseModule::getId, CourseModule::getOrderIndex, CourseModule::setOrderIndex,
+                MODULE_ORDER_CODES);
+    }
 
-        requireCompleteOrder(requestedIds, modules);
+    /**
+     * Rewrites the order of a {@code FLAT} course's root lessons.
+     *
+     * <p>The lesson-scope twin of {@link #reorderModules}, and it exists for exactly the same
+     * reason: dragging a lesson should persist a lesson order, not re-submit the whole course. The
+     * scope is the course's lessons that sit under no module, so running this against a
+     * {@code MODULES} course finds an empty scope and is refused rather than silently doing
+     * nothing.
+     */
+    @Transactional
+    public InstructorCourseResponse reorderLessons(User user, Long courseId, LessonOrderRequest request) {
+        var course = requireOwnedCourse(user, courseId);
 
-        Map<Long, CourseModule> byId = modules.stream()
-                .collect(Collectors.toMap(CourseModule::getId, Function.identity()));
+        return applyOrder(course, user, "reorderLessons",
+                request.getLessonIds(), lessonRepository.findRootLessonsForUpdate(courseId),
+                Lesson::getId, Lesson::getOrderIndex, Lesson::setOrderIndex,
+                LESSON_ORDER_CODES);
+    }
+
+    /**
+     * Rewrites the order of one module's lessons.
+     *
+     * <p>The third and last ordered scope a course has, and the one the editor was previously
+     * unable to persist at all. Moving a lesson inside a module is a lesson-order operation: it
+     * must never reach the module-order command, and it must never be expressed as an aggregate
+     * save carrying a stale copy of the rest of the course.
+     *
+     * <p>The module is resolved against this course before anything is read, so a module id
+     * belonging to somebody else's course is rejected as not found rather than reordered. The
+     * lesson scope is then the lessons of that module and no others, which is what stops this
+     * command from moving a lesson between modules — re-parenting is a structural edit and belongs
+     * to the aggregate save.
+     */
+    @Transactional
+    public InstructorCourseResponse reorderModuleLessons(User user, Long courseId, Long moduleId,
+                                                         LessonOrderRequest request) {
+        var course = requireOwnedCourse(user, courseId);
+        requireOwnedModule(courseId, moduleId);
+
+        return applyOrder(course, user, "reorderModuleLessons",
+                request.getLessonIds(), lessonRepository.findModuleLessonsForUpdate(courseId, moduleId),
+                Lesson::getId, Lesson::getOrderIndex, Lesson::setOrderIndex,
+                LESSON_ORDER_CODES);
+    }
+
+    /**
+     * The one ordering command, wearing three names.
+     *
+     * <p>Modules, root lessons and a module's lessons are the same operation on three different
+     * sibling collections, and writing it once is what stops them drifting apart — a validation
+     * rule added for one scope cannot go missing from another, and none of them can grow its own
+     * idea of what a no-op is.
+     *
+     * <p>The scope is passed in already locked and already narrowed to siblings the caller has
+     * proved the instructor owns, so nothing here has to be told which course it is working on:
+     * an id that is not in {@code siblings} is unreachable, whoever it belongs to.
+     */
+    private <T> InstructorCourseResponse applyOrder(Course course, User user, String operation,
+                                                    List<Long> requestedIds, List<T> siblings,
+                                                    Function<T, Long> idOf, ToIntFunction<T> positionOf,
+                                                    BiConsumer<T, Integer> setPosition, OrderCodes codes) {
+        List<Long> ids = requireWellFormedOrder(requestedIds, codes);
+        requireCompleteOrder(ids, siblings, idOf, codes);
+
+        Map<Long, T> byId = siblings.stream().collect(Collectors.toMap(idOf, Function.identity()));
 
         var changes = new CourseContentChanges();
-        for (int position = 0; position < requestedIds.size(); position++) {
-            CourseModule module = byId.get(requestedIds.get(position));
-            changes.set(module.getOrderIndex(), position, module::setOrderIndex);
+        for (int position = 0; position < ids.size(); position++) {
+            T sibling = byId.get(ids.get(position));
+            int current = positionOf.applyAsInt(sibling);
+            int next = position;
+            changes.set(current, next, value -> setPosition.accept(sibling, value));
         }
 
-        // A reorder that asked for the order the course is already in writes nothing and, crucially,
+        // A reorder that asked for the order the scope is already in writes nothing and, crucially,
         // does not tell every enrolled learner the course changed.
-        markContentChangedIfNeeded(course, changes, LocalDateTime.now(clock), "reorderModules", user, courseId);
+        markContentChangedIfNeeded(course, changes, LocalDateTime.now(clock), operation, user, course.getId());
         if (changes.hasChanges()) {
-            log.info("Course modules reordered: courseId={} instructorUserId={} moduleCount={}",
-                    courseId, user.getId(), requestedIds.size());
+            log.info("Course content reordered: courseId={} instructorUserId={} operation={} siblingCount={}",
+                    course.getId(), user.getId(), operation, ids.size());
         }
 
         return saveAndRespond(course);
     }
 
     /** Rejects a malformed payload before it is ever compared against the course. */
-    private List<Long> requireWellFormedOrder(ModuleOrderRequest request) {
-        List<Long> ids = request.getModuleIds();
+    private List<Long> requireWellFormedOrder(List<Long> ids, OrderCodes codes) {
         if (ids == null) {
-            throw new BusinessException("error.course.moduleOrderRequired");
+            throw new BusinessException(codes.required());
         }
         if (ids.stream().anyMatch(Objects::isNull)) {
-            throw new BusinessException("error.course.moduleOrderNullId");
+            throw new BusinessException(codes.nullId());
         }
         if (new HashSet<>(ids).size() != ids.size()) {
-            throw new BusinessException("error.course.moduleOrderDuplicate");
+            throw new BusinessException(codes.duplicate());
         }
         return ids;
     }
 
     /**
-     * The whole course, exactly once.
+     * The whole scope, exactly once.
      *
      * <p>Set equality, not merely "every id exists": an id from another instructor's course is not
-     * in this course's modules and is rejected here, and a list that silently omits a module is
-     * rejected too rather than leaving that module stranded at whatever position it happened to
-     * hold.
+     * in this scope's siblings and is rejected here, and a list that silently omits one is rejected
+     * too rather than leaving that sibling stranded at whatever position it happened to hold.
+     *
+     * <p>An empty scope is not a special case. A course with no modules, or a module with no
+     * lessons, accepts only the empty list — so a reorder aimed at the wrong structure, or at a
+     * scope whose contents were deleted in another tab, comes back as an incomplete order rather
+     * than a silent success.
      */
-    private void requireCompleteOrder(List<Long> requestedIds, List<CourseModule> modules) {
-        Set<Long> owned = modules.stream().map(CourseModule::getId).collect(Collectors.toCollection(LinkedHashSet::new));
+    private <T> void requireCompleteOrder(List<Long> requestedIds, List<T> siblings,
+                                          Function<T, Long> idOf, OrderCodes codes) {
+        Set<Long> owned = siblings.stream().map(idOf).collect(Collectors.toCollection(LinkedHashSet::new));
         Set<Long> requested = new LinkedHashSet<>(requestedIds);
 
         List<Long> unknown = new ArrayList<>(requested);
         unknown.removeAll(owned);
         if (!unknown.isEmpty()) {
-            throw new BusinessException("error.course.moduleNotInCourse", unknown.get(0));
+            throw new BusinessException(codes.notInScope(), unknown.get(0));
         }
 
         if (requested.size() != owned.size()) {
-            throw new BusinessException("error.course.moduleOrderIncomplete", owned.size(), requested.size());
+            throw new BusinessException(codes.incomplete(), owned.size(), requested.size());
         }
     }
+
+    /**
+     * Resolves a module against the course in the path.
+     *
+     * <p>Separate from the lesson lookup on purpose: a module id that belongs to another course
+     * has to fail as a missing module, not as an empty lesson scope, or a caller probing for other
+     * instructors' module ids could tell the two apart.
+     */
+    private CourseModule requireOwnedModule(Long courseId, Long moduleId) {
+        return courseModuleRepository.findByIdAndCourseId(moduleId, courseId)
+                .orElseThrow(() -> new ResourceNotFoundException("error.course.moduleNotInCourse",
+                        String.valueOf(moduleId)));
+    }
+
+    /** The message keys one ordered scope answers with, so the shared command can stay scope-blind. */
+    private record OrderCodes(String required, String nullId, String duplicate, String notInScope,
+                              String incomplete) {
+    }
+
+    private static final OrderCodes MODULE_ORDER_CODES = new OrderCodes(
+            "error.course.moduleOrderRequired", "error.course.moduleOrderNullId",
+            "error.course.moduleOrderDuplicate", "error.course.moduleNotInCourse",
+            "error.course.moduleOrderIncomplete");
+
+    private static final OrderCodes LESSON_ORDER_CODES = new OrderCodes(
+            "error.course.lessonOrderRequired", "error.course.lessonOrderNullId",
+            "error.course.lessonOrderDuplicate", "error.course.lessonNotInScope",
+            "error.course.lessonOrderIncomplete");
 
     /**
      * Moves the content version — once per request, and only when something really changed.
