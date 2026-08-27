@@ -26,9 +26,11 @@ public class DashboardMapper {
                 .status(resolveStatus(progress))
                 .category(course.getSubtitle())
                 .duration(formatDuration(course.getDuration()))
-                // Read straight off the course the enrolment already points at, so the learner's
-                // course list costs no extra query to answer "has this changed since I enrolled?".
                 .hasUpdatesSincePublish(course.hasUpdatesSincePublish())
+                // The learner's own answer, from the enrollment this card was built from. Asked of
+                // the enrollment rather than computed here, so this screen and the course-details
+                // screen are reading one implementation of the rule.
+                .hasUpdatesSinceEnrollment(enrollment.hasCourseUpdates())
                 .build();
     }
 

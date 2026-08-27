@@ -1,5 +1,6 @@
 package com.manara.backend.quiz.service;
 
+import com.manara.backend.course.model.ContentChangeType;
 import com.manara.backend.quiz.dto.QuizOptionRequest;
 import com.manara.backend.quiz.dto.QuizQuestionRequest;
 import com.manara.backend.quiz.dto.QuizRequest;
@@ -89,25 +90,38 @@ public class QuizService {
                 return QuizSyncResult.unchanged(null);
             }
             quizRepository.delete(existing);
-            return QuizSyncResult.changed(null);
+            // Returned rather than dropped: a deleted quiz is the only thing left to describe the
+            // removal with, and after this method returns it is unreachable.
+            return QuizSyncResult.of(existing, ContentChangeType.REMOVED);
         }
 
         quizValidator.validate(request);
 
         if (existing == null) {
-            return QuizSyncResult.changed(quizRepository.save(quizMapper.toQuiz(request, ownerType, ownerId)));
+            return QuizSyncResult.of(
+                    quizRepository.save(quizMapper.toQuiz(request, ownerType, ownerId)),
+                    ContentChangeType.CREATED);
         }
 
         // Compared before assigned, throughout. Re-submitting a quiz unchanged has to come out as
         // "nothing happened", because the course above this decides from that answer whether to
         // tell every enrolled learner the course was updated.
-        boolean changed = assign(existing.getTitle(), request.getTitle().trim(), existing::setTitle);
-        changed |= assign(existing.getInstructions(), trimToNull(request.getInstructions()), existing::setInstructions);
-        changed |= assign(existing.getPassingScore(), request.getPassingScore(), existing::setPassingScore);
-        changed |= syncQuestions(existing, request.getQuestions());
+        boolean renamed = assign(existing.getTitle(), request.getTitle().trim(), existing::setTitle);
+        // The pass mark and the questions are what a learner is actually assessed on; the title and
+        // instructions are the label on the outside. Kept apart so the sentence the learner reads
+        // can be the accurate one rather than the generic one.
+        boolean rewritten = assign(existing.getInstructions(), trimToNull(request.getInstructions()),
+                existing::setInstructions);
+        rewritten |= assign(existing.getPassingScore(), request.getPassingScore(), existing::setPassingScore);
+        rewritten |= syncQuestions(existing, request.getQuestions());
 
         Quiz saved = quizRepository.save(existing);
-        return changed ? QuizSyncResult.changed(saved) : QuizSyncResult.unchanged(saved);
+        if (rewritten) {
+            return QuizSyncResult.of(saved, ContentChangeType.CONTENT_UPDATED);
+        }
+        return renamed
+                ? QuizSyncResult.of(saved, ContentChangeType.METADATA_UPDATED)
+                : QuizSyncResult.unchanged(saved);
     }
 
     /**

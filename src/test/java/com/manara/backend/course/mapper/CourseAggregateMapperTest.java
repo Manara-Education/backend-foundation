@@ -9,6 +9,7 @@ import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseStructure;
 import com.manara.backend.course.service.CourseAggregate;
 import com.manara.backend.course.service.CourseProgression;
+import com.manara.backend.course.service.CourseUpdateWindow;
 import com.manara.backend.course.service.CourseProgressionCalculator;
 import com.manara.backend.lesson.mapper.LessonMapper;
 import com.manara.backend.lesson.model.Lesson;
@@ -70,7 +71,7 @@ class CourseAggregateMapperTest {
     @Test
     void theLearnerViewLeaksNoAnswerAnywhereInTheSerializedTree() throws Exception {
         var aggregate = flatAggregate();
-        var response = mapper.toCourseDetailsResponse(aggregate, enrolled(aggregate), null);
+        var response = mapper.toCourseDetailsResponse(aggregate, enrolled(aggregate), null, CourseUpdateWindow.notEnrolled());
 
         String json = objectMapper.writeValueAsString(response);
 
@@ -85,7 +86,7 @@ class CourseAggregateMapperTest {
     @Test
     void theLearnerViewLeaksNoAnswerFromAModuleExamEither() throws Exception {
         var aggregate = modularAggregate();
-        var response = mapper.toCourseDetailsResponse(aggregate, enrolled(aggregate), null);
+        var response = mapper.toCourseDetailsResponse(aggregate, enrolled(aggregate), null, CourseUpdateWindow.notEnrolled());
 
         String json = objectMapper.writeValueAsString(response);
 
@@ -98,7 +99,7 @@ class CourseAggregateMapperTest {
     void courseDiscoveryListsTheCurriculumWithoutHandingOutAnyOfIt() {
         var aggregate = flatAggregate();
 
-        var response = mapper.toCourseDetailsResponse(aggregate, CourseProgression.forVisitor(), null);
+        var response = mapper.toCourseDetailsResponse(aggregate, CourseProgression.forVisitor(), null, CourseUpdateWindow.notEnrolled());
 
         var lesson = response.getLessons().getFirst();
         assertThat(lesson.getLocked()).isTrue();
@@ -114,7 +115,7 @@ class CourseAggregateMapperTest {
     void anEnrolledLearnerCarriesTheirOwnProgressionInTheResponse() {
         var aggregate = flatAggregate();
 
-        var response = mapper.toCourseDetailsResponse(aggregate, enrolled(aggregate), null);
+        var response = mapper.toCourseDetailsResponse(aggregate, enrolled(aggregate), null, CourseUpdateWindow.notEnrolled());
 
         assertThat(response.getLessons().getFirst().getLocked()).isFalse();
         assertThat(response.getProgress()).isZero();
@@ -126,7 +127,7 @@ class CourseAggregateMapperTest {
     void aModuleTheLearnerHasNotReachedIsMarkedLocked() {
         var aggregate = modularAggregate();
 
-        var response = mapper.toCourseDetailsResponse(aggregate, CourseProgression.forVisitor(), null);
+        var response = mapper.toCourseDetailsResponse(aggregate, CourseProgression.forVisitor(), null, CourseUpdateWindow.notEnrolled());
 
         assertThat(response.getModules().getFirst().getLocked()).isTrue();
     }

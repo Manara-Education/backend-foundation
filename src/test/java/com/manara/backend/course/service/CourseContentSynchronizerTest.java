@@ -97,7 +97,7 @@ class CourseContentSynchronizerTest {
         // answer with a result rather than null. "Nothing changed" is the neutral default; the
         // tests that care about change detection say so themselves.
         given(quizService.sync(any(), any(), any()))
-                .willReturn(new com.manara.backend.quiz.service.QuizSyncResult(null, false));
+                .willReturn(new com.manara.backend.quiz.service.QuizSyncResult(null, null));
         given(lessonRepository.save(any(Lesson.class))).willAnswer(invocation -> invocation.getArgument(0));
         given(courseModuleRepository.save(any(CourseModule.class))).willAnswer(invocation -> invocation.getArgument(0));
         given(subscriptionPlanRepository.findByCourseIdOrderByOrderIndexAsc(COURSE_ID)).willReturn(List.of());

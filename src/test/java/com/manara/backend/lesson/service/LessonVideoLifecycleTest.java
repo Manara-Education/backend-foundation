@@ -8,6 +8,8 @@ import com.manara.backend.course.model.CourseStructure;
 import com.manara.backend.course.repository.CourseModuleRepository;
 import com.manara.backend.course.repository.CourseRepository;
 import com.manara.backend.course.repository.EnrollmentRepository;
+import com.manara.backend.course.repository.CourseChangeRepository;
+import com.manara.backend.course.service.CourseContentJournal;
 import com.manara.backend.course.service.CourseProgressionService;
 import com.manara.backend.course.service.LearnerCourseAccess;
 import com.manara.backend.lesson.dto.LessonRequest;
@@ -76,6 +78,9 @@ class LessonVideoLifecycleTest {
     @Mock private VideoMetadataService videoMetadataService;
     @Mock private MessageService messageService;
 
+    @Mock
+    private CourseChangeRepository courseChangeRepository;
+
     private LessonService lessonService;
     private Course course;
 
@@ -89,6 +94,7 @@ class LessonVideoLifecycleTest {
         lessonService = new LessonService(
                 lessonRepository, courseRepository, courseModuleRepository, completedLessonRepository,
                 enrollmentRepository, learnerCourseAccess, courseProgressionService,
+                new CourseContentJournal(courseChangeRepository),
                 new LessonMapper(durationFormatter, resolver), quizService, new QuizMapper(),
                 videoMetadataService, resolver, java.time.Clock.systemUTC());
 

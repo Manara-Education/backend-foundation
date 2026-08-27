@@ -6,11 +6,13 @@ import com.manara.backend.course.dto.ModuleRequest;
 import com.manara.backend.course.dto.SubscriptionPlanRequest;
 import com.manara.backend.course.mapper.CourseModuleMapper;
 import com.manara.backend.course.mapper.SubscriptionPlanMapper;
+import com.manara.backend.course.model.ContentChangeType;
 import com.manara.backend.course.model.Course;
 import com.manara.backend.course.model.CourseAccessType;
 import com.manara.backend.course.model.CourseModule;
 import com.manara.backend.course.model.CourseStructure;
 import com.manara.backend.course.model.SubscriptionPlan;
+import com.manara.backend.course.model.TrackedContent;
 import com.manara.backend.course.repository.CourseModuleRepository;
 import com.manara.backend.course.repository.SubscriptionPlanRepository;
 import com.manara.backend.lesson.dto.LessonRequest;
@@ -24,6 +26,7 @@ import com.manara.backend.video.service.VideoProviderResolver;
 import com.manara.backend.quiz.dto.QuizRequest;
 import com.manara.backend.quiz.model.QuizOwnerType;
 import com.manara.backend.quiz.service.QuizService;
+import com.manara.backend.quiz.service.QuizSyncResult;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -94,7 +97,7 @@ public class CourseContentSynchronizer {
         if (request.carriesContentFor(settings.structure())) {
             syncContent(course, request, settings.structure(), changes);
         }
-        syncSubscriptionPlans(course, request, settings, changes);
+        syncSubscriptionPlans(course, request, settings);
     }
 
     private void syncContent(Course course, CourseRequest request, CourseStructure structure,
@@ -105,7 +108,9 @@ public class CourseContentSynchronizer {
         Map<Long, CourseModule> modulesById = indexById(persistedModules, CourseModule::getId);
         Map<Long, Lesson> lessonsById = indexById(persistedLessons, Lesson::getId);
 
-        SyncState state = new SyncState();
+        // Carried on the state so the lesson pass can name the module a lesson is leaving without
+        // initialising a proxy for it — and without failing for a module deleted later in this pass.
+        SyncState state = new SyncState(modulesById);
 
         if (structure == CourseStructure.MODULES) {
             syncModules(course, request.getModules(), modulesById, lessonsById, state, changes);
@@ -128,13 +133,10 @@ public class CourseContentSynchronizer {
         lessonRepository.flush();
 
         for (QuizAttachment attachment : state.quizAttachments) {
-            changes.recordIf(quizService
-                    .sync(attachment.ownerType(), attachment.ownerId().get(), attachment.request())
-                    .changed());
+            recordQuizSync(changes,
+                    quizService.sync(attachment.ownerType(), attachment.ownerId().get(), attachment.request()));
         }
-        changes.recordIf(quizService
-                .sync(QuizOwnerType.COURSE, course.getId(), request.getFinalQuiz())
-                .changed());
+        recordQuizSync(changes, quizService.sync(QuizOwnerType.COURSE, course.getId(), request.getFinalQuiz()));
 
         refreshDurations(course, state.videoRefreshTargets);
     }
@@ -155,13 +157,15 @@ public class CourseContentSynchronizer {
                 // any. The per-course uniqueness constraint is deferred to COMMIT precisely so a
                 // placeholder that collides with a sibling's position is not an error before then.
                 module = courseModuleRepository.save(courseModuleMapper.toCourseModule(request, course, order));
-                changes.record();
+                changes.of(module).created();
                 slots.add(SiblingOrdering.Slot.unplaced(module));
             } else {
                 module = resolveOwnChild(modulesById, seen, request.getId(),
                         "error.course.moduleNotInCourse", "error.course.moduleDuplicate");
-                changes.set(module.getTitle(), request.getTitle().trim(), module::setTitle);
-                changes.set(module.getDescription(), trimToNull(request.getDescription()), module::setDescription);
+                changes.of(module)
+                        .metadata(module.getTitle(), request.getTitle().trim(), module::setTitle)
+                        .content(module.getDescription(), trimToNull(request.getDescription()),
+                                module::setDescription);
                 slots.add(SiblingOrdering.Slot.stored(module, module.getOrderIndex()));
             }
 
@@ -190,7 +194,7 @@ public class CourseContentSynchronizer {
             if (request.getId() == null) {
                 lesson = lessonRepository.save(lessonMapper.toLesson(request, course, module, order));
                 state.videoRefreshTargets.add(lesson);
-                changes.record();
+                changes.of(lesson).created();
                 slots.add(SiblingOrdering.Slot.unplaced(lesson));
             } else {
                 lesson = resolveOwnChild(lessonsById, state.seenLessonIds, request.getId(),
@@ -203,10 +207,11 @@ public class CourseContentSynchronizer {
                         request.getVideoUrl(), request.getVideoProvider());
 
                 boolean videoChanged = !video.url().equals(lesson.getVideo().getUrl());
-                changes.set(lesson.getTitle(), request.getTitle().trim(), lesson::setTitle);
-                changes.set(lesson.getSummary(), request.getSummary(), lesson::setSummary);
-                changes.set(lesson.getDescription(), request.getDescription(), lesson::setDescription);
-                changes.set(lesson.getVideo(), video.toVideoSource(lesson.getVideo()), lesson::setVideo);
+                changes.of(lesson)
+                        .metadata(lesson.getTitle(), request.getTitle().trim(), lesson::setTitle)
+                        .metadata(lesson.getSummary(), request.getSummary(), lesson::setSummary)
+                        .content(lesson.getDescription(), request.getDescription(), lesson::setDescription)
+                        .content(lesson.getVideo(), video.toVideoSource(lesson.getVideo()), lesson::setVideo);
                 // Re-parenting is how a structure switch keeps a lesson the payload still wants.
                 // Compared by id rather than by entity: `lesson.getModule()` can be an uninitialised
                 // proxy, whose id-based equals reads a field that is not there yet.
@@ -214,8 +219,13 @@ public class CourseContentSynchronizer {
                 Long nextModuleId = module == null ? null : module.getId();
                 boolean reparented = !java.util.Objects.equals(currentModuleId, nextModuleId);
                 if (reparented) {
+                    // Read before the write, because "moved from Module 1" is the one fact about
+                    // this change that stops existing the moment the new parent is assigned.
+                    String from = currentModuleId == null
+                            ? null
+                            : titleOfModule(state.modulesById, currentModuleId);
                     lesson.setModule(module);
-                    changes.record();
+                    changes.of(lesson).moved(from);
                 }
 
                 // A lesson arriving from another parent holds a position that belonged to a
@@ -242,6 +252,31 @@ public class CourseContentSynchronizer {
     }
 
     /**
+     * Carries a nested quiz's own diff up to the course's recorder.
+     *
+     * <p>The quiz aggregate works out for itself whether its title moved or its questions did — it
+     * is the only thing holding both versions — and reports which. Recording it against the quiz
+     * rather than against the course is what lets a curriculum mark one exam updated instead of the
+     * whole module it closes.
+     */
+    private void recordQuizSync(CourseContentChanges changes, QuizSyncResult result) {
+        if (result.quiz() != null && result.changed()) {
+            changes.of(result.quiz()).recordIf(true, result.outcome());
+        }
+    }
+
+    /**
+     * The title of the module a lesson is leaving, from the map already loaded for this pass.
+     *
+     * <p>Never a fresh lookup: the entity may be a lazy proxy whose title would force a select, and
+     * a module deleted earlier in the same pass would no longer be there to find.
+     */
+    private String titleOfModule(Map<Long, CourseModule> modulesById, Long moduleId) {
+        CourseModule module = modulesById.get(moduleId);
+        return module == null ? null : module.getTitle();
+    }
+
+    /**
      * Writes the positions {@link SiblingOrdering} resolved, contiguously from zero.
      *
      * <p>Compared before assigned like everything else on this path, so a scope that is already in
@@ -250,12 +285,18 @@ public class CourseContentSynchronizer {
      * their stored order, what makes an ordinary edit to a course whose order changed elsewhere
      * come out as a no-op here instead of a silent revert.
      */
-    private <T> void applyPositions(List<SiblingOrdering.Slot<T>> slots, ToIntFunction<T> positionOf,
-                                    BiConsumer<T, Integer> setPosition, CourseContentChanges changes) {
+    private <T extends TrackedContent> void applyPositions(
+            List<SiblingOrdering.Slot<T>> slots, ToIntFunction<T> positionOf,
+            BiConsumer<T, Integer> setPosition, CourseContentChanges changes) {
         List<T> resolved = SiblingOrdering.resolve(slots);
         for (int position = 0; position < resolved.size(); position++) {
             T entity = resolved.get(position);
-            changes.set(positionOf.applyAsInt(entity), position, value -> setPosition.accept(entity, value));
+            // Recorded as a reorder, which is the weakest description there is — so a sibling that
+            // only shifted up because the lesson above it was deleted keeps whatever stronger thing
+            // was already said about it, and a lesson that was created here stays "new" rather than
+            // being downgraded to "moved position".
+            changes.of(entity)
+                    .reordered(positionOf.applyAsInt(entity), position, value -> setPosition.accept(entity, value));
         }
     }
 
@@ -273,7 +314,7 @@ public class CourseContentSynchronizer {
             return;
         }
 
-        changes.record();
+        stale.forEach(lesson -> changes.of(lesson).removed());
         List<Long> staleIds = stale.stream().map(Lesson::getId).toList();
         quizService.deleteByOwners(QuizOwnerType.LESSON, staleIds);
         completedLessonRepository.deleteByLessonIdIn(staleIds);
@@ -291,7 +332,7 @@ public class CourseContentSynchronizer {
             return;
         }
 
-        changes.record();
+        stale.forEach(module -> changes.of(module).removed());
         quizService.deleteByOwners(QuizOwnerType.MODULE, stale.stream().map(CourseModule::getId).toList());
         courseModuleRepository.deleteAll(stale);
         courseModuleRepository.flush();
@@ -301,9 +342,21 @@ public class CourseContentSynchronizer {
      * Plans are only meaningful for subscription courses, so any other access type clears them.
      * A subscription course whose payload omits the collection keeps what it has — that is the
      * same "absent means untouched" rule the content tree follows.
+     *
+     * <h4>Plans are commerce, not curriculum</h4>
+     * Nothing here records a content change, and this method is deliberately not given the recorder
+     * to record into. A plan is what a course costs and for how long — renaming it, repricing it,
+     * adding a cheaper tier or withdrawing one changes what a <em>future</em> buyer is offered and
+     * changes nothing whatsoever about what an existing learner is studying.
+     *
+     * <p>It used to record all four. An instructor adjusting next quarter's pricing therefore told
+     * every enrolled student that their course had been updated, and sent them looking through a
+     * curriculum in which nothing had moved. Existing subscribers are unaffected in the way that
+     * matters too: what they were charged is on their own {@code CourseSubscription} row, and their
+     * access window is on their {@code CourseEntitlement}, neither of which is re-read against a
+     * plan's current price.
      */
-    private void syncSubscriptionPlans(Course course, CourseRequest request, ResolvedCourseSettings settings,
-                                       CourseContentChanges changes) {
+    private void syncSubscriptionPlans(Course course, CourseRequest request, ResolvedCourseSettings settings) {
         List<SubscriptionPlanRequest> requests = request.getSubscriptionPlans();
         boolean subscription = settings.accessType() == CourseAccessType.SUBSCRIPTION;
 
@@ -325,18 +378,14 @@ public class CourseContentSynchronizer {
             if (planRequest.getId() == null) {
                 plan = subscriptionPlanRepository.save(
                         subscriptionPlanMapper.toSubscriptionPlan(planRequest, course, order));
-                changes.record();
             } else {
                 plan = resolveOwnChild(plansById, seen, planRequest.getId(),
                         "error.course.planNotInCourse", "error.course.planDuplicate");
-                changes.set(plan.getName(), planRequest.getName().trim(), plan::setName);
-                changes.set(plan.getDuration(), planRequest.getDuration(), plan::setDuration);
-                changes.set(plan.getUnit(), planRequest.getUnit(), plan::setUnit);
-                // Compared by value: a scale-only difference between 100 and 100.00 is not a
-                // price change, and BigDecimal.equals would call it one.
-                changes.recordIf(!sameAmount(plan.getPrice(), planRequest.getPrice()));
+                plan.setName(planRequest.getName().trim());
+                plan.setDuration(planRequest.getDuration());
+                plan.setUnit(planRequest.getUnit());
                 plan.setPrice(planRequest.getPrice());
-                changes.set(plan.getOrderIndex(), order, plan::setOrderIndex);
+                plan.setOrderIndex(order);
             }
             retained.add(plan.getId());
         }
@@ -345,17 +394,8 @@ public class CourseContentSynchronizer {
                 .filter(plan -> !retained.contains(plan.getId()))
                 .toList();
         if (!stale.isEmpty()) {
-            changes.record();
             subscriptionPlanRepository.deleteAll(stale);
         }
-    }
-
-    /** {@code null}-safe numeric equality, so 100 and 100.00 are the same price. */
-    private boolean sameAmount(java.math.BigDecimal left, java.math.BigDecimal right) {
-        if (left == null || right == null) {
-            return left == right;
-        }
-        return left.compareTo(right) == 0;
     }
 
     /**
@@ -404,6 +444,14 @@ public class CourseContentSynchronizer {
 
     /** Mutable bookkeeping for one synchronization pass. */
     private static final class SyncState {
+
+        /** The course's modules as they were when this pass began, by id. */
+        private final Map<Long, CourseModule> modulesById;
+
+        private SyncState(Map<Long, CourseModule> modulesById) {
+            this.modulesById = modulesById;
+        }
+
         private final Set<Long> retainedModuleIds = new HashSet<>();
         private final Set<Long> retainedLessonIds = new HashSet<>();
         private final Set<Long> seenLessonIds = new HashSet<>();

@@ -4,6 +4,12 @@ import com.manara.backend.course.dto.InstructorCourseResponse;
 import com.manara.backend.course.model.Course;
 import com.manara.backend.course.repository.CourseModuleRepository;
 import com.manara.backend.course.repository.CourseRepository;
+import com.manara.backend.course.dto.CourseDetailsResponse;
+import com.manara.backend.course.dto.CourseViewMode;
+import com.manara.backend.course.model.CourseEntitlement;
+import com.manara.backend.course.model.Enrollment;
+import com.manara.backend.course.model.EntitlementSource;
+import com.manara.backend.course.repository.CourseEntitlementRepository;
 import com.manara.backend.course.repository.EnrollmentRepository;
 import com.manara.backend.course.service.CourseService;
 import com.manara.backend.dashboard.service.DashboardService;
@@ -22,6 +28,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static com.manara.backend.course.integration.CourseAuthoringFixtures.instructor;
@@ -52,6 +59,8 @@ abstract class AbstractCourseAuthoringTest extends AbstractPostgresBackedTest {
     @Autowired protected InstructorRepository instructorRepository;
     @Autowired protected StudentRepository studentRepository;
     @Autowired protected DashboardService dashboardService;
+    @Autowired protected CourseEntitlementRepository courseEntitlementRepository;
+    @Autowired protected org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
 
     /**
      * Stubbed because it reaches YouTube and Vimeo over the network. Its absence is also what makes
@@ -83,6 +92,92 @@ abstract class AbstractCourseAuthoringTest extends AbstractPostgresBackedTest {
 
     protected Student studentProfileOf(User user) {
         return studentRepository.findByUserId(user.getId()).orElseThrow();
+    }
+
+    /**
+     * Joins a learner to a course, the way a free checkout would: an enrollment saying they joined
+     * and a perpetual entitlement saying they may open it.
+     *
+     * <p>Written through the repositories rather than through {@code CheckoutProcessor} so that a
+     * test about update tracking is not also a test about payment. What matters here is the pair of
+     * rows that exist afterwards, which is the same pair either route produces.
+     */
+    protected Enrollment enroll(User studentUser, Long courseId) {
+        Student student = studentProfileOf(studentUser);
+        Course course = reload(courseId);
+
+        Enrollment enrollment = enrollmentRepository.saveAndFlush(
+                Enrollment.builder().course(course).student(student).progress(0).enrolled(true).build());
+        courseEntitlementRepository.saveAndFlush(CourseEntitlement.builder()
+                .course(course)
+                .student(student)
+                .source(EntitlementSource.FREE)
+                .startsAt(LocalDateTime.now().minusYears(1))
+                .build());
+        return enrollment;
+    }
+
+    /**
+     * Backdates a whole course — itself, its modules, its lessons and its quizzes — so that a
+     * learner can plausibly have enrolled before it was edited.
+     *
+     * <p>Without this a test is describing an impossibility. A course built inside the test method
+     * is created *now*, so an enrollment placed a month ago predates the course's own existence, and
+     * every row correctly reports itself as content the learner has never seen. The scenario these
+     * tests mean is the ordinary one: a course that has been live for a while, a learner who joined
+     * it, and an instructor who has since changed something.
+     *
+     * <p>By SQL for the same reason {@link #enrolledAt} is: {@code created_at} is
+     * {@code updatable = false} on every one of these entities and must stay that way.
+     */
+    protected void courseExistedSince(Long courseId, LocalDateTime at) {
+        jdbcTemplate.update(
+                "UPDATE courses SET created_at = ?, content_updated_at = ?, "
+                        + "last_published_at = CASE WHEN last_published_at IS NULL THEN NULL ELSE ? END "
+                        + "WHERE id = ?", at, at, at, courseId);
+        jdbcTemplate.update(
+                "UPDATE course_modules SET created_at = ?, content_updated_at = ? WHERE course_id = ?",
+                at, at, courseId);
+        jdbcTemplate.update(
+                "UPDATE lessons SET created_at = ?, content_updated_at = ? WHERE course_id = ?",
+                at, at, courseId);
+        // Quiz ownership is polymorphic, so there is no join from a course to its quizzes. All
+        // three owner scopes are named explicitly, which is also what keeps this from touching
+        // another course's quizzes by accident.
+        jdbcTemplate.update(
+                "UPDATE quizzes SET created_at = ?, content_updated_at = ? WHERE "
+                        + "(owner_type = 'COURSE' AND owner_id = ?) "
+                        + "OR (owner_type = 'MODULE' AND owner_id IN "
+                        + "    (SELECT id FROM course_modules WHERE course_id = ?)) "
+                        + "OR (owner_type = 'LESSON' AND owner_id IN "
+                        + "    (SELECT id FROM lessons WHERE course_id = ?))",
+                at, at, courseId, courseId, courseId);
+    }
+
+    /**
+     * Moves an enrollment's instant, by SQL, because the column is {@code updatable = false} and
+     * must stay that way — the badge is cleared by an instructor publishing, never by rewriting when
+     * a learner joined.
+     *
+     * <p>Which is exactly why a test needs this: "enrolled before the change" and "enrolled after
+     * it" are the two cases the whole feature turns on, and the only honest way to set them up
+     * without sleeping is to place the enrollment where the scenario says it was.
+     */
+    protected void enrolledAt(Long enrollmentId, LocalDateTime at) {
+        jdbcTemplate.update("UPDATE enrollments SET enrolled_at = ? WHERE id = ?", at, enrollmentId);
+    }
+
+    /** The learner-facing course screen, as this student sees it. */
+    protected CourseDetailsResponse detailsFor(User studentUser, Long courseId) {
+        return courseService.getCourseDetails(studentUser, courseId, CourseViewMode.ENROLLED);
+    }
+
+    /** The card this student would see in My Courses. */
+    protected com.manara.backend.dashboard.dto.CourseViewResponse cardFor(User studentUser, Long courseId) {
+        return dashboardService.getStudentCourses(studentUser).stream()
+                .filter(card -> card.getId().equals(courseId))
+                .findFirst()
+                .orElseThrow();
     }
 
     /** Re-reads the course from the database, outside any session this test already holds. */

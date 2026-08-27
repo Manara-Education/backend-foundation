@@ -32,7 +32,7 @@ import java.util.Objects;
 @Entity
 @DynamicUpdate
 @Table(name = "courses")
-public class Course {
+public class Course implements TrackedContent {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -120,6 +120,16 @@ public class Course {
      *
      * <p>Moved only by {@link #markContentChanged(LocalDateTime)}, which the authoring services
      * call once per request and only when something actually changed.
+     *
+     * <p>Two rules are read from it, and they are different questions. {@code hasUpdatesSincePublish}
+     * compares it to {@link #lastPublishedAt} and answers the instructor's — "have I edited since I
+     * published?". {@code CourseUpdateResolver} compares it to an {@link Enrollment}'s
+     * {@code enrolledAt} and answers the learner's — "has this changed since I joined?" — which is
+     * per-enrollment and can differ between two students of the same course.
+     *
+     * <p>Still nullable, even though {@link #onCreate()} now defaults it. Making the column
+     * {@code NOT NULL} would break a rolling deploy: an instance running the previous build inserts
+     * a course with this column explicitly null and stamps it a statement later.
      */
     @Column(name = "content_updated_at")
     private LocalDateTime contentUpdatedAt;
@@ -132,6 +142,19 @@ public class Course {
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();
+        if (contentUpdatedAt == null) {
+            contentUpdatedAt = createdAt;
+        }
+    }
+
+    @Override
+    public ContentEntityType contentType() {
+        return ContentEntityType.COURSE;
+    }
+
+    @Override
+    public String contentTitle() {
+        return title;
     }
 
     @PreUpdate
@@ -150,6 +173,7 @@ public class Course {
      * <p>Never called for student progress, enrolment, purchases, analytics, or the background
      * video lookup — none of those is a change to the course.
      */
+    @Override
     public void markContentChanged(LocalDateTime at) {
         this.contentUpdatedAt = at;
     }

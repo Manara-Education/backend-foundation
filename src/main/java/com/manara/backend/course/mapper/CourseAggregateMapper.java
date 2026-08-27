@@ -12,6 +12,7 @@ import com.manara.backend.course.model.CourseModule;
 import com.manara.backend.course.model.CourseStructure;
 import com.manara.backend.course.service.CourseAggregate;
 import com.manara.backend.course.service.CourseProgression;
+import com.manara.backend.course.service.CourseUpdateWindow;
 import com.manara.backend.lesson.dto.InstructorLessonResponse;
 import com.manara.backend.lesson.dto.LessonResponse;
 import com.manara.backend.lesson.mapper.LessonMapper;
@@ -81,9 +82,13 @@ public class CourseAggregateMapper {
      *                    Kept beside the content rather than inferred from it, because "every lesson
      *                    is locked" is what an unenrolled visitor and a lapsed subscriber have in
      *                    common, and the screen has to tell them apart
+     * @param updates     what has changed since the viewer enrolled. Asked once per row and it
+     *                    answers from data already loaded, so a hundred-lesson curriculum costs the
+     *                    same to annotate as a three-lesson one
      */
     public CourseDetailsResponse toCourseDetailsResponse(
-            CourseAggregate aggregate, CourseProgression progression, CourseAccessResponse access) {
+            CourseAggregate aggregate, CourseProgression progression, CourseAccessResponse access,
+            CourseUpdateWindow updates) {
         Course course = aggregate.course();
         var instructor = course.getInstructor();
         var instructorUser = instructor.getUser();
@@ -109,6 +114,8 @@ public class CourseAggregateMapper {
                 .studentsCount(course.getStudentsCount())
                 .createdAt(course.getCreatedAt())
                 .hasUpdatesSincePublish(course.hasUpdatesSincePublish())
+                .hasUpdatesSinceEnrollment(updates.hasUpdatesSinceEnrollment())
+                .latestContentUpdateAt(updates.latestContentUpdateAt())
                 .build();
 
         var instructorInfo = CourseDetailsResponse.InstructorInfo.builder()
@@ -125,16 +132,18 @@ public class CourseAggregateMapper {
                 .access(access)
                 .structure(course.getStructure())
                 .lessons(isFlat(course)
-                        ? learnerLessons(aggregate, aggregate.lessons(), progression)
+                        ? learnerLessons(aggregate, aggregate.lessons(), progression, updates, null)
                         : List.of())
                 .modules(aggregate.modules().stream()
-                        .map(module -> toLearnerModuleResponse(aggregate, module, progression))
+                        .map(module -> toLearnerModuleResponse(aggregate, module, progression, updates))
                         .toList())
                 .finalQuiz(quizMapper.toLearnerResponse(
-                        aggregate.finalQuiz(), progression.stateOf(aggregate.finalQuiz())))
+                        aggregate.finalQuiz(), progression.stateOf(aggregate.finalQuiz()),
+                        updates.describe(aggregate.finalQuiz())))
                 .progress(progression.tracksProgress() ? progression.progress() : null)
                 .courseCompleted(progression.tracksProgress() ? progression.courseCompleted() : null)
                 .nextLessonId(progression.tracksProgress() ? progression.nextLessonId() : null)
+                .removedContent(updates.removedContent())
                 .build();
     }
 
@@ -150,16 +159,21 @@ public class CourseAggregateMapper {
     }
 
     private LearnerModuleResponse toLearnerModuleResponse(CourseAggregate aggregate, CourseModule module,
-                                                          CourseProgression progression) {
+                                                          CourseProgression progression,
+                                                          CourseUpdateWindow updates) {
         return LearnerModuleResponse.builder()
                 .id(module.getId())
                 .title(module.getTitle())
                 .description(module.getDescription())
                 .orderIndex(module.getOrderIndex())
-                .lessons(learnerLessons(aggregate, aggregate.lessonsOf(module), progression))
+                // The module's own title is what a lesson moved into it is described as moving to.
+                .lessons(learnerLessons(aggregate, aggregate.lessonsOf(module), progression, updates,
+                        module.getTitle()))
                 .quiz(quizMapper.toLearnerResponse(
-                        aggregate.quizOfModule(module), progression.stateOf(aggregate.quizOfModule(module))))
+                        aggregate.quizOfModule(module), progression.stateOf(aggregate.quizOfModule(module)),
+                        updates.describe(aggregate.quizOfModule(module))))
                 .locked(!progression.isModuleUnlocked(module.getId()))
+                .change(updates.describe(module))
                 .build();
     }
 
@@ -176,7 +190,8 @@ public class CourseAggregateMapper {
      * the locked builder, so its video and its quiz never enter the response at all.
      */
     private List<LessonResponse> learnerLessons(CourseAggregate aggregate, List<Lesson> lessons,
-                                                CourseProgression progression) {
+                                                CourseProgression progression, CourseUpdateWindow updates,
+                                                String parentLabel) {
         return lessons.stream()
                 .map(lesson -> progression.isLessonAccessible(lesson)
                         ? lessonMapper.toLessonResponse(
@@ -184,8 +199,11 @@ public class CourseAggregateMapper {
                                 progression.completionOf(lesson),
                                 quizMapper.toLearnerResponse(
                                         aggregate.quizOfLesson(lesson),
-                                        progression.stateOf(aggregate.quizOfLesson(lesson))))
-                        : lessonMapper.toLockedLessonResponse(lesson, progression.completionOf(lesson)))
+                                        progression.stateOf(aggregate.quizOfLesson(lesson)),
+                                        updates.describe(aggregate.quizOfLesson(lesson))),
+                                updates.describe(lesson, parentLabel))
+                        : lessonMapper.toLockedLessonResponse(lesson, progression.completionOf(lesson),
+                                updates.describe(lesson, parentLabel)))
                 .toList();
     }
 
