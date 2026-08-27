@@ -672,6 +672,36 @@ class StudentCourseUpdateTest extends AbstractCourseAuthoringTest {
                     .isEqualTo(ContentChangeState.UPDATED);
         }
 
+        /**
+         * A badge and its caption must agree.
+         *
+         * <p>A lesson added after the learner enrolled and reordered afterwards has two log rows,
+         * the newest of which is the reorder — and reading that one would put "moved to a new
+         * position" under a "New" badge, describing a lesson the reader is simultaneously being
+         * told they have never seen.
+         */
+        @Test
+        void aNewLessonReorderedAfterwardsIsStillDescribedAsNew() {
+            var course = publishedCourse();
+            User student = earlyLearner(course.getId());
+
+            var added = echoOf(course);
+            var lessons = new ArrayList<>(added.getModules().getFirst().getLessons());
+            lessons.add(lesson("L4"));
+            added.getModules().getFirst().setLessons(lessons);
+            var afterAdd = courseService.updateCourse(instructorUser, course.getId(), added);
+
+            // The new lesson is then dragged to the top of its module.
+            List<Long> reordered = new ArrayList<>(moduleLessonIdsOf(afterAdd, 0));
+            java.util.Collections.reverse(reordered);
+            courseService.reorderModuleLessons(instructorUser, course.getId(),
+                    afterAdd.getModules().getFirst().getId(), lessonOrder(reordered));
+
+            var change = lessonTitled(detailsFor(student, course.getId()), "L4").getChange();
+            assertThat(change.getState()).isEqualTo(ContentChangeState.NEW);
+            assertThat(change.getSummary()).isEqualTo("New lesson added");
+        }
+
         @Test
         void aFlatCourseWithNoModulesIsHandledLikeAnyOther() {
             var course = courseService.createCourse(instructorUser,

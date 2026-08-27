@@ -142,14 +142,27 @@ public final class CourseUpdateWindow {
     }
 
     /**
-     * Prefers the logged description, falls back to the state.
+     * The sentence that goes with the badge — and it has to agree with it.
      *
-     * <p>The fallback is what makes content that predates the change log — every course in the
-     * database on the day this ships — still readable: the badge is correct from the timestamps and
-     * the caption is the generic one for its kind.
+     * <h4>NEW says one thing only</h4>
+     * A lesson added after this learner enrolled and reordered a week later has two log rows, the
+     * newest of which is the reorder. Reading that one would put "moved to a new position" under a
+     * "New" badge, which describes a lesson the reader is being told they have never seen. So
+     * {@link ContentChangeState#NEW} is narrated from its own state and the log is not consulted:
+     * how a thing has been shuffled since it appeared is not what somebody meeting it for the first
+     * time needs to hear.
+     *
+     * <h4>UPDATED prefers what actually happened</h4>
+     * There the log earns its place — "moved from Module 1 to Module 2" is worth far more than
+     * "updated", and only the log knows it. The fallback covers content that predates the log
+     * entirely, which is every course in the database on the day this ships: the badge is still
+     * correct from the timestamps, and the caption is the generic one for its kind.
      */
     private String summaryFor(ContentChangeState state, TrackedContent item, CourseChange change,
                               String parentLabel) {
+        if (state == ContentChangeState.NEW) {
+            return narrator.describe(item.contentType(), ContentChangeType.CREATED, null, null);
+        }
         if (change != null) {
             String summary = narrator.describe(
                     change.getEntityType(), change.getChangeType(), change.getDetail(), parentLabel);
@@ -157,10 +170,7 @@ public final class CourseUpdateWindow {
                 return summary;
             }
         }
-        ContentChangeType assumed = state == ContentChangeState.NEW
-                ? ContentChangeType.CREATED
-                : ContentChangeType.CONTENT_UPDATED;
-        return narrator.describe(item.contentType(), assumed, null, null);
+        return narrator.describe(item.contentType(), ContentChangeType.CONTENT_UPDATED, null, null);
     }
 
     /** Identity of a change's subject: two entity types can hold the same id. */
