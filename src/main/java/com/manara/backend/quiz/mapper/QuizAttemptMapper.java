@@ -29,6 +29,10 @@ public class QuizAttemptMapper {
     public QuizAttempt toQuizAttempt(Quiz quiz, Student student, Course course, int attemptNumber, GradedQuiz graded) {
         QuizAttempt attempt = QuizAttempt.builder()
                 .quiz(quiz)
+                // Copied for the same reason the answer rows copy their question text: it is what
+                // the attempt was an attempt at, and it has to survive both a rename and the quiz's
+                // deletion. See QuizAttempt#quizTitle.
+                .quizTitle(quiz.getTitle())
                 .student(student)
                 .course(course)
                 .attemptNumber(attemptNumber)
@@ -70,7 +74,9 @@ public class QuizAttemptMapper {
      */
     public QuizAttemptResponse toQuizAttemptResponse(QuizAttempt attempt, GradedQuiz graded) {
         return QuizAttemptResponse.builder()
-                .quizId(asId(attempt.getQuiz().getId()))
+                // Null once the quiz has been deleted. This response is built at submission time,
+                // when it never is; the null-safety is for the callers that read an attempt back.
+                .quizId(attempt.getQuiz() == null ? null : asId(attempt.getQuiz().getId()))
                 .attemptId(attempt.getId())
                 .attemptNumber(attempt.getAttemptNumber())
                 .correctCount(attempt.getCorrectCount())

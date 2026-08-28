@@ -8,8 +8,6 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
-import org.hibernate.annotations.OnDelete;
-import org.hibernate.annotations.OnDeleteAction;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -53,10 +51,28 @@ public class QuizAttempt {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "quiz_id", nullable = false)
-    @OnDelete(action = OnDeleteAction.CASCADE)
+    /**
+     * The quiz this was an attempt at, or {@code null} once that quiz has been deleted.
+     *
+     * <p>Nullable, and {@code ON DELETE SET NULL} at the database, so retiring a lesson does not
+     * also erase the exam results learners earned inside it. While the quiz exists this points at
+     * it exactly as before; what the attempt no longer does is depend on it. Everything needed to
+     * read the attempt is on the attempt itself — the score and counts here, {@link #quizTitle}
+     * beside them, and per-answer snapshots on the answer rows since {@code V9}.
+     *
+     * @see com.manara.backend.quiz.model.QuizAttemptAnswer
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "quiz_id")
     private Quiz quiz;
+
+    /**
+     * What the quiz was called when this attempt was submitted. Written once and never rewritten,
+     * so a quiz renamed afterwards does not retitle an exam this learner never sat — and so a
+     * detached attempt can still say what it was.
+     */
+    @Column(name = "quiz_title", updatable = false, columnDefinition = "TEXT")
+    private String quizTitle;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "student_id", nullable = false)

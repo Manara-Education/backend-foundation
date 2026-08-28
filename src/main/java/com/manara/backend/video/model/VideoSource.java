@@ -68,6 +68,31 @@ public class VideoSource {
         return VideoSource.builder().url(url).build();
     }
 
+    /**
+     * Whether a submitted video is this one rather than a different one.
+     *
+     * <p>The question the aggregate save has to ask about every lesson it is handed. The editor
+     * posts the whole course back on every save, so most of the lessons in a payload are unchanged
+     * ones being carried along — and the difference between "the instructor chose this video" and
+     * "the payload is echoing the video already stored" is what decides whether today's rules apply
+     * to it. A video already in the database was accepted under the rules of its own time; one the
+     * instructor is choosing now is held to the current ones.
+     *
+     * <p>Compared on the URL, because the URL is the authoritative field — the derived columns are
+     * a cache of it. The submitted value is trimmed first, matching the only transformation applied
+     * to a URL before it is stored, so whitespace a form added is not mistaken for a new video.
+     *
+     * <p>A declared provider that contradicts the stored one makes this false even when the URL is
+     * identical. The client is then asserting something new about the video, and an assertion is a
+     * change: it gets checked rather than trusted.
+     */
+    public boolean matches(String submittedUrl, VideoProvider declaredProvider) {
+        if (url == null || submittedUrl == null || !url.equals(submittedUrl.trim())) {
+            return false;
+        }
+        return declaredProvider == null || declaredProvider == provider;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;

@@ -158,7 +158,7 @@ public class CourseService {
     @Transactional
     public InstructorCourseResponse createCourse(User user, CourseRequest request) {
         var instructor = requireInstructor(user);
-        var settings = courseValidator.resolveAndValidate(request, null, () -> 0);
+        var settings = courseValidator.resolveAndValidate(request, null, () -> 0, LessonVideoBaseline.none());
 
         var course = courseRepository.save(courseMapper.toCourse(request, instructor, settings));
 
@@ -204,7 +204,13 @@ public class CourseService {
         var course = requireOwnedCourseForUpdate(user, courseId);
         requireCurrentRevision(course, request.getExpectedRevision());
 
-        var settings = courseValidator.resolveAndValidate(request, course, () -> activeLessonCount(course));
+        // What the course already stores for each of its lessons, so validation can tell a video the
+        // instructor changed from one the editor is echoing back. Read lazily: a metadata-only save
+        // carries no lessons and never asks. See LessonVideoBaseline.
+        var videoBaseline = LessonVideoBaseline.of(
+                () -> lessonRepository.findCourseLessonsInReadingOrder(courseId));
+        var settings = courseValidator.resolveAndValidate(
+                request, course, () -> activeLessonCount(course), videoBaseline);
 
         String previousImage = course.getImage();
         var changes = new CourseContentChanges();

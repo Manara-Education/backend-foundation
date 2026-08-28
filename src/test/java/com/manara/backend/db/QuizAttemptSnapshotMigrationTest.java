@@ -134,16 +134,21 @@ class QuizAttemptSnapshotMigrationTest extends AbstractPostgresBackedTest {
     }
 
     /**
-     * The attempt itself still goes when its quiz does.
+     * The attempt's own reference to its quiz no longer cascades either — see {@code V10}.
      *
-     * <p>Deliberate, and the one destructive authoring operation that reaches learner history:
-     * deleting a lesson deletes its quiz, and an attempt at a quiz that no longer exists has
-     * nothing left to describe. It is removed whole rather than left as a score with no questions,
-     * which is the same rule the snapshots enforce, applied where the whole thing is gone.
+     * <p>V9 left this one alone and said why: "an attempt at a quiz that no longer exists has
+     * nothing left to describe". V9 is what made that false. Once the answer rows carry their own
+     * question text, chosen text and answer key, the attempt describes itself, and the last
+     * cascade was deleting a complete record for no remaining reason.
+     *
+     * <p>Kept in this file rather than moved: the two rules are one decision, and a reader who
+     * finds the SET NULL on the answers should find the SET NULL on the header beside it.
+     *
+     * @see QuizAttemptQuizDetachMigrationTest
      */
     @Test
-    @DisplayName("the attempt's own reference to its quiz still cascades, deliberately")
-    void theQuizReferenceStillCascades() {
+    @DisplayName("the attempt's own reference to its quiz clears itself too")
+    void theQuizReferenceSetsNull() {
         assertThat(jdbc.queryForList("""
                 SELECT c.confdeltype
                 FROM pg_constraint c
@@ -152,8 +157,11 @@ class QuizAttemptSnapshotMigrationTest extends AbstractPostgresBackedTest {
                 WHERE c.contype = 'f' AND t.relname = 'quiz_attempts'
                   AND referenced.relname = 'quizzes'
                 """))
-                .isNotEmpty()
-                .allSatisfy(row -> assertThat(row.get("confdeltype")).isEqualTo("c"));
+                .as("exactly one, and no leftover cascading twin under an older generated name")
+                .hasSize(1)
+                .allSatisfy(row -> assertThat(row.get("confdeltype"))
+                        .as("'n' is SET NULL; 'c' would be the cascade that deleted the attempt")
+                        .isEqualTo("n"));
     }
 
     @Test

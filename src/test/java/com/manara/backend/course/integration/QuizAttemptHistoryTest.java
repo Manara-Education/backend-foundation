@@ -359,16 +359,25 @@ class QuizAttemptHistoryTest extends AbstractCourseAuthoringTest {
     }
 
     /**
-     * The one deletion that still takes an attempt with it, asserted so it stays deliberate.
+     * Deleting the quiz no longer deletes the evidence that somebody sat it.
      *
-     * <p>Removing a lesson removes its quiz, and an attempt at a quiz that no longer exists has
-     * nothing left to describe. It is deleted whole rather than left as a score with no questions —
-     * which is the same rule the rest of this file enforces, applied to the case where the whole
-     * thing is gone. This is the documented destructive authoring operation, not a silent loss.
+     * <p>This assertion used to be its own inverse, on a reason that was true when it was written:
+     * "an attempt at a quiz that no longer exists has nothing left to describe". The rest of this
+     * file is what made that stop being true. Once every answer row carries its own question text,
+     * chosen-option text and answer key — and the header carries the score, the counts and the pass
+     * mark — an attempt is a complete account of what somebody was asked and what they answered,
+     * and it needs the quiz rows for nothing.
+     *
+     * <p>What was left was a cascade that deleted that account, reachable from three different
+     * authoring actions: clearing a lesson's quiz, deleting the lesson, deleting the module. An
+     * instructor retiring one lesson of a published course was erasing every result any learner had
+     * earned in it, with nothing saying so. {@code V10} detaches instead of deleting.
+     *
+     * @see com.manara.backend.course.integration.AttemptSurvivesDeletionTest
      */
     @Test
-    @DisplayName("deleting the quiz outright removes the attempt whole, header and answers together")
-    void deletingTheQuizRemovesTheAttemptWhole() {
+    @DisplayName("deleting the quiz detaches the attempt but keeps it, header and answers together")
+    void deletingTheQuizKeepsTheAttempt() {
         var sat = aLessonQuizAlreadySat();
 
         var edit = echoOf(sat.course());
@@ -377,7 +386,24 @@ class QuizAttemptHistoryTest extends AbstractCourseAuthoringTest {
 
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM quiz_attempts WHERE id = ?", Integer.class, sat.attemptId()))
-                .isZero();
-        assertThat(storedAnswers(sat.attemptId())).isEmpty();
+                .isOne();
+        assertThat(storedAttempt(sat.attemptId()))
+                .containsEntry("score", 100)
+                .containsEntry("passed", true);
+
+        // The two authoring ids go null — the question and the option really were deleted, and V9's
+        // SET NULL is what keeps the row rather than cascading it away. The snapshots beside them
+        // are the part that has to survive, and they are the whole of what the row is for.
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT quiz_id FROM quiz_attempts WHERE id = ?", Long.class, sat.attemptId()))
+                .isNull();
+        assertThat(storedAnswers(sat.attemptId())).singleElement()
+                .satisfies(answer -> assertThat(answer)
+                        .containsEntry("question_id", null)
+                        .containsEntry("selected_option_id", null)
+                        .containsEntry("question_text", "Which one is right?")
+                        .containsEntry("selected_option_text", "Option B")
+                        .containsEntry("correct_option_text", "Option B")
+                        .containsEntry("is_correct", true));
     }
 }
