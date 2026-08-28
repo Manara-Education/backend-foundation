@@ -25,10 +25,6 @@ public class LessonMapper {
     private final DurationFormatter durationFormatter;
     private final VideoProviderResolver videoProviderResolver;
 
-    public Lesson toLesson(LessonRequest request, Course course) {
-        return toLesson(request, course, null, request.getOrderIndex());
-    }
-
     public Lesson toLesson(LessonRequest request, Course course, CourseModule module, Integer orderIndex) {
         // Resolved, not merely trimmed: an unplayable URL is refused here, before a row exists, and
         // the provider columns are filled from the same parse that accepted it.

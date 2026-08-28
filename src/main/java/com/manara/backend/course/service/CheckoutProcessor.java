@@ -1,6 +1,7 @@
 package com.manara.backend.course.service;
 
 import com.manara.backend.common.exception.BusinessException;
+import com.manara.backend.common.exception.ErrorCode;
 import com.manara.backend.common.exception.ResourceNotFoundException;
 import com.manara.backend.course.dto.CheckoutRequest;
 import com.manara.backend.course.dto.CheckoutResponse;
@@ -266,6 +267,14 @@ public class CheckoutProcessor {
                 .orElseThrow(() -> new ResourceNotFoundException("error.course.planNotFound", planId.toString()));
         if (!plan.getCourse().getId().equals(course.getId())) {
             throw new BusinessException("error.course.planNotInCourse", planId.toString());
+        }
+        // A retired plan is still a real row — every subscriber who bought it still points at it —
+        // and it is no longer for sale. Refused by name rather than by absence, so a learner whose
+        // renewal screen was rendered before the instructor withdrew the plan is told what happened
+        // instead of being told their own plan does not exist.
+        if (!plan.isActive()) {
+            throw new BusinessException(ErrorCode.SUBSCRIPTION_PLAN_RETIRED,
+                    "error.course.planRetired", planId.toString());
         }
         return plan;
     }

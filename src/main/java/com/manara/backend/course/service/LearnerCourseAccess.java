@@ -3,7 +3,6 @@ package com.manara.backend.course.service;
 import com.manara.backend.common.exception.BusinessException;
 import com.manara.backend.common.exception.ResourceNotFoundException;
 import com.manara.backend.course.model.Course;
-import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.Enrollment;
 import com.manara.backend.course.repository.CourseRepository;
 import com.manara.backend.course.repository.EnrollmentRepository;
@@ -41,6 +40,11 @@ import java.util.Optional;
  *   <li><strong>Anyone else signed in</strong> — the shape of a published course and none of its
  *       content, which is exactly what the discovery screen shows.</li>
  * </ul>
+ *
+ * <p>Whether the course resolves at all is {@link CourseVisibility}'s answer, not a publication
+ * check made here. Unpublishing takes a course off the catalogue; it does not take it away from the
+ * learners who already hold it, and every one of the outcomes above still applies while it is a
+ * draft.
  */
 @Component
 @RequiredArgsConstructor
@@ -53,6 +57,7 @@ public class LearnerCourseAccess {
     private final CourseAggregateLoader courseAggregateLoader;
     private final CourseProgressionService courseProgressionService;
     private final EntitlementPolicy entitlementPolicy;
+    private final CourseVisibility courseVisibility;
 
     /**
      * For write paths — completing a lesson, submitting a quiz — where anything short of an
@@ -63,7 +68,7 @@ public class LearnerCourseAccess {
             throw new BusinessException("error.course.onlyStudent");
         }
 
-        Course course = requirePublishedCourse(courseId);
+        Course course = courseVisibility.requireVisible(user, courseId);
         Student student = studentRepository.findByUserId(user.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("error.profile.studentNotFound", user.getId().toString()));
         Enrollment enrollment = enrollmentRepository.findByCourseIdAndStudentId(courseId, student.getId())
@@ -93,8 +98,10 @@ public class LearnerCourseAccess {
             return new CourseViewer(course, null, null, aggregate, CourseProgression.forOwner(aggregate));
         }
 
-        // A draft is the instructor's work in progress; to everyone else it does not exist.
-        if (course.getStatus() != CourseStatus.PUBLISHED) {
+        // A draft is the instructor's work in progress; to everyone who does not already hold the
+        // course it does not exist. To a learner who does, withdrawing it from the catalogue is not
+        // a revocation — they keep the course they joined. See CourseVisibility.
+        if (!courseVisibility.isVisibleTo(user, course)) {
             throw new ResourceNotFoundException("error.course.notFound", courseId.toString());
         }
 
@@ -115,15 +122,6 @@ public class LearnerCourseAccess {
         }
 
         return new CourseViewer(course, student.get(), enrollment.get(), aggregate, progression);
-    }
-
-    private Course requirePublishedCourse(Long courseId) {
-        Course course = courseRepository.findById(courseId)
-                .orElseThrow(() -> new ResourceNotFoundException("error.course.notFound", courseId.toString()));
-        if (course.getStatus() != CourseStatus.PUBLISHED) {
-            throw new ResourceNotFoundException("error.course.notFound", courseId.toString());
-        }
-        return course;
     }
 
     private boolean isOwningInstructor(User user, Course course) {

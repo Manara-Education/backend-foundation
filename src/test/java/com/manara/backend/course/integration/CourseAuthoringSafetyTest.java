@@ -1,5 +1,7 @@
 package com.manara.backend.course.integration;
 
+import com.manara.backend.common.exception.ConflictException;
+import com.manara.backend.common.exception.ErrorCode;
 import com.manara.backend.common.exception.BusinessException;
 import com.manara.backend.common.exception.ResourceNotFoundException;
 import com.manara.backend.course.dto.InstructorCourseResponse;
@@ -439,8 +441,23 @@ class CourseAuthoringSafetyTest extends AbstractCourseAuthoringTest {
                     .containsExactly("B2", "B1");
         }
 
+        /**
+         * An aggregate save and a reorder of the same course, fired together from one revision.
+         *
+         * <p>Exactly one of two things happens, and the test asserts whichever it was rather than
+         * hoping for one. If the save commits first it is applied and the reorder follows it; if
+         * the reorder commits first it has moved the revision, and the save — which is a full
+         * replacement built before it — is refused with {@code COURSE_VERSION_CONFLICT} and writes
+         * nothing. What must hold either way is that the drag lands in full and the order comes out
+         * contiguous: the reorder is never the loser, and there is never a half-applied mixture.
+         *
+         * <p>The refusal is not a regression on the previous behaviour, which let the save through.
+         * It could afford to, because the aggregate save carries no opinion about order — but it
+         * carries an opinion about everything else, and letting a copy built before somebody else's
+         * accepted change write those fields back is the defect this whole mechanism exists for.
+         */
         @Test
-        @DisplayName("a stale aggregate edit and a lesson reorder arriving together both survive")
+        @DisplayName("a lesson reorder always lands; a concurrent aggregate save lands or is refused whole")
         void aConcurrentEditAndLessonReorderDoNotEraseEachOther() throws Exception {
             var course = courseService.createCourse(instructorUser,
                     modularCourse("Nested", CourseStatus.PUBLISHED,
@@ -455,8 +472,8 @@ class CourseAuthoringSafetyTest extends AbstractCourseAuthoringTest {
                 var edit = pool.submit(() -> {
                     start.await();
                     staleCopy.setTitle("Renamed concurrently");
-                    courseService.updateCourse(instructorUser, course.getId(), staleCopy);
-                    return null;
+                    return acceptedOrRefusedAsStale(() ->
+                            courseService.updateCourse(instructorUser, course.getId(), staleCopy));
                 });
                 var reorder = pool.submit(() -> {
                     start.await();
@@ -465,25 +482,30 @@ class CourseAuthoringSafetyTest extends AbstractCourseAuthoringTest {
                     return null;
                 });
                 start.countDown();
-                edit.get(30, TimeUnit.SECONDS);
+                boolean editAccepted = edit.get(30, TimeUnit.SECONDS);
                 reorder.get(30, TimeUnit.SECONDS);
+
+                // All or nothing: the rename either landed or was never written.
+                assertThat(reload(course.getId()).getTitle())
+                        .isEqualTo(editAccepted ? "Renamed concurrently" : "Nested");
             } finally {
                 pool.shutdownNow();
             }
 
-            // Whichever order the two landed in, the aggregate save carries no opinion about
-            // lesson order any more — so the reorder is the only thing that decided it.
-            assertThat(reload(course.getId()).getTitle()).isEqualTo("Renamed concurrently");
+            // The drag lands in full either way. The aggregate save carries no opinion about lesson
+            // order, and a stale one is not allowed to carry an opinion about anything else either.
             assertThat(persistedModuleLessonTitles(course.getId(), moduleId))
                     .containsExactly("L3", "L1", "L2");
             assertThat(persistedModuleLessonPositions(course.getId(), moduleId))
                     .containsExactly(0, 1, 2);
         }
 
+        /** The module-scope twin of the test above; the same two outcomes, the same invariant. */
         @Test
-        @DisplayName("a metadata edit and a reorder arriving together both survive")
+        @DisplayName("a module reorder always lands; a concurrent aggregate save lands or is refused whole")
         void aConcurrentEditAndReorderDoNotEraseEachOther() throws Exception {
             var course = publishedCourse();
+            var originalTitle = reload(course.getId()).getTitle();
             var ids = moduleIdsOf(course);
 
             var start = new CountDownLatch(1);
@@ -493,8 +515,8 @@ class CourseAuthoringSafetyTest extends AbstractCourseAuthoringTest {
                     start.await();
                     var request = echoOf(course);
                     request.setTitle("Renamed concurrently");
-                    courseService.updateCourse(instructorUser, course.getId(), request);
-                    return null;
+                    return acceptedOrRefusedAsStale(() ->
+                            courseService.updateCourse(instructorUser, course.getId(), request));
                 });
                 var reorder = pool.submit(() -> {
                     start.await();
@@ -503,14 +525,32 @@ class CourseAuthoringSafetyTest extends AbstractCourseAuthoringTest {
                     return null;
                 });
                 start.countDown();
-                edit.get(30, TimeUnit.SECONDS);
+                boolean editAccepted = edit.get(30, TimeUnit.SECONDS);
                 reorder.get(30, TimeUnit.SECONDS);
+
+                assertThat(reload(course.getId()).getTitle())
+                        .isEqualTo(editAccepted ? "Renamed concurrently" : originalTitle);
             } finally {
                 pool.shutdownNow();
             }
 
-            assertThat(reload(course.getId()).getTitle()).isEqualTo("Renamed concurrently");
             assertThat(persistedModulePositions(course.getId())).containsExactly(0, 1, 2);
+        }
+
+        /**
+         * Runs an aggregate save that may legitimately lose a race, and reports which happened.
+         *
+         * <p>Only {@code COURSE_VERSION_CONFLICT} is swallowed. Any other failure is still a test
+         * failure, so this cannot quietly absorb a real bug in the name of concurrency.
+         */
+        private boolean acceptedOrRefusedAsStale(Runnable save) {
+            try {
+                save.run();
+                return true;
+            } catch (ConflictException refused) {
+                assertThat(refused.getErrorCode()).isEqualTo(ErrorCode.COURSE_VERSION_CONFLICT);
+                return false;
+            }
         }
     }
 

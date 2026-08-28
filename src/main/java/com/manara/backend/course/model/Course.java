@@ -134,6 +134,31 @@ public class Course implements TrackedContent {
     @Column(name = "content_updated_at")
     private LocalDateTime contentUpdatedAt;
 
+    /**
+     * How many accepted edits this course aggregate has had. The optimistic-concurrency token.
+     *
+     * <p>The aggregate {@code PUT} is full replacement, so a payload built from a copy of the
+     * course loaded an hour ago <em>is</em> an hour-old course — saving it restored every field the
+     * client was holding, silently reverting whatever anyone else had changed in the meantime. A
+     * paid course went back to free because somebody renamed a lesson in another tab, and both
+     * requests were answered {@code 200}. An update therefore has to say which revision it was
+     * built from, and this is what it names.
+     *
+     * <p>Not a JPA {@code @Version}, and the difference is the whole point. {@code @Version} guards
+     * one row against two persistence contexts holding it at once; every request here loads the
+     * course fresh and then applies an old <em>client</em> aggregate on top, which no row-level
+     * check can see. This is incremented by the domain — once per accepted request that changed
+     * anything, curriculum or commerce, whichever endpoint made the change — so it describes the
+     * whole aggregate a client edits, not just the {@code courses} row.
+     *
+     * <p>Column default {@code 0} so existing rows and any instance still running the previous
+     * build both read as a real revision rather than null.
+     */
+    @Builder.Default
+    @ColumnDefault("0")
+    @Column(nullable = false)
+    private Long revision = 0L;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -197,6 +222,17 @@ public class Course implements TrackedContent {
     /** Withdraws the course from the catalogue. The publication baseline is deliberately kept. */
     public void markUnpublished() {
         this.status = CourseStatus.DRAFT;
+    }
+
+    /**
+     * Advances the aggregate revision. Called once per accepted request that changed something.
+     *
+     * <p>Tolerates a null on the way in so a row written by an instance that predates the column
+     * still moves forward rather than failing; the column default means that cannot happen for a
+     * row this build inserted.
+     */
+    public void nextRevision() {
+        this.revision = revision == null ? 1L : revision + 1;
     }
 
     /**

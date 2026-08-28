@@ -1,5 +1,7 @@
 package com.manara.backend.course.integration;
 
+import com.manara.backend.common.exception.ConflictException;
+import com.manara.backend.common.exception.ErrorCode;
 import com.manara.backend.common.exception.BusinessException;
 import com.manara.backend.course.dto.CourseRequest;
 import com.manara.backend.course.dto.InstructorCourseResponse;
@@ -366,8 +368,17 @@ class ModuleOrderingTest extends AbstractCourseAuthoringTest {
             assertThat(persistedModulePositions(course.getId())).containsExactly(0, 1, 2);
         }
 
+        /**
+         * Two things protect the order here, and this asserts both are still in place.
+         *
+         * <p>The reorder moved the course's revision, so Tab A's save is refused outright — that is
+         * the newer guard, and it is what stops the stale copy's <em>other</em> fields from being
+         * written back too. Underneath it, the aggregate save has no opinion about order at all, so
+         * even a save that was not stale could not have undone the drag. Belt and braces, and the
+         * braces are asserted separately by {@code theAggregateSaveDoesNotReorderExistingModules}.
+         */
         @Test
-        @DisplayName("a stale aggregate save cannot undo a reorder made after it loaded")
+        @DisplayName("a stale aggregate save is refused, and the reorder stands")
         void aStaleAggregateSaveCannotUndoAReorder() {
             var course = threeModuleCourse();
 
@@ -381,11 +392,15 @@ class ModuleOrderingTest extends AbstractCourseAuthoringTest {
 
             // Tab A now saves an unrelated edit, carrying its hour-old module array with it.
             staleCopyHeldByTabA.setTitle("Retitled from a stale tab");
-            courseService.updateCourse(instructorUser, course.getId(), staleCopyHeldByTabA);
+            assertThatThrownBy(() ->
+                    courseService.updateCourse(instructorUser, course.getId(), staleCopyHeldByTabA))
+                    .isInstanceOf(ConflictException.class)
+                    .satisfies(thrown -> assertThat(((ConflictException) thrown).getErrorCode())
+                            .isEqualTo(ErrorCode.COURSE_VERSION_CONFLICT));
 
-            // The unrelated edit lands; the reorder survives it.
+            // Nothing at all was written: not the order, and not the title either.
             assertThat(courseRepository.findById(course.getId()).orElseThrow().getTitle())
-                    .isEqualTo("Retitled from a stale tab");
+                    .isEqualTo("Ordered");
             assertThat(persistedModuleTitles(course.getId()))
                     .containsExactly("Advanced", "Introduction", "Basics");
             assertThat(persistedModulePositions(course.getId())).containsExactly(0, 1, 2);

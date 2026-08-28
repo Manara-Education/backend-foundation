@@ -93,7 +93,8 @@ class LessonVideoLifecycleTest {
 
         lessonService = new LessonService(
                 lessonRepository, courseRepository, courseModuleRepository, completedLessonRepository,
-                enrollmentRepository, learnerCourseAccess, courseProgressionService,
+                enrollmentRepository, learnerCourseAccess, new LessonPlacement(lessonRepository),
+                courseProgressionService,
                 new CourseContentJournal(courseChangeRepository),
                 new LessonMapper(durationFormatter, resolver), quizService, new QuizMapper(),
                 videoMetadataService, resolver, java.time.Clock.systemUTC());
@@ -107,7 +108,9 @@ class LessonVideoLifecycleTest {
                 .build();
 
         given(messageService.get(any(), any())).willReturn("0s");
-        given(courseRepository.findById(COURSE_ID)).willReturn(Optional.of(course));
+        // The authoring paths hold the course row for the transaction; see
+        // LessonService#getCourseAndVerifyInstructor.
+        given(courseRepository.findByIdForUpdate(COURSE_ID)).willReturn(Optional.of(course));
         given(lessonRepository.saveAndFlush(any(Lesson.class)))
                 .willAnswer(invocation -> invocation.getArgument(0));
         given(lessonRepository.save(any(Lesson.class)))

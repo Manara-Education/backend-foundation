@@ -1,27 +1,42 @@
 package com.manara.backend.course.dto;
 
-import com.fasterxml.jackson.databind.JsonMappingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.manara.backend.common.json.Patch;
 import com.manara.backend.course.model.CourseAccessType;
 import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseStructure;
 import com.manara.backend.course.model.SubscriptionUnit;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.DatabindException;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Binds the documented course payload verbatim.
+ * Binds the documented course payload verbatim, through the Jackson the server actually uses.
  *
  * <p>The contract writes enums in lowercase and orders in a field called {@code order}, while the
  * codebase uses uppercase constants and {@code orderIndex}. That translation happens in
  * {@code @JsonCreator} and {@code @JsonAlias} annotations, which nothing else exercises — a
  * mistake there would otherwise only show up against a running server.
+ *
+ * <h2>Which Jackson</h2>
+ * {@code tools.jackson}, deliberately and explicitly. This class used to instantiate
+ * {@code com.fasterxml.jackson.databind.ObjectMapper} — Jackson 2, which is on the classpath only
+ * because other libraries drag it in — while Spring Boot 4 binds request bodies with Jackson 3.
+ * The two disagree about how to construct this DTO, and the disagreement was not academic: under
+ * Jackson 3 {@code subtitle} and {@code image} were silently discarded on every real HTTP update,
+ * and this file passed throughout. A binding test that binds with a different library than the
+ * server is not evidence about the server.
+ *
+ * <p>{@link com.manara.backend.course.integration.CourseAggregateHttpContractTest} closes the same
+ * gap from the other end, over MockMvc against a live context.
  */
 class CourseRequestBindingTest {
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = JsonMapper.builder().build();
 
     private static final String MODULE_COURSE_PAYLOAD = """
             {
@@ -166,7 +181,105 @@ class CourseRequestBindingTest {
 
         // Surfaces as an unreadable body, which GlobalExceptionHandler turns into a localized 400.
         assertThatThrownBy(() -> objectMapper.readValue(invalid, CourseRequest.class))
-                .isInstanceOf(JsonMappingException.class);
+                .isInstanceOf(DatabindException.class);
+    }
+
+    /**
+     * The three states an optional metadata field can be in, and the two that used to look alike.
+     *
+     * <p>A Java bean has no way to tell "the client said null" from "the client said nothing", and
+     * for {@code subtitle} and {@code image} the two mean opposite things: clear the value, or
+     * leave it exactly as it is. It was tracked in the setters, which Jackson 3 never calls for
+     * this DTO — so every field read as absent and neither could be written at all.
+     */
+    @Nested
+    class PresenceOfOptionalMetadata {
+
+        @Test
+        void anOmittedFieldIsAbsent() throws Exception {
+            CourseRequest request = objectMapper.readValue(
+                    """
+                    { "title": "C", "description": "D" }
+                    """, CourseRequest.class);
+
+            assertThat(request.carriesSubtitle()).isFalse();
+            assertThat(request.carriesImage()).isFalse();
+            assertThat(request.subtitleValue()).isNull();
+            assertThat(request.imageValue()).isNull();
+        }
+
+        @Test
+        void aFieldWithAValueIsPresentWithIt() throws Exception {
+            CourseRequest request = objectMapper.readValue(
+                    """
+                    { "title": "C", "description": "D",
+                      "subtitle": "New subtitle", "image": "/uploads/new.png" }
+                    """, CourseRequest.class);
+
+            assertThat(request.carriesSubtitle()).isTrue();
+            assertThat(request.subtitleValue()).isEqualTo("New subtitle");
+            assertThat(request.carriesImage()).isTrue();
+            assertThat(request.imageValue()).isEqualTo("/uploads/new.png");
+        }
+
+        @Test
+        void anExplicitNullIsPresentAndMeansClearIt() throws Exception {
+            CourseRequest request = objectMapper.readValue(
+                    """
+                    { "title": "C", "description": "D", "subtitle": null, "image": null }
+                    """, CourseRequest.class);
+
+            assertThat(request.carriesSubtitle()).isTrue();
+            assertThat(request.subtitleValue()).isNull();
+            assertThat(request.carriesImage()).isTrue();
+            assertThat(request.imageValue()).isNull();
+        }
+
+        @Test
+        void oneFieldPresentDoesNotMakeTheOtherPresent() throws Exception {
+            CourseRequest request = objectMapper.readValue(
+                    """
+                    { "title": "C", "description": "D", "subtitle": "Only this one" }
+                    """, CourseRequest.class);
+
+            assertThat(request.carriesSubtitle()).isTrue();
+            assertThat(request.carriesImage()).isFalse();
+        }
+
+        /**
+         * The bookkeeping is the server's, and a client cannot reach it.
+         *
+         * <p>Under the previous design Jackson 3 bound the private {@code presentFields} set
+         * straight off the wire, so a payload could name which fields the server should believe it
+         * had mentioned. There is no such field any more; this asserts the contract has no way back
+         * in by that name, and that a payload carrying it is still read normally.
+         */
+        @Test
+        void internalPresenceBookkeepingIsNotPartOfTheContract() throws Exception {
+            CourseRequest request = objectMapper.readValue(
+                    """
+                    { "title": "C", "description": "D", "presentFields": ["SUBTITLE", "IMAGE"] }
+                    """, CourseRequest.class);
+
+            assertThat(request.carriesSubtitle()).isFalse();
+            assertThat(request.carriesImage()).isFalse();
+        }
+
+        /** A request built in Java says the same three things, so tests exercise the real rule. */
+        @Test
+        void aJavaBuiltRequestExpressesTheSameThreeStates() {
+            assertThat(CourseRequest.builder().build().carriesSubtitle()).isFalse();
+            assertThat(CourseRequest.builder().subtitle("x").build().subtitleValue()).isEqualTo("x");
+
+            CourseRequest cleared = CourseRequest.builder().subtitle(null).build();
+            assertThat(cleared.carriesSubtitle()).isTrue();
+            assertThat(cleared.subtitleValue()).isNull();
+
+            CourseRequest viaSetter = new CourseRequest();
+            viaSetter.setImage(Patch.of("/uploads/x.png"));
+            assertThat(viaSetter.carriesImage()).isTrue();
+            assertThat(viaSetter.imageValue()).isEqualTo("/uploads/x.png");
+        }
     }
 
     /** Small helper so the option assertion reads as an order comparison. */

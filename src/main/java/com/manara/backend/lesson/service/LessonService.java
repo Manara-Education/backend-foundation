@@ -59,6 +59,7 @@ public class LessonService {
     private final CompletedLessonRepository completedLessonRepository;
     private final EnrollmentRepository enrollmentRepository;
     private final LearnerCourseAccess learnerCourseAccess;
+    private final LessonPlacement lessonPlacement;
     private final CourseProgressionService courseProgressionService;
     private final CourseContentJournal courseContentJournal;
     private final LessonMapper lessonMapper;
@@ -68,11 +69,19 @@ public class LessonService {
     private final VideoProviderResolver videoProviderResolver;
     private final Clock clock;
 
+    /**
+     * Ownership, and the course row held for the rest of the transaction.
+     *
+     * <p>The lock is what makes two lessons added to the same scope at the same time land one after
+     * the other instead of both claiming the same position. It is taken before any lesson scope is
+     * read, matching the order every other authoring path takes its locks in, so a lesson write and
+     * a reorder command cannot wait on each other.
+     */
     private Course getCourseAndVerifyInstructor(User user, Long courseId) {
         if (user.getRole() != Role.INSTRUCTOR) {
             throw new BusinessException("error.course.onlyInstructor");
         }
-        Course course = courseRepository.findById(courseId)
+        Course course = courseRepository.findByIdForUpdate(courseId)
                 .orElseThrow(() -> new ResourceNotFoundException("error.course.notFound", courseId.toString()));
         if (!course.getInstructor().getUser().getId().equals(user.getId())) {
             throw new BusinessException("error.course.notOwner");
@@ -109,24 +118,38 @@ public class LessonService {
         courseRepository.save(course);
     }
 
+    /**
+     * Adds one lesson to a course.
+     *
+     * <p>{@code orderIndex} is optional: omitted appends, given inserts and shifts the siblings
+     * below it along. Where the lesson lands is {@link LessonPlacement}'s decision, not the
+     * client's — see it for why the previous contract could not work.
+     */
     @Transactional
     public LessonResponse addLesson(User user, Long courseId, LessonRequest request) {
         Course course = getCourseAndVerifyInstructor(user, courseId);
         CourseModule module = resolveModule(course, request.getModuleId());
-
-        Lesson lesson = lessonMapper.toLesson(request, course, module, request.getOrderIndex());
-        lesson = lessonRepository.saveAndFlush(lesson);
-
-        Quiz quiz = syncQuizIfProvided(lesson, request);
-
-        videoMetadataService.refreshAsync(lesson.getId(), lesson.getVideo());
 
         // A new lesson is new content by definition, whichever endpoint created it. Learners of a
         // published course have to be told the same thing whether the instructor used the course
         // editor or this endpoint — and the lesson itself has to carry the same "new" state, so a
         // learner is pointed at the row that appeared rather than at the course in general.
         var changes = new CourseContentChanges();
+
+        // Saved with a provisional position and placed immediately afterwards. The per-scope
+        // uniqueness constraint is deferred to COMMIT precisely so a placeholder that collides with
+        // a sibling is not an error before then — the same arrangement the aggregate save relies on.
+        Lesson lesson = lessonMapper.toLesson(request, course, module, 0);
+        lesson = lessonRepository.saveAndFlush(lesson);
         changes.of(lesson).created();
+
+        lessonPlacement.insert(courseId, module, lesson, request.getOrderIndex(), changes);
+        lessonRepository.flush();
+
+        Quiz quiz = syncQuizIfProvided(lesson, request);
+
+        videoMetadataService.refreshAsync(lesson.getId(), lesson.getVideo());
+
         if (quiz != null) {
             changes.of(quiz).created();
         }
@@ -152,18 +175,35 @@ public class LessonService {
         changes.of(lesson)
                 .metadata(lesson.getTitle(), request.getTitle(), lesson::setTitle)
                 .metadata(lesson.getSummary(), request.getSummary(), lesson::setSummary)
-                .content(lesson.getDescription(), request.getDescription(), lesson::setDescription)
-                .reordered(lesson.getOrderIndex(), request.getOrderIndex(), lesson::setOrderIndex);
+                .content(lesson.getDescription(), request.getDescription(), lesson::setDescription);
 
-        Long currentModuleId = lesson.getModule() == null ? null : lesson.getModule().getId();
+        CourseModule previousModule = lesson.getModule();
+        Long currentModuleId = previousModule == null ? null : previousModule.getId();
         Long nextModuleId = module == null ? null : module.getId();
-        if (!java.util.Objects.equals(currentModuleId, nextModuleId)) {
+        boolean reparented = !java.util.Objects.equals(currentModuleId, nextModuleId);
+        if (reparented) {
             // Read before the write: the module a lesson came from is the only fact about a move
             // that no longer exists once it has been made.
-            String from = lesson.getModule() == null ? null : lesson.getModule().getTitle();
+            String from = previousModule == null ? null : previousModule.getTitle();
             lesson.setModule(module);
             changes.of(lesson).moved(from);
         }
+
+        // Placed after the re-parent, so "which scope" is settled before "where in it". Which of the
+        // two placements applies is the same question as whether it moved: a lesson arriving in a
+        // module is inserted (appending when no position is named), and one staying put is
+        // repositioned (staying exactly where it is when no position is named, so an edit that only
+        // renames a lesson does not also move it).
+        if (reparented) {
+            lessonPlacement.insert(courseId, module, lesson, request.getOrderIndex(), changes);
+        } else {
+            lessonPlacement.reposition(courseId, module, lesson, request.getOrderIndex(), changes);
+        }
+        if (reparented) {
+            // The scope it left has a hole in it until this runs.
+            lessonPlacement.compact(courseId, previousModule, changes);
+        }
+        lessonRepository.flush();
 
         // Rewritten on every save, not only when the URL changed: a lesson stored before providers
         // existed picks up its provider, id and thumbnail the first time it is edited, with no
@@ -203,9 +243,17 @@ public class LessonService {
 
         // The quiz owner reference is polymorphic and carries no foreign key, so its cleanup is
         // this method's responsibility — nothing in the database would do it.
+        CourseModule scope = lesson.getModule();
         quizService.deleteByOwner(QuizOwnerType.LESSON, lessonId);
         completedLessonRepository.deleteByLessonId(lessonId);
         lessonRepository.delete(lesson);
+        lessonRepository.flush();
+
+        // Positions are contiguous by construction, so removing the second of four has to leave
+        // three at 0, 1, 2 rather than a hole at 1 for the next reorder to reason about.
+        lessonPlacement.compact(courseId, scope, changes);
+        lessonRepository.flush();
+
         recalculateCourseDuration(course);
         commitContentChanges(course, changes);
     }

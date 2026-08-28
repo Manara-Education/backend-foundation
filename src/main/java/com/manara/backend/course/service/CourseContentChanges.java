@@ -58,13 +58,41 @@ public final class CourseContentChanges {
     /** Insertion order, so the change log reads in the order the instructor's edit was applied. */
     private final List<Entry> ordered = new ArrayList<>();
 
+    /**
+     * Whether this request changed something real about the course that its learners are not told
+     * about — what it costs, or whether it is on the catalogue.
+     *
+     * <p>A deliberately separate channel, and it can do exactly one thing: move the course's
+     * revision. It cannot stamp {@code contentUpdatedAt}, it cannot write a change-log row, and it
+     * cannot reach a {@link TrackedContent} — so recording one still cannot tell a learner their
+     * course changed because somebody else's price did. What it does have to do is make the stored
+     * aggregate differ from the copy an open tab is holding: a repricing another tab never saw is
+     * precisely the edit a stale full-replacement save would put back.
+     */
+    private boolean unannouncedChange;
+
     /** Opens a recording scope for one piece of content. */
     public Scope of(TrackedContent target) {
         return new Scope(this, target);
     }
 
+    /**
+     * Records a real change to the aggregate that its learners are deliberately not told about.
+     *
+     * <p>Pricing, access type, subscription plans and publication state. Nothing here reaches the
+     * badge or the change log — see the field it sets.
+     */
+    public void recordUnannouncedChange() {
+        this.unannouncedChange = true;
+    }
+
     public boolean hasChanges() {
         return !ordered.isEmpty();
+    }
+
+    /** Whether anything at all about the stored aggregate changed, announced to learners or not. */
+    public boolean hasAggregateChanges() {
+        return unannouncedChange || hasChanges();
     }
 
     /** Everything this request changed, strongest description per entity, in the order applied. */

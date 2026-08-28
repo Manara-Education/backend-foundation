@@ -12,6 +12,8 @@ import com.manara.backend.course.model.CourseModule;
 import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseStructure;
 import com.manara.backend.course.repository.CourseModuleRepository;
+import com.manara.backend.course.repository.CourseEntitlementRepository;
+import com.manara.backend.course.repository.CourseSubscriptionRepository;
 import com.manara.backend.course.repository.SubscriptionPlanRepository;
 import com.manara.backend.lesson.dto.LessonRequest;
 import com.manara.backend.lesson.mapper.LessonMapper;
@@ -62,6 +64,10 @@ class CourseContentSynchronizerTest {
     @Mock
     private SubscriptionPlanRepository subscriptionPlanRepository;
     @Mock
+    private CourseEntitlementRepository courseEntitlementRepository;
+    @Mock
+    private CourseSubscriptionRepository courseSubscriptionRepository;
+    @Mock
     private QuizService quizService;
     @Mock
     private VideoMetadataService videoMetadataService;
@@ -78,6 +84,9 @@ class CourseContentSynchronizerTest {
                 lessonRepository,
                 completedLessonRepository,
                 subscriptionPlanRepository,
+                courseEntitlementRepository,
+                courseSubscriptionRepository,
+                java.time.Clock.systemUTC(),
                 new CourseModuleMapper(),
                 new LessonMapper(durationFormatter, VideoProviderFixtures.resolver()),
                 new SubscriptionPlanMapper(),

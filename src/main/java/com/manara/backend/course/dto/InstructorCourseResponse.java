@@ -56,6 +56,17 @@ public class InstructorCourseResponse {
      */
     private Boolean hasUpdatesSincePublish;
 
+    /**
+     * The revision this editor model was read at. Echoed back as {@code expectedRevision} on save.
+     *
+     * <p>The whole of the editor's concurrency contract. An aggregate save is full replacement, so
+     * the server has to be told which version of the course the payload was built from; it answers
+     * every read <em>and</em> every accepted write with the current one, so an editor that keeps
+     * adopting the value it was last given never conflicts with itself — including after a reorder,
+     * which moves the revision like any other accepted change.
+     */
+    private Long revision;
+
     private List<InstructorLessonResponse> lessons;
     private List<InstructorModuleResponse> modules;
     private InstructorQuizResponse finalQuiz;

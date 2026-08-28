@@ -23,8 +23,8 @@ public class CourseMapper {
     public Course toCourse(CourseRequest request, Instructor instructor, ResolvedCourseSettings settings) {
         return Course.builder()
                 .title(request.getTitle().trim())
-                .subtitle(request.getSubtitle())
-                .image(request.getImage())
+                .subtitle(request.subtitleValue())
+                .image(request.imageValue())
                 .description(request.getDescription())
                 .duration(request.getDuration())
                 .structure(settings.structure())

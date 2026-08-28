@@ -116,7 +116,8 @@ class LessonProgressionTest {
         DurationFormatter durationFormatter = new DurationFormatter(messageService);
         lessonService = new LessonService(
                 lessonRepository, courseRepository, courseModuleRepository, completedLessonRepository,
-                enrollmentRepository, learnerCourseAccess, courseProgressionService,
+                enrollmentRepository, learnerCourseAccess, new LessonPlacement(lessonRepository),
+                courseProgressionService,
                 new CourseContentJournal(courseChangeRepository),
                 new LessonMapper(durationFormatter, VideoProviderFixtures.resolver()), quizService,
                 new QuizMapper(), videoMetadataService, VideoProviderFixtures.resolver(),

@@ -66,11 +66,26 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.error(messageService.get("error.notFound")));
     }
 
+    /**
+     * A business condition the domain refused. {@code 409} when the caller's copy of the world is
+     * out of date, {@code 400} otherwise, and both carry the condition's {@link ErrorCode} when it
+     * has one so a client can branch on the condition rather than on a translated sentence.
+     *
+     * <p>Ordered before {@link #handleBusiness}: Spring picks the most specific handler, but stating
+     * it here keeps the pair readable as one decision.
+     */
+    @ExceptionHandler(ConflictException.class)
+    public ResponseEntity<@NonNull ApiResponse<Void>> handleConflict(ConflictException ex) {
+        String message = messageService.get(ex.getMessageCode(), ex.getArgs());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.error(message, ex.getErrorCode()));
+    }
+
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<@NonNull ApiResponse<Void>> handleBusiness(BusinessException ex) {
         String message = messageService.get(ex.getMessageCode(), ex.getArgs());
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(ApiResponse.error(message));
+                .body(ApiResponse.error(message, ex.getErrorCode()));
     }
 
     @ExceptionHandler(BadCredentialsException.class)
@@ -102,6 +117,13 @@ public class GlobalExceptionHandler {
      *
      * <p>Any other integrity violation is a genuine conflict the caller may be able to resolve;
      * it gets a 409 and a generic message. The driver's own text is logged, never returned.
+     *
+     * <p>This is a backstop, not a business-rule channel. Every constraint an ordinary instructor
+     * flow used to trip — a lesson position already taken, a subscription plan a learner still
+     * holds — is now decided in the domain and answered with its own {@link ErrorCode}, because
+     * "the request conflicts with data that already exists" told the instructor nothing they could
+     * act on and the client nothing it could branch on. Anything that still reaches here is a bug
+     * or a genuine race, and the generic message is the honest answer to both.
      */
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<@NonNull ApiResponse<Void>> handleDataIntegrityViolation(

@@ -41,12 +41,20 @@ import java.util.Map;
  * <p>A lesson moving between modules counts as new to the module it arrives in — it has no
  * position there yet, and the one it held under its old parent means nothing under the new one.
  *
+ * <h2>The standalone lesson endpoints use it too</h2>
+ * Adding or moving one lesson is the same problem with one unplaced sibling instead of several:
+ * build the scope in the order the database holds it, drop the lesson in at the position the caller
+ * asked for, and this decides the rest. Those endpoints used to write the client's {@code
+ * orderIndex} straight into a unique constraint, so the obvious "add a lesson at position 0" was a
+ * duplicate-key {@code 409} and there was no way to say "put it at the end" at all. There is one
+ * ordering algorithm in this codebase and this is it.
+ *
  * <h2>What this deliberately does not do</h2>
  * It does not merge two orderings, and it does not try to detect which of them is newer. A stale
  * array simply has no say: every sibling that already exists keeps its stored relative order, so
  * a save built on an old copy of the course cannot reorder anything, no matter how old it is.
  */
-final class SiblingOrdering {
+public final class SiblingOrdering {
 
     private SiblingOrdering() {
     }
@@ -58,19 +66,19 @@ final class SiblingOrdering {
      *                       in this scope yet — a newly created sibling, or one arriving from
      *                       another parent
      */
-    record Slot<T>(T entity, Integer storedPosition) {
+    public record Slot<T>(T entity, Integer storedPosition) {
 
         /** A sibling that is already stored in this scope, at {@code storedPosition}. */
-        static <T> Slot<T> stored(T entity, Integer storedPosition) {
+        public static <T> Slot<T> stored(T entity, Integer storedPosition) {
             return new Slot<>(entity, storedPosition);
         }
 
         /** A sibling with no position in this scope yet, to be placed from the payload. */
-        static <T> Slot<T> unplaced(T entity) {
+        public static <T> Slot<T> unplaced(T entity) {
             return new Slot<>(entity, null);
         }
 
-        boolean isStored() {
+        public boolean isStored() {
             return storedPosition != null;
         }
     }
@@ -80,7 +88,7 @@ final class SiblingOrdering {
      *
      * <p>The result names every entity exactly once. Its indices are the positions to write.
      */
-    static <T> List<T> resolve(List<Slot<T>> slots) {
+    public static <T> List<T> resolve(List<Slot<T>> slots) {
         // Each unplaced sibling hangs off the last stored one that precedes it in the payload;
         // -1 stands for "before every stored sibling", which is where a list that begins with a
         // new lesson puts it.
