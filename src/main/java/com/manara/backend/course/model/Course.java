@@ -88,6 +88,24 @@ public class Course implements TrackedContent {
     private CourseAccessType accessType = CourseAccessType.FREE;
 
     /**
+     * Who the course is offered to. Independent of {@link #status}, and deliberately so.
+     *
+     * <p>{@code status} says whether the course is finished; this says who it is finished
+     * <em>for</em>. All four combinations are legal: a published course can be off the catalogue,
+     * and a draft is a draft whichever of the two this holds.
+     *
+     * <p>Defaults to {@link CourseVisibility#PUBLIC} in three separate places — the Java field, the
+     * column default, and the V12 back-fill — because every one of them is a way a course could
+     * otherwise end up hidden without anyone asking for it. A course only becomes private when an
+     * instructor says so.
+     */
+    @Builder.Default
+    @Enumerated(EnumType.STRING)
+    @ColumnDefault("'PUBLIC'")
+    @Column(nullable = false, length = 20)
+    private CourseVisibility visibility = CourseVisibility.PUBLIC;
+
+    /**
      * One-off purchase price. Kept on the original {@code price} column so existing data, the
      * checkout flow and existing API consumers keep working — this is the same pricing concept,
      * renamed, not a second one.
@@ -248,6 +266,38 @@ public class Course implements TrackedContent {
                 && lastPublishedAt != null
                 && contentUpdatedAt != null
                 && contentUpdatedAt.isAfter(lastPublishedAt);
+    }
+
+    /**
+     * Whether this course may be shown to somebody who does not already have it.
+     *
+     * <p>The one discovery rule the platform has, expressed once. Every catalogue, search,
+     * recommendation and category listing is a query for this, and every learner-facing lookup by id
+     * falls back to it — so the two axes are combined here and nowhere else. Duplicating it as
+     * {@code status == PUBLISHED && visibility == PUBLIC} at each call site is exactly how one of
+     * those sites eventually forgets the second half and leaks a private course.
+     *
+     * <p>Derived, never stored, so it cannot disagree with the two fields it is derived from.
+     *
+     * <p>Read it as a statement about the course alone: it is not "may this person see it". A
+     * learner who is enrolled, the owning instructor, and staff all reach a course this returns
+     * {@code false} for — see {@code CourseViewPolicy}, which is the only place that decides that.
+     */
+    public boolean isDiscoverable() {
+        return status == CourseStatus.PUBLISHED && visibility == CourseVisibility.PUBLIC;
+    }
+
+    /**
+     * Changes who the course is offered to.
+     *
+     * <p>Deliberately narrow: it moves this one field and touches nothing else. Going private is
+     * not an unpublish, does not move the publication baseline, does not stamp the content version
+     * and — most importantly — does not reach an enrollment, an entitlement, a purchase or a
+     * learner's progress. A course that a hundred people are studying still has a hundred people
+     * studying it a moment after this returns; what changed is who <em>else</em> can find it.
+     */
+    public void changeVisibility(CourseVisibility next) {
+        this.visibility = next;
     }
 
     @Override

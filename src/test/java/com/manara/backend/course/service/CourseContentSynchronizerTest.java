@@ -11,6 +11,7 @@ import com.manara.backend.course.model.CourseAccessType;
 import com.manara.backend.course.model.CourseModule;
 import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseStructure;
+import com.manara.backend.course.model.CourseVisibility;
 import com.manara.backend.course.repository.CourseModuleRepository;
 import com.manara.backend.course.repository.CourseEntitlementRepository;
 import com.manara.backend.course.repository.CourseSubscriptionRepository;
@@ -273,12 +274,12 @@ class CourseContentSynchronizerTest {
 
     private ResolvedCourseSettings flatSettings() {
         return new ResolvedCourseSettings(
-                CourseStructure.FLAT, CourseStatus.DRAFT, CourseAccessType.FREE, null);
+                CourseStructure.FLAT, CourseStatus.DRAFT, CourseVisibility.PUBLIC, CourseAccessType.FREE, null);
     }
 
     private ResolvedCourseSettings modulesSettings() {
         return new ResolvedCourseSettings(
-                CourseStructure.MODULES, CourseStatus.DRAFT, CourseAccessType.FREE, null);
+                CourseStructure.MODULES, CourseStatus.DRAFT, CourseVisibility.PUBLIC, CourseAccessType.FREE, null);
     }
 
     private CourseRequest flatCourse(LessonRequest... lessons) {

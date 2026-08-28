@@ -5,6 +5,7 @@ import com.manara.backend.common.json.PatchDeserializer;
 import com.manara.backend.course.model.CourseAccessType;
 import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseStructure;
+import com.manara.backend.course.model.CourseVisibility;
 import com.manara.backend.lesson.dto.LessonRequest;
 import com.manara.backend.quiz.dto.QuizRequest;
 import jakarta.validation.constraints.NotBlank;
@@ -140,6 +141,22 @@ public class CourseRequest {
 
     /** Defaults to {@link CourseStatus#DRAFT} on create and to the course's current status on update. */
     private CourseStatus status;
+
+    /**
+     * Who the course is offered to. Independent of {@link #status} — see {@link CourseVisibility}.
+     *
+     * <p>Defaults to {@link CourseVisibility#PUBLIC} on create and to the course's current
+     * visibility on update, so a payload that never mentions the field can neither hide an existing
+     * course nor create a hidden one. That is what keeps every client written against the previous
+     * contract — including the editor's own metadata-only saves — behaving exactly as it did.
+     *
+     * <p>Accepted on update, unlike {@link #status}, and that difference is intentional. Publication
+     * has its own endpoints because a stale full-replacement save must not be able to take a live
+     * course off the catalogue in passing; visibility has no such endpoint because it is a course
+     * setting the instructor edits on the same screen as the title, and the revision check already
+     * refuses a save built on a copy that predates somebody else's change to it.
+     */
+    private CourseVisibility visibility;
 
     /**
      * The one-off price to store, preferring the current field name over the legacy one.

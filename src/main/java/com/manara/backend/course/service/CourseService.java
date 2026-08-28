@@ -21,6 +21,7 @@ import com.manara.backend.course.mapper.EntitlementMapper;
 import com.manara.backend.course.model.Course;
 import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseStructure;
+import com.manara.backend.course.model.CourseVisibility;
 import com.manara.backend.course.repository.CourseRepository;
 import com.manara.backend.course.service.view.CourseDetailsViewRegistry;
 import com.manara.backend.lesson.model.Lesson;
@@ -55,6 +56,15 @@ import java.util.stream.Collectors;
  * quizzes, questions, options and plans. Validation is complete before synchronization starts, so a
  * rejected payload never leaves a half-rearranged course behind, and a failure anywhere in the
  * nested content rolls the whole edit back.
+ *
+ * <h2>Publication is not visibility</h2>
+ * A course has two independent axes. {@code status} — {@code DRAFT} or {@code PUBLISHED} — says
+ * whether it is finished. {@code visibility} — {@code PUBLIC} or {@code PRIVATE} — says who it is
+ * finished for. Nothing here reads one to decide the other: publishing a private course leaves it
+ * private, making a draft public leaves it a draft, and {@link #publish} / {@link #unpublish} do
+ * not touch visibility at all. What the two combine into is a single question — may somebody who
+ * does not already hold this course be shown it — and that is answered once, by
+ * {@code Course.isDiscoverable()}.
  *
  * <h2>Publication is not editability</h2>
  * A published course is fully editable by its instructor. Publication decides who can <em>see</em>
@@ -102,19 +112,45 @@ public class CourseService {
     private final EntitlementPolicy entitlementPolicy;
     private final FileUploadService fileUploadService;
     private final CourseModuleRepository courseModuleRepository;
-    private final CourseVisibility courseVisibility;
+    private final CourseViewPolicy courseViewPolicy;
     private final Clock clock;
 
-    /** Catalogue for instructors and admins — drafts included. */
-    public List<CourseResponse> getAllCourses() {
+    /**
+     * Catalogue for instructors and admins — every course on the platform, drafts and private
+     * courses included.
+     *
+     * <p>Now actually restricted to them. It always documented itself this way and never enforced
+     * it: the endpoint sits behind {@code anyRequest().authenticated()} and nothing below it looked
+     * at the caller's role, so any signed-in learner could read every instructor's unfinished draft
+     * by asking for the instructor catalogue instead of theirs. That was already wrong, and private
+     * courses make it load-bearing — this is the one list on the platform that deliberately shows
+     * courses no learner may discover, so it is the one place a private course would otherwise leak
+     * wholesale.
+     *
+     * <p>Learners have their own catalogue and are not being taken anything away from: see
+     * {@link #getDiscoverableCourses()}, which is what the student browse endpoint calls.
+     */
+    public List<CourseResponse> getAllCourses(User user) {
+        requireStaff(user);
         return courseRepository.findAllWithInstructor().stream()
                 .map(courseMapper::toCourseResponse)
                 .toList();
     }
 
-    /** Catalogue for learners. Drafts are an instructor's work in progress and stay hidden. */
-    public List<CourseResponse> getPublishedCourses() {
-        return courseRepository.findAllByStatusWithInstructor(CourseStatus.PUBLISHED).stream()
+    /**
+     * Catalogue for learners: the courses anyone may find.
+     *
+     * <p>Two independent reasons a course is not here, and both are answered by the query rather
+     * than by anything downstream of it. A draft is an instructor's work in progress. A private
+     * course is finished and deliberately off the catalogue — it belongs to the learners who
+     * already hold it, and they reach it through their own library, never through this.
+     *
+     * <p>Filtered in SQL, which is the whole point: a private course excluded after the fact would
+     * still have been counted, still have occupied a slot in a page, and still have been one of
+     * the "20 courses" a paginated caller was promised.
+     */
+    public List<CourseResponse> getDiscoverableCourses() {
+        return courseRepository.findAllDiscoverableWithInstructor().stream()
                 .map(courseMapper::toCourseResponse)
                 .toList();
     }
@@ -130,8 +166,8 @@ public class CourseService {
     public CourseDetailsResponse getCourseDetails(User user, Long courseId, CourseViewMode mode) {
         // Not "is it published" but "may this viewer see it": a learner who already holds the
         // course keeps it when the instructor withdraws it from the catalogue, and everybody else
-        // is told it does not exist. See CourseVisibility.
-        var course = courseVisibility.requireVisible(user, courseId);
+        // is told it does not exist. See CourseViewPolicy.
+        var course = courseViewPolicy.requireVisible(user, courseId);
         var aggregate = courseAggregateLoader.load(course);
         var progression = courseDetailsViewRegistry.get(mode).resolveProgression(user, aggregate);
         var access = entitlementMapper.toCourseAccessResponse(entitlementPolicy.accessOf(user, courseId));
@@ -249,6 +285,15 @@ public class CourseService {
             changes.recordUnannouncedChange();
         }
 
+        // Visibility travels the same channel and for the same reason: it is a real change to the
+        // aggregate that an open tab has to be told about, and it is emphatically not news for
+        // learners. Nobody enrolled is to be shown an "Updated" badge because the course they are
+        // studying came off the catalogue — nothing about the course they hold changed.
+        if (course.getVisibility() != settings.visibility()) {
+            changes.recordUnannouncedChange();
+        }
+        applyVisibility(course, settings.visibility(), user);
+
         courseContentJournal.commit(course, changes, now);
 
         // Last, and after the content it may be publishing. The status the validator resolved is
@@ -304,7 +349,7 @@ public class CourseService {
      * holds the course keeps their library entry, their curriculum, their progress and their
      * attempt history while it is off the catalogue, and gets them all back unchanged when it
      * returns. What unpublishing removes is discovery and acquisition, not access. See
-     * {@link CourseVisibility}.
+     * {@link CourseViewPolicy}.
      */
     @Transactional
     public InstructorCourseResponse unpublish(User user, Long courseId) {
@@ -525,6 +570,32 @@ public class CourseService {
     }
 
     /**
+     * Applies the visibility the payload asked for.
+     *
+     * <p>Applied before the journal rather than after it, unlike {@link #applyStatus}, because it
+     * has no baseline to set and nothing to be ordered against — it is one field, and it takes
+     * effect the moment the transaction commits. From that instant discovery, search and every
+     * lookup by id read the new value, because all of them read the row rather than a cached copy
+     * of it.
+     *
+     * <p>Deliberately does not touch anything else. Not the enrollments, not the entitlements, not
+     * the purchases, not the progress, not the publication baseline, not the content version. A
+     * course going private is a course that stops being <em>offered</em>; every learner who already
+     * accepted the offer is unaffected, which is enforced by there being nothing here that could
+     * affect them.
+     */
+    private void applyVisibility(Course course, CourseVisibility visibility, User user) {
+        if (course.getVisibility() == visibility) {
+            return;
+        }
+        course.changeVisibility(visibility);
+        // Ids and the new setting only. A private course's title, learners and pricing are exactly
+        // the metadata this must not put in a log line.
+        log.info("Course visibility changed: courseId={} instructorUserId={} visibility={}",
+                course.getId(), user.getId(), visibility);
+    }
+
+    /**
      * Applies a status the payload asked for, through the lifecycle methods.
      *
      * <p>Same status in, nothing happens — which is the case for every ordinary content save, since
@@ -550,6 +621,19 @@ public class CourseService {
     private InstructorCourseResponse saveAndRespond(Course course) {
         courseRepository.saveAndFlush(course);
         return courseAggregateMapper.toInstructorCourseResponse(courseAggregateLoader.load(course));
+    }
+
+    /**
+     * Instructors and administrators, for the platform-wide catalogue.
+     *
+     * <p>Refused with the same message an instructor-only operation uses, because it is the same
+     * refusal: this is an authoring-side view of the platform, and a learner asking for it is
+     * asking for somebody else's tooling.
+     */
+    private void requireStaff(User user) {
+        if (user == null || (user.getRole() != Role.INSTRUCTOR && user.getRole() != Role.ADMIN)) {
+            throw new BusinessException("error.course.onlyInstructor");
+        }
     }
 
     private Instructor requireInstructor(User user) {

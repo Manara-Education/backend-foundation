@@ -16,6 +16,7 @@ import com.manara.backend.quiz.dto.QuizRequest;
 import com.manara.backend.course.dto.ModuleRequest;
 import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseStructure;
+import com.manara.backend.course.model.CourseVisibility;
 import com.manara.backend.course.model.SubscriptionUnit;
 import com.manara.backend.lesson.dto.InstructorLessonResponse;
 import com.manara.backend.lesson.dto.LessonRequest;
@@ -192,6 +193,27 @@ final class CourseAuthoringFixtures {
     }
 
     /**
+     * A course on both axes at once, for the tests that are about the pair.
+     *
+     * <p>Every other builder leaves visibility unsaid, which is itself worth keeping: those tests
+     * then exercise the default, and would fail if omitting the field ever stopped meaning
+     * {@code PUBLIC}.
+     */
+    static CourseRequest flatCourse(String title, CourseStatus status, CourseVisibility visibility,
+                                    LessonRequest... lessons) {
+        CourseRequest request = flatCourse(title, status, lessons);
+        request.setVisibility(visibility);
+        return request;
+    }
+
+    static CourseRequest modularCourse(String title, CourseStatus status, CourseVisibility visibility,
+                                       ModuleRequest... modules) {
+        CourseRequest request = modularCourse(title, status, modules);
+        request.setVisibility(visibility);
+        return request;
+    }
+
+    /**
      * The payload the editor sends back after loading a course: the same tree, with every id it was
      * given. Building requests this way is what makes an "unchanged save" genuinely unchanged, and
      * it is the shape every real edit is a small deviation from.
@@ -207,6 +229,11 @@ final class CourseAuthoringFixtures {
                 .description(course.getDescription())
                 .image(course.getImage())
                 .structure(course.getStructure())
+                // Carried, because the editor carries it. An echo that dropped visibility would be
+                // testing a client nobody ships — and, since an absent field means "unchanged", it
+                // would also silently pass whatever the server already had rather than the value
+                // the editor is holding.
+                .visibility(course.getVisibility())
                 .accessType(course.getAccessType())
                 .purchasePrice(course.getPurchasePrice())
                 .modules(course.getStructure() == CourseStructure.MODULES

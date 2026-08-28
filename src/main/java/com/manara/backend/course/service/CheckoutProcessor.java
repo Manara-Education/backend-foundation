@@ -12,6 +12,7 @@ import com.manara.backend.course.model.CourseEntitlement;
 import com.manara.backend.course.model.CoursePurchase;
 import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseSubscription;
+import com.manara.backend.course.model.CourseVisibility;
 import com.manara.backend.course.model.EntitlementSource;
 import com.manara.backend.course.model.Enrollment;
 import com.manara.backend.course.model.SubscriptionPlan;
@@ -95,7 +96,7 @@ public class CheckoutProcessor {
     @Transactional
     public CheckoutResponse checkout(User user, Long courseId, CheckoutRequest request) {
         Student student = requireStudent(user);
-        Course course = requirePublishedCourse(courseId);
+        Course course = requireAcquirableCourse(courseId, student);
         LocalDateTime now = LocalDateTime.now(clock);
 
         CourseEntitlement entitlement =
@@ -302,11 +303,35 @@ public class CheckoutProcessor {
                         "error.profile.studentNotFound", user.getId().toString()));
     }
 
-    /** Drafts are indistinguishable from a missing course on the learner side. */
-    private Course requirePublishedCourse(Long courseId) {
+    /**
+     * The course, if this learner may acquire access to it. Drafts and private courses are
+     * indistinguishable from a missing course on the learner side.
+     *
+     * <p>Two gates, and the second has an exception the first does not:
+     *
+     * <ul>
+     *   <li><strong>Draft.</strong> Refused outright, exactly as before. Nothing that is not
+     *       published is for sale, to anybody.
+     *   <li><strong>Private.</strong> Refused to everyone except the learner who already holds the
+     *       course. That exception is not a loophole — it is the requirement. A subscriber whose
+     *       window lapsed on a course that has since gone private must still be able to renew, and
+     *       a learner repeating a checkout that already succeeded must still get the same answer
+     *       rather than a {@code 404}. Both reach this line, and neither is the general population
+     *       a private course is being withheld from.
+     * </ul>
+     *
+     * <p>The enrolment is the test, not the entitlement: an expired entitlement is precisely the
+     * state a renewal starts from, so checking that instead would refuse the one case this exists
+     * to allow.
+     */
+    private Course requireAcquirableCourse(Long courseId, Student student) {
         Course course = courseRepository.findById(courseId)
                 .orElseThrow(() -> new ResourceNotFoundException("error.course.notFound", courseId.toString()));
         if (course.getStatus() != CourseStatus.PUBLISHED) {
+            throw new ResourceNotFoundException("error.course.notFound", courseId.toString());
+        }
+        if (course.getVisibility() == CourseVisibility.PRIVATE
+                && !enrollmentRepository.existsByCourseIdAndStudentId(courseId, student.getId())) {
             throw new ResourceNotFoundException("error.course.notFound", courseId.toString());
         }
         return course;

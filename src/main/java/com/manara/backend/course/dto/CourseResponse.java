@@ -3,6 +3,7 @@ package com.manara.backend.course.dto;
 import com.manara.backend.course.model.CourseAccessType;
 import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseStructure;
+import com.manara.backend.course.model.CourseVisibility;
 import com.manara.backend.lesson.dto.LessonResponse;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -34,6 +35,16 @@ public class CourseResponse {
     private CourseAccessType accessType;
     private CourseStructure structure;
     private CourseStatus status;
+
+    /**
+     * Who the course is offered to, alongside — never instead of — {@code status}.
+     *
+     * <p>Additive, and the two are read together: a course can be {@code PUBLISHED} and
+     * {@code PRIVATE} at once, so a client that collapses them into one badge is describing
+     * something the domain does not have. A client written before this field existed simply ignores
+     * it and keeps rendering publication exactly as it did.
+     */
+    private CourseVisibility visibility;
 
     /**
      * Whether the course has changed in a way its learners should be told about.

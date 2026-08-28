@@ -27,6 +27,27 @@ public interface CourseRepository extends JpaRepository<Course, Long> {
     @Query("select c from Course c join fetch c.instructor i join fetch i.user where c.status = :status")
     List<Course> findAllByStatusWithInstructor(@Param("status") CourseStatus status);
 
+    /**
+     * Every course a learner who does not already hold one may be shown.
+     *
+     * <p>The discovery rule as a query, and the reason it is a query rather than a filter applied
+     * to the result of one. Discovery is counted, paginated and grouped by category; a private
+     * course removed after the fact still occupies a row of the page, a place in the total, and a
+     * number in a category count. Filtering in the {@code WHERE} clause means the pagination that
+     * exists today and any that is added later operates on eligible courses only, and the counts
+     * come out of the same predicate rather than a second, drifting copy of it.
+     *
+     * <p>It mirrors {@link Course#isDiscoverable()} exactly, which is the one duplication the rule
+     * has: JPQL cannot call a derived method. The pair is covered by a test that asserts they agree
+     * over the whole matrix of statuses and visibilities, so neither can be changed alone.
+     */
+    @Query("""
+            select c from Course c join fetch c.instructor i join fetch i.user
+            where c.status = com.manara.backend.course.model.CourseStatus.PUBLISHED
+              and c.visibility = com.manara.backend.course.model.CourseVisibility.PUBLIC
+            """)
+    List<Course> findAllDiscoverableWithInstructor();
+
     @Query("select c from Course c join fetch c.instructor i join fetch i.user where c.instructor.id = :instructorId")
     List<Course> findByInstructorIdWithInstructor(@Param("instructorId") Long instructorId);
 

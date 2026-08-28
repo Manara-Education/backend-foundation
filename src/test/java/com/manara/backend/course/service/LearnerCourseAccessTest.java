@@ -75,7 +75,7 @@ class LearnerCourseAccessTest {
         learnerCourseAccess = new LearnerCourseAccess(
                 courseRepository, studentRepository, enrollmentRepository,
                 courseAggregateLoader, courseProgressionService, entitlementPolicy,
-                new CourseVisibility(courseRepository, studentRepository, enrollmentRepository));
+                new CourseViewPolicy(courseRepository, studentRepository, enrollmentRepository));
     }
 
     // --- reading -------------------------------------------------------------

@@ -41,7 +41,7 @@ import java.util.Optional;
  *       content, which is exactly what the discovery screen shows.</li>
  * </ul>
  *
- * <p>Whether the course resolves at all is {@link CourseVisibility}'s answer, not a publication
+ * <p>Whether the course resolves at all is {@link CourseViewPolicy}'s answer, not a publication
  * check made here. Unpublishing takes a course off the catalogue; it does not take it away from the
  * learners who already hold it, and every one of the outcomes above still applies while it is a
  * draft.
@@ -57,7 +57,7 @@ public class LearnerCourseAccess {
     private final CourseAggregateLoader courseAggregateLoader;
     private final CourseProgressionService courseProgressionService;
     private final EntitlementPolicy entitlementPolicy;
-    private final CourseVisibility courseVisibility;
+    private final CourseViewPolicy courseViewPolicy;
 
     /**
      * For write paths — completing a lesson, submitting a quiz — where anything short of an
@@ -68,7 +68,7 @@ public class LearnerCourseAccess {
             throw new BusinessException("error.course.onlyStudent");
         }
 
-        Course course = courseVisibility.requireVisible(user, courseId);
+        Course course = courseViewPolicy.requireVisible(user, courseId);
         Student student = studentRepository.findByUserId(user.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("error.profile.studentNotFound", user.getId().toString()));
         Enrollment enrollment = enrollmentRepository.findByCourseIdAndStudentId(courseId, student.getId())
@@ -100,8 +100,8 @@ public class LearnerCourseAccess {
 
         // A draft is the instructor's work in progress; to everyone who does not already hold the
         // course it does not exist. To a learner who does, withdrawing it from the catalogue is not
-        // a revocation — they keep the course they joined. See CourseVisibility.
-        if (!courseVisibility.isVisibleTo(user, course)) {
+        // a revocation — they keep the course they joined. See CourseViewPolicy.
+        if (!courseViewPolicy.isVisibleTo(user, course)) {
             throw new ResourceNotFoundException("error.course.notFound", courseId.toString());
         }
 
