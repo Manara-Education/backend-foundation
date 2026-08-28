@@ -14,7 +14,7 @@ import com.manara.backend.quiz.dto.QuizOptionRequest;
 import com.manara.backend.quiz.dto.QuizQuestionRequest;
 import com.manara.backend.quiz.dto.QuizRequest;
 import com.manara.backend.quiz.service.QuizValidator;
-import com.manara.backend.video.VideoProviderFixtures;
+import com.manara.backend.lesson.LessonContentFixtures;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -31,7 +31,7 @@ class CourseValidatorTest {
     private static final LessonVideoBaseline NO_STORED_VIDEOS = LessonVideoBaseline.none();
 
     private final CourseValidator validator =
-            new CourseValidator(new QuizValidator(), VideoProviderFixtures.resolver());
+            new CourseValidator(new QuizValidator(), LessonContentFixtures.validator());
 
     // --- structure ----------------------------------------------------------
 

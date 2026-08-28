@@ -1,6 +1,7 @@
 package com.manara.backend.lesson.dto;
 
 import com.fasterxml.jackson.annotation.JsonAlias;
+import com.manara.backend.lesson.model.LessonContentType;
 import com.manara.backend.quiz.dto.QuizRequest;
 import com.manara.backend.video.model.VideoProvider;
 import jakarta.validation.constraints.NotBlank;
@@ -36,13 +37,24 @@ public class LessonRequest {
     private String description;
 
     /**
+     * Which kind of lesson this is, and therefore which of the two content fields below is read.
+     *
+     * <p>Optional on the wire, defaulting to {@code VIDEO}, and that default is a compatibility
+     * guarantee rather than a convenience: every client written before this field existed sends a
+     * video URL and no type, and must keep creating video lessons. A client that wants the other
+     * kind has to say so.
+     *
+     * @see LessonContentType
+     */
+    private LessonContentType contentType;
+
+    /**
      * The lesson's video, on any platform Manara supports. The provider is worked out from this by
      * the server, so a client never has to know how to tell YouTube from Vimeo.
      *
      * <p>Named for what it is rather than for one platform: the prototype's field carried the same
      * value under the same name, so this is not a contract change, only an honest one.
      */
-    @NotBlank(message = "{validation.lesson.videoUrl.required}")
     private String videoUrl;
 
     /**
@@ -76,6 +88,19 @@ public class LessonRequest {
      * modules; inside a course payload the nesting already says it, and this field is ignored.
      */
     private Long moduleId;
+
+    /**
+     * The authored document for a {@code RICH_CONTENT} lesson, as JSON.
+     *
+     * <p>Untrusted in full. It is never stored as sent — see
+     * {@link com.manara.backend.lesson.content.RichContentSanitizer}, which rebuilds it from the
+     * values it recognises and refuses the ones it must not keep.
+     *
+     * <p>A string rather than a typed tree on purpose: the field is a document in a schema the
+     * server owns, and binding it to Java classes here would let Jackson accept shapes before the
+     * sanitizer has had an opinion about them.
+     */
+    private String richContent;
 
     /** Optional — {@code null} removes the lesson's quiz. */
     private QuizRequest quiz;

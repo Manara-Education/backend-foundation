@@ -1,6 +1,7 @@
 package com.manara.backend.lesson.dto;
 
 import com.manara.backend.quiz.dto.InstructorQuizResponse;
+import com.manara.backend.lesson.model.LessonContentType;
 import com.manara.backend.video.model.VideoProvider;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -28,6 +29,19 @@ public class InstructorLessonResponse {
     private String title;
     private String summary;
     private String description;
+    /**
+     * Which kind of lesson this is. Always present, so a client dispatches on a stated fact rather
+     * than guessing from whether {@code videoUrl} came back null.
+     */
+    private LessonContentType contentType;
+
+    /**
+     * The authored document, canonical JSON, as the server stored it.
+     *
+     * <p>Returned to the editor sanitized rather than as it was submitted, so what the instructor
+     * reopens is what learners are actually being shown.
+     */
+    private String richContent;
     private String videoUrl;
 
     /**

@@ -20,6 +20,7 @@ import com.manara.backend.lesson.mapper.LessonMapper;
 import com.manara.backend.lesson.model.Lesson;
 import com.manara.backend.lesson.repository.CompletedLessonRepository;
 import com.manara.backend.lesson.repository.LessonRepository;
+import com.manara.backend.lesson.LessonContentFixtures;
 import com.manara.backend.video.VideoProviderFixtures;
 import com.manara.backend.video.service.VideoMetadataService;
 import com.manara.backend.quiz.dto.QuizOptionRequest;
@@ -92,7 +93,8 @@ class CourseContentSynchronizerTest {
                 new SubscriptionPlanMapper(),
                 quizService,
                 videoMetadataService,
-                VideoProviderFixtures.resolver());
+                LessonContentFixtures.validator(),
+                LessonContentFixtures.writer());
 
         course = Course.builder()
                 .id(COURSE_ID)

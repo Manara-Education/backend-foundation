@@ -2,6 +2,7 @@ package com.manara.backend.lesson.dto;
 
 import com.manara.backend.course.dto.ContentChangeResponse;
 import com.manara.backend.quiz.dto.LearnerQuizResponse;
+import com.manara.backend.lesson.model.LessonContentType;
 import com.manara.backend.video.model.VideoProvider;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -34,6 +35,19 @@ public class LessonResponse {
     private String title;
     private String summary;
     private String description;
+    /**
+     * Which kind of lesson this is. Always present, so a client dispatches on a stated fact rather
+     * than guessing from whether {@code videoUrl} came back null.
+     */
+    private LessonContentType contentType;
+
+    /**
+     * The authored document, canonical JSON, for a {@code RICH_CONTENT} lesson.
+     *
+     * <p>Null for a video lesson, and null for a locked one — it is lesson content, withheld by the
+     * same rule that withholds the video.
+     */
+    private String richContent;
     private String videoUrl;
 
     /**
