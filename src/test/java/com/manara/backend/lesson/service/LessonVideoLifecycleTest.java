@@ -8,6 +8,8 @@ import com.manara.backend.course.model.CourseStructure;
 import com.manara.backend.course.repository.CourseModuleRepository;
 import com.manara.backend.course.repository.CourseRepository;
 import com.manara.backend.course.repository.EnrollmentRepository;
+import com.manara.backend.course.repository.CourseChangeRepository;
+import com.manara.backend.course.service.CourseContentJournal;
 import com.manara.backend.course.service.CourseProgressionService;
 import com.manara.backend.course.service.LearnerCourseAccess;
 import com.manara.backend.lesson.dto.LessonRequest;
@@ -76,6 +78,9 @@ class LessonVideoLifecycleTest {
     @Mock private VideoMetadataService videoMetadataService;
     @Mock private MessageService messageService;
 
+    @Mock
+    private CourseChangeRepository courseChangeRepository;
+
     private LessonService lessonService;
     private Course course;
 
@@ -88,9 +93,11 @@ class LessonVideoLifecycleTest {
 
         lessonService = new LessonService(
                 lessonRepository, courseRepository, courseModuleRepository, completedLessonRepository,
-                enrollmentRepository, learnerCourseAccess, courseProgressionService,
+                enrollmentRepository, learnerCourseAccess, new LessonPlacement(lessonRepository),
+                courseProgressionService,
+                new CourseContentJournal(courseChangeRepository),
                 new LessonMapper(durationFormatter, resolver), quizService, new QuizMapper(),
-                videoMetadataService, resolver);
+                videoMetadataService, resolver, java.time.Clock.systemUTC());
 
         course = Course.builder()
                 .id(COURSE_ID)
@@ -101,7 +108,9 @@ class LessonVideoLifecycleTest {
                 .build();
 
         given(messageService.get(any(), any())).willReturn("0s");
-        given(courseRepository.findById(COURSE_ID)).willReturn(Optional.of(course));
+        // The authoring paths hold the course row for the transaction; see
+        // LessonService#getCourseAndVerifyInstructor.
+        given(courseRepository.findByIdForUpdate(COURSE_ID)).willReturn(Optional.of(course));
         given(lessonRepository.saveAndFlush(any(Lesson.class)))
                 .willAnswer(invocation -> invocation.getArgument(0));
         given(lessonRepository.save(any(Lesson.class)))

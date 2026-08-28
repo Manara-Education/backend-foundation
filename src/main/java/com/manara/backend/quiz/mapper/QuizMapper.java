@@ -110,6 +110,15 @@ public class QuizMapper {
      *              is not one — an instructor reading a learner-shaped response, typically
      */
     public LearnerQuizResponse toLearnerResponse(Quiz quiz, LearnerQuizState state) {
+        return toLearnerResponse(quiz, state, null);
+    }
+
+    /**
+     * @param change what to say about this quiz to the learner reading it, or {@code null} where the
+     *               question has no answer
+     */
+    public LearnerQuizResponse toLearnerResponse(Quiz quiz, LearnerQuizState state,
+                                                 com.manara.backend.course.dto.ContentChangeResponse change) {
         if (quiz == null) {
             return null;
         }
@@ -120,6 +129,7 @@ public class QuizMapper {
                 .passingScore(quiz.getPassingScore())
                 .questions(sortedQuestions(quiz).map(this::toLearnerQuestionResponse).toList())
                 .state(toLearnerQuizStateResponse(state))
+                .change(change)
                 .build();
     }
 

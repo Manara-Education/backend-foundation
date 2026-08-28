@@ -55,6 +55,15 @@ public class CourseDetailsResponse {
     /** The lesson to open next, or {@code null} when nothing is left to open. */
     private Long nextLessonId;
 
+    /**
+     * Content that was part of this course when the reader enrolled and is not part of it now.
+     *
+     * <p>It cannot appear in the curriculum, because there is nothing left to open — so it is listed
+     * here instead. Empty for a viewer who is not enrolled, and empty for a course nothing has been
+     * removed from since they joined.
+     */
+    private List<RemovedContentResponse> removedContent;
+
     @Getter
     @Builder
     @AllArgsConstructor
@@ -74,6 +83,43 @@ public class CourseDetailsResponse {
         private List<SubscriptionPlanResponse> subscriptionPlans;
         private Integer studentsCount;
         private LocalDateTime createdAt;
+
+        /**
+         * Whether the instructor has edited this course since they last published it.
+         *
+         * <p>A statement about the instructor's workflow, not about any particular learner: it is the
+         * same value for everybody looking at the course, and re-publishing clears it for everybody
+         * at once. Kept for the screens that already read it.
+         *
+         * <p>Not what a learner's "Updated" badge should be driven by — see
+         * {@link #hasUpdatesSinceEnrollment}.
+         */
+        private Boolean hasUpdatesSincePublish;
+
+        /**
+         * Whether this course has changed since <em>the reader</em> enrolled.
+         *
+         * <pre>{@code course.contentUpdatedAt > enrollment.enrolledAt}</pre>
+         *
+         * <p>The learner-facing badge, and the one the course card reads. Per enrollment, so two
+         * students of the same course get different answers: somebody who joined this morning bought
+         * the version that already contained everything, and telling them it had been updated would
+         * be describing somebody else's experience of the course.
+         *
+         * <p>False for a viewer who is not enrolled — "new to you" means nothing to somebody who has
+         * not joined, and a shop window covered in update badges would be advertising the
+         * instructor's edit history.
+         */
+        private Boolean hasUpdatesSinceEnrollment;
+
+        /**
+         * When the course's content last changed, or {@code null} for a viewer with no enrollment to
+         * measure against.
+         *
+         * <p>For display — "updated 3 days ago" — never for a client to compare against anything.
+         * The comparison is {@link #hasUpdatesSinceEnrollment}, already made.
+         */
+        private LocalDateTime latestContentUpdateAt;
     }
 
     @Getter

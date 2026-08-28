@@ -35,4 +35,7 @@ public class LearnerQuizResponse {
      * attempts went. Null when the viewer is not a learner of the course.
      */
     private LearnerQuizStateResponse state;
+
+    /** Whether this quiz is new or updated to the learner reading it. @see LessonResponse#getChange() */
+    private com.manara.backend.course.dto.ContentChangeResponse change;
 }

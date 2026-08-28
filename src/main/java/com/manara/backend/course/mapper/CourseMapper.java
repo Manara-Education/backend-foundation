@@ -23,8 +23,8 @@ public class CourseMapper {
     public Course toCourse(CourseRequest request, Instructor instructor, ResolvedCourseSettings settings) {
         return Course.builder()
                 .title(request.getTitle().trim())
-                .subtitle(request.getSubtitle())
-                .image(request.getImage())
+                .subtitle(request.subtitleValue())
+                .image(request.imageValue())
                 .description(request.getDescription())
                 .duration(request.getDuration())
                 .structure(settings.structure())
@@ -62,10 +62,12 @@ public class CourseMapper {
                 .accessType(course.getAccessType())
                 .structure(course.getStructure())
                 .status(course.getStatus())
+                .hasUpdatesSincePublish(course.hasUpdatesSincePublish())
                 .studentsCount(course.getStudentsCount())
                 .instructorId(course.getInstructor().getId())
                 .instructorName(course.getInstructor().getUser().getFullName())
                 .createdAt(course.getCreatedAt())
+                .updatedAt(course.getUpdatedAt())
                 .lessons(lessons)
                 .build();
     }

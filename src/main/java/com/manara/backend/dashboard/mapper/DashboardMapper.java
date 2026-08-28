@@ -26,6 +26,11 @@ public class DashboardMapper {
                 .status(resolveStatus(progress))
                 .category(course.getSubtitle())
                 .duration(formatDuration(course.getDuration()))
+                .hasUpdatesSincePublish(course.hasUpdatesSincePublish())
+                // The learner's own answer, from the enrollment this card was built from. Asked of
+                // the enrollment rather than computed here, so this screen and the course-details
+                // screen are reading one implementation of the rule.
+                .hasUpdatesSinceEnrollment(enrollment.hasCourseUpdates())
                 .build();
     }
 

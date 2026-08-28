@@ -14,6 +14,7 @@ import com.manara.backend.quiz.service.GradedQuiz;
 import org.springframework.stereotype.Component;
 
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Builds the attempt aggregate and the result it is reported as.
@@ -44,10 +45,21 @@ public class QuizAttemptMapper {
         return attempt;
     }
 
+    /**
+     * One answer row, carrying both the authoring references and a copy of what they said.
+     *
+     * <p>The copy is the point. The references are useful while the question and option exist and
+     * are cleared when they do not; the text is what makes the row still readable afterwards, and
+     * it is the only version of the question this learner was ever asked — a later edit to the
+     * wording, the options or the answer key describes a quiz they never sat.
+     */
     public QuizAttemptAnswer toQuizAttemptAnswer(GradedAnswer answer) {
         return QuizAttemptAnswer.builder()
                 .question(answer.question())
                 .selectedOption(answer.selectedOption())
+                .questionText(answer.question().getText())
+                .selectedOptionText(answer.selectedOption().getText())
+                .correctOptionText(correctOptionText(answer.question()))
                 .correct(answer.correct())
                 .build();
     }
@@ -76,19 +88,30 @@ public class QuizAttemptMapper {
                 .questionId(asId(answer.question().getId()))
                 .selectedOptionId(asId(answer.selectedOption().getId()))
                 .correctOptionId(correctOptionId(answer.question()))
+                .questionText(answer.question().getText())
+                .selectedOptionText(answer.selectedOption().getText())
+                .correctOptionText(correctOptionText(answer.question()))
                 .correct(answer.correct())
                 .explanation(answer.question().getExplanation())
                 .build();
     }
 
     private String correctOptionId(QuizQuestion question) {
-        return question.getOptions().stream()
-                .filter(option -> Boolean.TRUE.equals(option.getCorrect()))
+        return correctOption(question)
                 .map(QuizOption::getId)
                 .filter(Objects::nonNull)
-                .findFirst()
                 .map(String::valueOf)
                 .orElse(null);
+    }
+
+    private String correctOptionText(QuizQuestion question) {
+        return correctOption(question).map(QuizOption::getText).orElse(null);
+    }
+
+    private Optional<QuizOption> correctOption(QuizQuestion question) {
+        return question.getOptions().stream()
+                .filter(option -> Boolean.TRUE.equals(option.getCorrect()))
+                .findFirst();
     }
 
     private String asId(Long id) {

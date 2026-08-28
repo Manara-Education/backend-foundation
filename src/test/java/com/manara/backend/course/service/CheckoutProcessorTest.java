@@ -17,6 +17,7 @@ import com.manara.backend.course.model.SubscriptionStatus;
 import com.manara.backend.course.model.SubscriptionUnit;
 import com.manara.backend.course.repository.CourseEntitlementRepository;
 import com.manara.backend.course.repository.CourseRepository;
+import com.manara.backend.course.repository.CoursePurchaseRepository;
 import com.manara.backend.course.repository.CourseSubscriptionRepository;
 import com.manara.backend.course.repository.EnrollmentRepository;
 import com.manara.backend.course.repository.SubscriptionPlanRepository;
@@ -85,6 +86,9 @@ class CheckoutProcessorTest {
     @Mock
     private PaymentGateway paymentGateway;
 
+    @Mock
+    private CoursePurchaseRepository coursePurchaseRepository;
+
     private CheckoutProcessor checkoutProcessor;
 
     private final User studentUser = User.builder().id(2L).role(Role.STUDENT).build();
@@ -96,7 +100,7 @@ class CheckoutProcessorTest {
         Clock fixed = Clock.fixed(NOW.toInstant(ZoneOffset.UTC), ZoneId.of("UTC"));
         checkoutProcessor = new CheckoutProcessor(
                 courseRepository, studentRepository, enrollmentRepository, courseEntitlementRepository,
-                courseSubscriptionRepository, subscriptionPlanRepository, new CourseMapper(),
+                coursePurchaseRepository, courseSubscriptionRepository, subscriptionPlanRepository, new CourseMapper(),
                 new EntitlementMapper(), entitlementPolicy, new SubscriptionWindow(), paymentGateway, fixed);
 
         lenient().when(entitlementPolicy.accessOf(any(Long.class), any(Student.class)))
@@ -166,6 +170,63 @@ class CheckoutProcessorTest {
         assertThat(saved.getSource()).isEqualTo(EntitlementSource.PURCHASE);
         assertThat(saved.getExpiresAt()).isNull();
         assertThat(response.getPaymentReference()).isEqualTo("sim_test");
+    }
+
+    /**
+     * The receipt is the record, and it has to be written or the price becomes unrecoverable.
+     *
+     * <p>Before {@code course_purchases} existed, a purchase charged {@code courses.price}, put the
+     * gateway reference in the HTTP response and persisted nothing. The instructor then repriced the
+     * course from 490 to 700 and there was no longer any way to say what an existing buyer had paid
+     * — the only surviving number was the new one. Subscriptions never had this problem, because
+     * {@code course_subscriptions.price_paid} has always been a snapshot.
+     */
+    @Test
+    void aPurchaseWritesAnImmutableRecordOfWhatWasCharged() {
+        givenCourse(CourseAccessType.PURCHASE, BigDecimal.valueOf(490));
+        givenNoExistingAccess();
+        given(paymentGateway.charge(any(), any()))
+                .willReturn(new PaymentReceipt("sim_test", BigDecimal.valueOf(490), NOW));
+
+        checkoutProcessor.checkout(studentUser, COURSE_ID, purchaseRequest());
+
+        var captor = ArgumentCaptor.forClass(com.manara.backend.course.model.CoursePurchase.class);
+        verify(coursePurchaseRepository).save(captor.capture());
+        var purchase = captor.getValue();
+
+        assertThat(purchase.getListPrice()).isEqualByComparingTo("490");
+        assertThat(purchase.getAmountPaid()).isEqualByComparingTo("490");
+        assertThat(purchase.getCurrency()).isEqualTo("EGP");
+        assertThat(purchase.getPaymentReference()).isEqualTo("sim_test");
+        assertThat(purchase.getPurchasedAt()).isEqualTo(NOW);
+        assertThat(purchase.getStudent().getId()).isEqualTo(STUDENT_ID);
+    }
+
+    @Test
+    void arefusedChargeLeavesNoPurchaseRecordBehind() {
+        givenCourse(CourseAccessType.PURCHASE, BigDecimal.valueOf(490));
+        givenNoExistingAccess();
+        given(paymentGateway.charge(any(), any())).willThrow(new BusinessException("error.payment.declined"));
+
+        assertThatThrownBy(() -> checkoutProcessor.checkout(studentUser, COURSE_ID, purchaseRequest()))
+                .isInstanceOf(BusinessException.class);
+
+        // A receipt for access nobody was granted is worse than no receipt at all.
+        verify(coursePurchaseRepository, never()).save(any());
+        verify(courseEntitlementRepository, never()).save(any());
+    }
+
+    @Test
+    void aRepeatOfASucceededPurchaseChargesNothingAndWritesNoSecondReceipt() {
+        Course course = givenCourse(CourseAccessType.PURCHASE, BigDecimal.valueOf(490));
+        given(studentRepository.findByUserId(2L)).willReturn(Optional.of(student));
+        given(courseEntitlementRepository.findForUpdate(COURSE_ID, STUDENT_ID))
+                .willReturn(Optional.of(perpetual(course, EntitlementSource.PURCHASE)));
+
+        checkoutProcessor.checkout(studentUser, COURSE_ID, purchaseRequest());
+
+        verify(paymentGateway, never()).charge(any(), any());
+        verify(coursePurchaseRepository, never()).save(any());
     }
 
     /**

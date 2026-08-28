@@ -25,6 +25,20 @@ public class QuizAttemptAnswerResponse {
 
     private String correctOptionId;
 
+    /**
+     * The question, the chosen answer and the answer key in the words they carried at submission.
+     *
+     * <p>Copied onto the attempt row rather than read back from the quiz, so a result that is
+     * reviewed after the instructor has reworded the question, moved the answer key or deleted the
+     * chosen option still describes the quiz the learner actually sat. The ids above go on naming
+     * the authoring rows while they exist; these three are what survive them.
+     */
+    private String questionText;
+
+    private String selectedOptionText;
+
+    private String correctOptionText;
+
     private Boolean correct;
 
     /** The instructor's explanation, when they wrote one. */
