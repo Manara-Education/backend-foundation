@@ -1,5 +1,7 @@
 package com.manara.backend.course.dto;
 
+import com.manara.backend.common.json.Patch;
+import com.manara.backend.common.json.PatchDeserializer;
 import com.manara.backend.course.model.CourseAccessType;
 import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseStructure;
@@ -13,9 +15,9 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import tools.jackson.databind.annotation.JsonDeserialize;
 
 import java.math.BigDecimal;
-import java.util.EnumSet;
 import java.util.List;
 
 /**
@@ -31,20 +33,44 @@ import java.util.List;
  *
  * <p>Cross-field rules (pricing, structure, publishing, quizzes) live in {@code CourseValidator}
  * and {@code QuizValidator} rather than in annotations, because they depend on each other.
+ *
+ * <h2>Full replacement is not last-write-wins</h2>
+ * Because the payload is the whole course, a copy of it built an hour ago is an hour-old course. An
+ * update therefore has to say which revision of the server's course it was built from — see
+ * {@link #expectedRevision} — and is refused rather than applied if that is no longer the current
+ * one. Without it, correcting a typo in one tab silently restored every other field to whatever
+ * that tab had loaded, including the price.
+ *
+ * <p>The constructor is deliberately private. Jackson picks a properties-based creator over the
+ * no-arg constructor when it can see one, and which of the two it picks used to decide whether
+ * this DTO worked at all; hiding it removes the choice. The presence-aware fields below are
+ * correct either way regardless, and that is the actual guarantee — this only removes the
+ * ambiguity.
  */
 @Getter
 @Setter
 @Builder
-@AllArgsConstructor
+@AllArgsConstructor(access = AccessLevel.PRIVATE)
 @NoArgsConstructor
 public class CourseRequest {
 
     @NotBlank(message = "{validation.course.title.required}")
     private String title;
 
-    private String subtitle;
+    /**
+     * Optional metadata, and one of the two fields where "absent" and "null" mean different things.
+     *
+     * <p>Typed as a {@link Patch} rather than a {@code String} for exactly that reason: a save that
+     * says nothing about the subtitle must leave it alone, and one that sends {@code null} must
+     * clear it. See {@link Patch} for why the distinction lives in the type instead of in the
+     * setters.
+     */
+    @JsonDeserialize(using = PatchDeserializer.class)
+    private Patch<String> subtitle;
 
-    private String image;
+    /** The cover image URL. Presence-tracked for the same reason as {@link #subtitle}. */
+    @JsonDeserialize(using = PatchDeserializer.class)
+    private Patch<String> image;
 
     @NotBlank(message = "{validation.course.description.required}")
     private String description;
@@ -66,6 +92,19 @@ public class CourseRequest {
      */
     @PositiveOrZero(message = "{validation.course.duration.positive}")
     private Integer duration;
+
+    /**
+     * The course revision this payload was built from, as the server last reported it.
+     *
+     * <p>Required on update, absent on create. The server compares it against the course's current
+     * revision under a row lock and refuses the save if they differ, so an aggregate assembled from
+     * a copy someone else has since edited writes nothing at all rather than restoring every field
+     * it is holding. The value is server-generated and echoed back unchanged; a client never
+     * computes one.
+     *
+     * @see com.manara.backend.course.model.Course#getRevision()
+     */
+    private Long expectedRevision;
 
     /** Defaults to {@link CourseStructure#FLAT} when omitted, matching pre-existing courses. */
     private CourseStructure structure;
@@ -109,83 +148,24 @@ public class CourseRequest {
         return purchasePrice != null ? purchasePrice : price;
     }
 
-    /**
-     * Which optional metadata fields the payload actually mentioned.
-     *
-     * <p>A Java bean cannot tell "absent" from "explicitly null" on its own, and for two of these
-     * fields the difference matters a great deal: an update that says nothing about {@code image}
-     * meant to leave the cover alone, and clearing it instead is how a metadata-only save blanked
-     * a published course's thumbnail. Recording presence in the setters — which Jackson calls only
-     * for keys that are in the JSON — is what separates the two without changing the wire format
-     * or adding a dependency.
-     *
-     * <p>The fields that are not tracked do not need to be: {@code title} and {@code description}
-     * are required, and {@code status}, {@code structure}, {@code accessType}, the prices, the
-     * plans and the content tree all already read {@code null} as "leave it alone" in
-     * {@code CourseValidator} and {@code CourseContentSynchronizer}.
-     */
-    @Getter(AccessLevel.NONE)
-    @Setter(AccessLevel.NONE)
-    private EnumSet<Field> presentFields;
-
-    /** The optional metadata fields whose presence is tracked. */
-    public enum Field {
-        SUBTITLE, IMAGE, DURATION
+    /** Whether the payload mentioned {@code subtitle}, whatever value it gave it. */
+    public boolean carriesSubtitle() {
+        return Patch.isPresent(subtitle);
     }
 
-    public void setSubtitle(String subtitle) {
-        this.subtitle = subtitle;
-        this.presentFields = mark(this.presentFields, Field.SUBTITLE);
+    /** The subtitle the payload asked for, or {@code null} when it never mentioned one. */
+    public String subtitleValue() {
+        return Patch.valueOf(subtitle);
     }
 
-    public void setImage(String image) {
-        this.image = image;
-        this.presentFields = mark(this.presentFields, Field.IMAGE);
+    /** Whether the payload mentioned {@code image}, whatever value it gave it. */
+    public boolean carriesImage() {
+        return Patch.isPresent(image);
     }
 
-    public void setDuration(Integer duration) {
-        this.duration = duration;
-        this.presentFields = mark(this.presentFields, Field.DURATION);
-    }
-
-    /** Whether the payload mentioned this field at all, whatever value it gave it. */
-    public boolean carries(Field field) {
-        return presentFields != null && presentFields.contains(field);
-    }
-
-    private static EnumSet<Field> mark(EnumSet<Field> fields, Field field) {
-        EnumSet<Field> next = fields == null ? EnumSet.noneOf(Field.class) : fields;
-        next.add(field);
-        return next;
-    }
-
-    /**
-     * The generated builder, with the three tracked fields taught to record themselves.
-     *
-     * <p>Lombok's builder assigns fields directly rather than through setters, so without these a
-     * request built in Java — every test, and any future server-side caller — would look as though
-     * it had mentioned nothing. Hand-writing the three suppresses Lombok's versions and leaves the
-     * rest of the builder generated as before.
-     */
-    public static class CourseRequestBuilder {
-
-        public CourseRequestBuilder subtitle(String subtitle) {
-            this.subtitle = subtitle;
-            this.presentFields = mark(this.presentFields, Field.SUBTITLE);
-            return this;
-        }
-
-        public CourseRequestBuilder image(String image) {
-            this.image = image;
-            this.presentFields = mark(this.presentFields, Field.IMAGE);
-            return this;
-        }
-
-        public CourseRequestBuilder duration(Integer duration) {
-            this.duration = duration;
-            this.presentFields = mark(this.presentFields, Field.DURATION);
-            return this;
-        }
+    /** The cover the payload asked for, or {@code null} when it never mentioned one. */
+    public String imageValue() {
+        return Patch.valueOf(image);
     }
 
     /**
@@ -197,5 +177,27 @@ public class CourseRequest {
      */
     public boolean carriesContentFor(CourseStructure structure) {
         return structure == CourseStructure.MODULES ? modules != null : lessons != null;
+    }
+
+    /**
+     * The builder, with the two presence-tracked fields taking their plain value.
+     *
+     * <p>{@code subtitle("x")} reads as "the payload said x" and {@code subtitle(null)} as "the
+     * payload said null", which are the two states a client can express — and not calling it at all
+     * is absence, exactly as omitting the key is on the wire. Deliberately only this overload: a
+     * second one taking a {@link Patch} would make {@code image(null)} ambiguous, which is the one
+     * call that most needs to mean something definite.
+     */
+    public static class CourseRequestBuilder {
+
+        public CourseRequestBuilder subtitle(String subtitle) {
+            this.subtitle = Patch.of(subtitle);
+            return this;
+        }
+
+        public CourseRequestBuilder image(String image) {
+            this.image = Patch.of(image);
+            return this;
+        }
     }
 }

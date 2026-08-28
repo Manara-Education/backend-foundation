@@ -1,5 +1,6 @@
 package com.manara.backend.course.integration;
 
+import com.manara.backend.common.json.Patch;
 import com.manara.backend.common.exception.BusinessException;
 import com.manara.backend.course.dto.CourseRequest;
 import com.manara.backend.course.model.CourseAccessType;
@@ -105,12 +106,13 @@ class PublishedCourseEditingTest extends AbstractCourseAuthoringTest {
         @DisplayName("a payload that never mentions the cover image leaves it alone")
         void omittedImageIsPreserved() {
             var request = modularCourse("Covered", CourseStatus.PUBLISHED, module("Intro", lesson("L1")));
-            request.setImage("/uploads/cover.png");
-            request.setSubtitle("Level 1");
+            request.setImage(Patch.of("/uploads/cover.png"));
+            request.setSubtitle(Patch.of("Level 1"));
             var course = courseService.createCourse(instructorUser, request);
 
             // A metadata-only save that says nothing about the cover or the subtitle.
             var metadataOnly = CourseRequest.builder()
+                    .expectedRevision(course.getRevision())
                     .title("Covered, renamed")
                     .description(course.getDescription())
                     .build();
@@ -125,10 +127,11 @@ class PublishedCourseEditingTest extends AbstractCourseAuthoringTest {
         @DisplayName("a payload that explicitly sends a null cover image clears it")
         void explicitNullImageClearsIt() {
             var request = modularCourse("Covered", CourseStatus.PUBLISHED, module("Intro", lesson("L1")));
-            request.setImage("/uploads/cover.png");
+            request.setImage(Patch.of("/uploads/cover.png"));
             var course = courseService.createCourse(instructorUser, request);
 
             var clearing = CourseRequest.builder()
+                    .expectedRevision(course.getRevision())
                     .title(course.getTitle())
                     .description(course.getDescription())
                     .image(null)
@@ -145,6 +148,7 @@ class PublishedCourseEditingTest extends AbstractCourseAuthoringTest {
                             module("One", lesson("L1")), module("Two", lesson("L2"))));
 
             var metadataOnly = CourseRequest.builder()
+                    .expectedRevision(course.getRevision())
                     .title("Intact, renamed")
                     .description(course.getDescription())
                     .build();
@@ -163,6 +167,7 @@ class PublishedCourseEditingTest extends AbstractCourseAuthoringTest {
             var course = courseService.createCourse(instructorUser, request);
 
             var metadataOnly = CourseRequest.builder()
+                    .expectedRevision(course.getRevision())
                     .title("Priced, renamed")
                     .description(course.getDescription())
                     .build();
@@ -260,6 +265,7 @@ class PublishedCourseEditingTest extends AbstractCourseAuthoringTest {
                     flatCourse("Live", CourseStatus.PUBLISHED, lesson("Only lesson")));
 
             var emptying = CourseRequest.builder()
+                    .expectedRevision(course.getRevision())
                     .title(course.getTitle())
                     .description(course.getDescription())
                     .structure(CourseStructure.FLAT)
@@ -282,6 +288,7 @@ class PublishedCourseEditingTest extends AbstractCourseAuthoringTest {
                     flatCourse("Work in progress", CourseStatus.DRAFT, lesson("Only lesson")));
 
             var emptying = CourseRequest.builder()
+                    .expectedRevision(course.getRevision())
                     .title(course.getTitle())
                     .description(course.getDescription())
                     .structure(CourseStructure.FLAT)

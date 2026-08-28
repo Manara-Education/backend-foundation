@@ -64,6 +64,16 @@ final class CourseAuthoringFixtures {
                 .build();
     }
 
+    /** A lesson carrying its own quiz, for the tests that are about the quiz. */
+    static LessonRequest lessonWithQuiz(String title, QuizRequest quiz) {
+        return LessonRequest.builder()
+                .title(title)
+                .description(title + " description")
+                .videoUrl("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+                .quiz(quiz)
+                .build();
+    }
+
     /**
      * A quiz with two questions of three options each, the first option of each being correct.
      *
@@ -118,6 +128,16 @@ final class CourseAuthoringFixtures {
                 .build();
     }
 
+    /** A module carrying its own exam, for the tests that are about the exam rather than the module. */
+    static ModuleRequest moduleWithExam(String title, QuizRequest exam, LessonRequest... lessons) {
+        return ModuleRequest.builder()
+                .title(title)
+                .description(title + " description")
+                .lessons(List.of(lessons))
+                .quiz(exam)
+                .build();
+    }
+
     static CourseRequest modularCourse(String title, CourseStatus status, ModuleRequest... modules) {
         return CourseRequest.builder()
                 .title(title)
@@ -145,6 +165,10 @@ final class CourseAuthoringFixtures {
      */
     static CourseRequest echoOf(InstructorCourseResponse course) {
         return CourseRequest.builder()
+                // The revision the editor was holding when it built this payload. An update without
+                // one is refused, which is the point: a full-replacement save that cannot say what
+                // it was built from cannot be checked against what the server now holds.
+                .expectedRevision(course.getRevision())
                 .title(course.getTitle())
                 .subtitle(course.getSubtitle())
                 .description(course.getDescription())

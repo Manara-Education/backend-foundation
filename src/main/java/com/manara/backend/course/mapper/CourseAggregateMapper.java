@@ -59,6 +59,9 @@ public class CourseAggregateMapper {
                 .structure(course.getStructure())
                 .status(course.getStatus())
                 .hasUpdatesSincePublish(course.hasUpdatesSincePublish())
+                // What the next save has to quote back. Read and write both answer with it, so the
+                // editor is never holding a revision the server has already moved past.
+                .revision(course.getRevision())
                 // A module course reaches its lessons through its modules; the flat branch stays
                 // empty so no response ever describes a course as being both shapes at once.
                 .lessons(flat ? instructorLessons(aggregate, aggregate.lessons()) : List.of())

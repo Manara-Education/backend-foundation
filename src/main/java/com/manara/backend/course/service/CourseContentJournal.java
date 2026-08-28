@@ -47,11 +47,21 @@ public class CourseContentJournal {
      * Records everything one request changed, or does nothing at all.
      *
      * <p>A save that turns out to be a no-op leaves every previous value alone, which is what stops
-     * re-submitting a course unchanged from announcing a new version to its learners.
+     * re-submitting a course unchanged from announcing a new version to its learners — and, because
+     * the revision does not move either, stops it invalidating the copy every other open tab holds.
      *
-     * @return whether anything was recorded
+     * @return whether anything learner-visible was recorded. A commerce-only change advances the
+     *         revision and returns {@code false}: real, and deliberately not news.
      */
     public boolean commit(Course course, CourseContentChanges changes, LocalDateTime at) {
+        // The revision moves for every accepted change to the aggregate, curriculum or commerce,
+        // and it is the first thing done here so no path can record a change without advancing it.
+        // A repricing is invisible to learners and still has to invalidate the copy an open tab is
+        // holding: full replacement means that tab would otherwise put the old price back.
+        if (changes.hasAggregateChanges()) {
+            course.nextRevision();
+        }
+
         if (!changes.hasChanges()) {
             return false;
         }

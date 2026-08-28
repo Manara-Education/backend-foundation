@@ -1,5 +1,7 @@
 package com.manara.backend.course.integration;
 
+import com.manara.backend.common.exception.ConflictException;
+import com.manara.backend.common.exception.ErrorCode;
 import com.manara.backend.common.exception.BusinessException;
 import com.manara.backend.common.exception.ResourceNotFoundException;
 import com.manara.backend.course.dto.InstructorCourseResponse;
@@ -382,11 +384,17 @@ class LessonOrderingTest extends AbstractCourseAuthoringTest {
             courseService.reorderLessons(instructorUser, course.getId(),
                     lessonOrder(List.of(ids.get(2), ids.get(0), ids.get(1))));
 
-            // Tab A saves an unrelated edit, carrying its pre-drag lesson array.
+            // Tab A saves an unrelated edit, carrying its pre-drag lesson array. The reorder moved
+            // the course's revision, so the save is refused before it can write anything — and the
+            // aggregate save has no opinion about order underneath that anyway.
             staleCopyHeldByTabA.setTitle("Renamed from a stale tab");
-            courseService.updateCourse(instructorUser, course.getId(), staleCopyHeldByTabA);
+            assertThatThrownBy(() ->
+                    courseService.updateCourse(instructorUser, course.getId(), staleCopyHeldByTabA))
+                    .isInstanceOf(ConflictException.class)
+                    .satisfies(thrown -> assertThat(((ConflictException) thrown).getErrorCode())
+                            .isEqualTo(ErrorCode.COURSE_VERSION_CONFLICT));
 
-            assertThat(reload(course.getId()).getTitle()).isEqualTo("Renamed from a stale tab");
+            assertThat(reload(course.getId()).getTitle()).isNotEqualTo("Renamed from a stale tab");
             assertThat(persistedRootLessonTitles(course.getId()))
                     .containsExactly("Gamma", "Alpha", "Beta");
         }
@@ -404,8 +412,12 @@ class LessonOrderingTest extends AbstractCourseAuthoringTest {
                     lessonOrder(List.of(ids.get(2), ids.get(1), ids.get(0))));
 
             staleCopyHeldByTabA.setDescription("A different description, long enough to be real");
-            courseService.updateCourse(instructorUser, course.getId(), staleCopyHeldByTabA);
+            assertThatThrownBy(() ->
+                    courseService.updateCourse(instructorUser, course.getId(), staleCopyHeldByTabA))
+                    .isInstanceOf(ConflictException.class);
 
+            assertThat(reload(course.getId()).getDescription())
+                    .isNotEqualTo("A different description, long enough to be real");
             assertThat(persistedModuleLessonTitles(course.getId(), firstModuleId))
                     .containsExactly("A3", "A2", "A1");
         }
@@ -471,8 +483,7 @@ class LessonOrderingTest extends AbstractCourseAuthoringTest {
         @Test
         @DisplayName("re-saving a course unchanged neither reorders nor raises the badge")
         void anUnchangedSaveIsANoOpAcrossEveryScope() {
-            var course = twoModuleCourse();
-            courseService.publish(instructorUser, course.getId());
+            var course = courseService.publish(instructorUser, twoModuleCourse().getId());
             var before = reload(course.getId());
 
             courseService.updateCourse(instructorUser, course.getId(), echoOf(course));

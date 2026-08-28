@@ -1,5 +1,6 @@
 package com.manara.backend.course.integration;
 
+import com.manara.backend.common.json.Patch;
 import com.manara.backend.course.dto.CourseRequest;
 import com.manara.backend.course.dto.InstructorCourseResponse;
 import com.manara.backend.course.model.CourseAccessType;
@@ -121,14 +122,14 @@ class CourseMutationMatrixTest extends AbstractCourseAuthoringTest {
                         r -> r.setTitle("Renamed"),
                         c -> assertThat(c.getTitle()).isEqualTo("Renamed")),
                 mutation("metadata: subtitle",
-                        r -> r.setSubtitle("A new subtitle"),
+                        r -> r.setSubtitle(Patch.of("A new subtitle")),
                         c -> assertThat(c.getSubtitle()).isEqualTo("A new subtitle")),
                 mutation("metadata: description",
                         r -> r.setDescription("A rewritten description, long enough to be real"),
                         c -> assertThat(c.getDescription())
                                 .isEqualTo("A rewritten description, long enough to be real")),
                 mutation("metadata: cover image",
-                        r -> r.setImage("https://cdn.example.com/new-cover.png"),
+                        r -> r.setImage(Patch.of("https://cdn.example.com/new-cover.png")),
                         c -> assertThat(c.getImage()).isEqualTo("https://cdn.example.com/new-cover.png")),
 
                 // B. Structure -----------------------------------------------
@@ -405,8 +406,7 @@ class CourseMutationMatrixTest extends AbstractCourseAuthoringTest {
     @MethodSource("pricingMutations")
     @DisplayName("repricing persists and stays published without announcing anything")
     void aPriceChangePersistsAndStaysSilent(Mutation mutation) {
-        var course = fullCourse();
-        courseService.publish(instructorUser, course.getId());
+        var course = courseService.publish(instructorUser, fullCourse().getId());
         var before = reload(course.getId());
 
         var request = echoOf(course);
@@ -425,9 +425,10 @@ class CourseMutationMatrixTest extends AbstractCourseAuthoringTest {
     @MethodSource("mutations")
     @DisplayName("persists, stays published, and raises the update signal")
     void aRealEditPersistsAndAnnouncesItself(Mutation mutation) {
-        var course = fullCourse();
-        // Publishing settles the baseline, so anything that moves afterwards is this edit alone.
-        courseService.publish(instructorUser, course.getId());
+        // Publishing settles the baseline, so anything that moves afterwards is this edit alone —
+        // and it is an accepted change to the aggregate, so its response, not the pre-publish one,
+        // is what an editor would now be holding. Echoing the older copy would be a stale save.
+        var course = courseService.publish(instructorUser, fullCourse().getId());
         var before = reload(course.getId());
 
         var request = echoOf(course);
@@ -514,8 +515,7 @@ class CourseMutationMatrixTest extends AbstractCourseAuthoringTest {
         @MethodSource("noOps")
         @DisplayName("changes nothing and raises no update signal")
         void aNoOpSaveIsSilent(Mutation mutation) {
-            var course = fullCourse();
-            courseService.publish(instructorUser, course.getId());
+            var course = courseService.publish(instructorUser, fullCourse().getId());
             var before = reload(course.getId());
 
             var request = echoOf(course);
@@ -526,6 +526,9 @@ class CourseMutationMatrixTest extends AbstractCourseAuthoringTest {
             assertThat(after.getStatus()).isEqualTo(CourseStatus.PUBLISHED);
             assertThat(after.getContentUpdatedAt()).isEqualTo(before.getContentUpdatedAt());
             assertThat(after.hasUpdatesSincePublish()).isFalse();
+            // Nor does the revision move. A no-op that advanced it would make every other tab's
+            // copy stale for nothing, and turn the next real save somewhere else into a conflict.
+            assertThat(after.getRevision()).isEqualTo(before.getRevision());
 
             // The content is not merely un-announced — it is untouched.
             var reloaded = reloadForEditing(course.getId());
@@ -548,10 +551,8 @@ class CourseMutationMatrixTest extends AbstractCourseAuthoringTest {
         @org.junit.jupiter.api.Test
         @DisplayName("settles on publish, lights on a real edit, settles again on republish")
         void theBadgeCyclesWithPublication() {
-            var course = fullCourse();
-
             // 1-2. Freshly published: nothing to announce.
-            courseService.publish(instructorUser, course.getId());
+            var course = courseService.publish(instructorUser, fullCourse().getId());
             assertThat(reload(course.getId()).hasUpdatesSincePublish()).isFalse();
 
             // 3-4. A real edit lights it.
@@ -568,7 +569,7 @@ class CourseMutationMatrixTest extends AbstractCourseAuthoringTest {
             // 7-8. And another real edit lights it again.
             var reloaded = reloadForEditing(course.getId());
             var secondEdit = echoOf(reloaded);
-            secondEdit.setSubtitle("Edited twice");
+            secondEdit.setSubtitle(Patch.of("Edited twice"));
             courseService.updateCourse(instructorUser, course.getId(), secondEdit);
             assertThat(reload(course.getId()).hasUpdatesSincePublish()).isTrue();
             assertThat(reloadForEditing(course.getId()).getSubtitle()).isEqualTo("Edited twice");

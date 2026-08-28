@@ -1,6 +1,8 @@
 package com.manara.backend.course.service;
 
 import com.manara.backend.common.exception.BusinessException;
+import com.manara.backend.common.exception.ConflictException;
+import com.manara.backend.common.exception.ErrorCode;
 import com.manara.backend.common.exception.ResourceNotFoundException;
 import com.manara.backend.common.file.FileUploadService;
 import com.manara.backend.course.dto.CourseDetailsResponse;
@@ -100,6 +102,7 @@ public class CourseService {
     private final EntitlementPolicy entitlementPolicy;
     private final FileUploadService fileUploadService;
     private final CourseModuleRepository courseModuleRepository;
+    private final CourseVisibility courseVisibility;
     private final Clock clock;
 
     /** Catalogue for instructors and admins — drafts included. */
@@ -125,7 +128,10 @@ public class CourseService {
      * subscription's remaining days, or its renewal offer once it has run out.
      */
     public CourseDetailsResponse getCourseDetails(User user, Long courseId, CourseViewMode mode) {
-        var course = findPublishedCourse(courseId);
+        // Not "is it published" but "may this viewer see it": a learner who already holds the
+        // course keeps it when the instructor withdraws it from the catalogue, and everybody else
+        // is told it does not exist. See CourseVisibility.
+        var course = courseVisibility.requireVisible(user, courseId);
         var aggregate = courseAggregateLoader.load(course);
         var progression = courseDetailsViewRegistry.get(mode).resolveProgression(user, aggregate);
         var access = entitlementMapper.toCourseAccessResponse(entitlementPolicy.accessOf(user, courseId));
@@ -193,7 +199,11 @@ public class CourseService {
      */
     @Transactional
     public InstructorCourseResponse updateCourse(User user, Long courseId, CourseRequest request) {
-        var course = requireOwnedCourse(user, courseId);
+        // Locked before anything is read off it, and the revision checked before anything is
+        // validated. A stale payload must not be able to reach the content synchronizer at all.
+        var course = requireOwnedCourseForUpdate(user, courseId);
+        requireCurrentRevision(course, request.getExpectedRevision());
+
         var settings = courseValidator.resolveAndValidate(request, course, () -> activeLessonCount(course));
 
         String previousImage = course.getImage();
@@ -206,18 +216,32 @@ public class CourseService {
         var onCourse = changes.of(course);
         onCourse.metadata(course.getTitle(), request.getTitle().trim(), course::setTitle);
         onCourse.content(course.getDescription(), request.getDescription(), course::setDescription);
-        if (request.carries(CourseRequest.Field.SUBTITLE)) {
-            onCourse.metadata(course.getSubtitle(), request.getSubtitle(), course::setSubtitle);
+        if (request.carriesSubtitle()) {
+            onCourse.metadata(course.getSubtitle(), request.subtitleValue(), course::setSubtitle);
         }
-        if (request.carries(CourseRequest.Field.IMAGE)) {
-            onCourse.metadata(course.getImage(), request.getImage(), course::setImage);
+        if (request.carriesImage()) {
+            onCourse.metadata(course.getImage(), request.imageValue(), course::setImage);
         }
         // A structure switch re-parents or discards content, so it is curriculum, not commerce.
         onCourse.content(course.getStructure(), settings.structure(), course::setStructure);
 
+        // Recorded here rather than inside applyPricing, which still has no recorder to reach. The
+        // only thing this records is that the aggregate moved on, which is what a stale tab has to
+        // be told about — a price it never saw is a price its save would put back.
+        if (repricing(course, settings)) {
+            changes.recordUnannouncedChange();
+        }
         applyPricing(course, settings);
 
         courseContentSynchronizer.sync(course, request, settings, changes);
+
+        // Recorded before the journal and applied after it. The revision has to move for a
+        // publication change too — it is part of the aggregate an editor holds — but the transition
+        // itself must still run last, so a publish carrying edits sets its baseline on top of them
+        // rather than a moment before them.
+        if (course.getStatus() != settings.status()) {
+            changes.recordUnannouncedChange();
+        }
 
         courseContentJournal.commit(course, changes, now);
 
@@ -234,9 +258,9 @@ public class CourseService {
         // rest of the edit has been accepted. Only a payload that actually named a new image can
         // retire the old one — an update that never mentioned the cover leaves the file alone.
         if (previousImage != null
-                && request.carries(CourseRequest.Field.IMAGE)
-                && request.getImage() != null
-                && !previousImage.equals(request.getImage())) {
+                && request.carriesImage()
+                && request.imageValue() != null
+                && !previousImage.equals(request.imageValue())) {
             fileUploadService.deleteFile(previousImage);
         }
         return response;
@@ -252,23 +276,35 @@ public class CourseService {
      */
     @Transactional
     public InstructorCourseResponse publish(User user, Long courseId) {
-        var course = requireOwnedCourse(user, courseId);
+        var course = requireOwnedCourseForUpdate(user, courseId);
 
         // Publishing is where the completeness rules bite. An empty draft is a perfectly legal
         // draft; an empty published course is a broken catalogue entry.
         courseValidator.validatePublishable(activeLessonCount(course));
 
         course.markPublished(LocalDateTime.now(clock));
+        // Publication is part of the aggregate an editor is holding, so a publish moves the
+        // revision like any other accepted change and the editor adopts it from this response.
+        course.nextRevision();
         log.info("Course published: courseId={} instructorUserId={}", courseId, user.getId());
 
         return saveAndRespond(course);
     }
 
-    /** Withdraws a course from the catalogue. Content, learners and their history are untouched. */
+    /**
+     * Withdraws a course from the catalogue. Content, learners and their history are untouched.
+     *
+     * <p>Literally untouched, and now enforced rather than merely stated: a learner who already
+     * holds the course keeps their library entry, their curriculum, their progress and their
+     * attempt history while it is off the catalogue, and gets them all back unchanged when it
+     * returns. What unpublishing removes is discovery and acquisition, not access. See
+     * {@link CourseVisibility}.
+     */
     @Transactional
     public InstructorCourseResponse unpublish(User user, Long courseId) {
-        var course = requireOwnedCourse(user, courseId);
+        var course = requireOwnedCourseForUpdate(user, courseId);
         course.markUnpublished();
+        course.nextRevision();
         log.info("Course unpublished: courseId={} instructorUserId={}", courseId, user.getId());
         return saveAndRespond(course);
     }
@@ -292,7 +328,7 @@ public class CourseService {
      */
     @Transactional
     public InstructorCourseResponse reorderModules(User user, Long courseId, ModuleOrderRequest request) {
-        var course = requireOwnedCourse(user, courseId);
+        var course = requireOwnedCourseForUpdate(user, courseId);
 
         // Locked for the rest of the transaction: two reorders of one course arriving together
         // would otherwise interleave into an order neither instructor asked for.
@@ -313,7 +349,7 @@ public class CourseService {
      */
     @Transactional
     public InstructorCourseResponse reorderLessons(User user, Long courseId, LessonOrderRequest request) {
-        var course = requireOwnedCourse(user, courseId);
+        var course = requireOwnedCourseForUpdate(user, courseId);
 
         return applyOrder(course, user, "reorderLessons",
                 request.getLessonIds(), lessonRepository.findRootLessonsForUpdate(courseId),
@@ -338,7 +374,7 @@ public class CourseService {
     @Transactional
     public InstructorCourseResponse reorderModuleLessons(User user, Long courseId, Long moduleId,
                                                          LessonOrderRequest request) {
-        var course = requireOwnedCourse(user, courseId);
+        var course = requireOwnedCourseForUpdate(user, courseId);
         requireOwnedModule(courseId, moduleId);
 
         return applyOrder(course, user, "reorderModuleLessons",
@@ -524,10 +560,29 @@ public class CourseService {
      * id on its own.
      */
     private Course requireOwnedCourse(User user, Long courseId) {
+        return requireOwnership(user, courseId, courseRepository.findById(courseId));
+    }
+
+    /**
+     * The same gate, holding the course row for the rest of the transaction.
+     *
+     * <p>Every authoring write goes through this rather than {@link #requireOwnedCourse}, and it is
+     * always the first lock taken. Two reasons, and both are about two requests arriving at once:
+     * the revision check and its increment have to be one indivisible step, and every path that
+     * moves the revision has to take its locks in the same order or two of them can wait on each
+     * other. Ownership is still checked before anything is read off the course, and a course
+     * belonging to somebody else is refused after the lock exactly as it was before — the lock is
+     * on one row of one course and grants no information about it.
+     */
+    private Course requireOwnedCourseForUpdate(User user, Long courseId) {
+        return requireOwnership(user, courseId, courseRepository.findByIdForUpdate(courseId));
+    }
+
+    private Course requireOwnership(User user, Long courseId, java.util.Optional<Course> found) {
         if (user.getRole() != Role.INSTRUCTOR) {
             throw new BusinessException("error.course.onlyInstructor");
         }
-        var course = courseRepository.findById(courseId)
+        var course = found
                 .orElseThrow(() -> new ResourceNotFoundException("error.course.notFound", courseId.toString()));
         if (!course.getInstructor().getUser().getId().equals(user.getId())) {
             throw new BusinessException("error.course.notOwner");
@@ -535,14 +590,59 @@ public class CourseService {
         return course;
     }
 
-    /** Drafts are indistinguishable from a missing course on the learner side. */
-    private Course findPublishedCourse(Long courseId) {
-        var course = courseRepository.findById(courseId)
-                .orElseThrow(() -> new ResourceNotFoundException("error.course.notFound", courseId.toString()));
-        if (course.getStatus() != CourseStatus.PUBLISHED) {
-            throw new ResourceNotFoundException("error.course.notFound", courseId.toString());
+    /**
+     * Refuses an aggregate save that was built from a revision of the course that has since moved.
+     *
+     * <p>The aggregate {@code PUT} is full replacement, so accepting a stale payload does not merely
+     * lose the newer edit — it actively restores every field the stale client was holding. Two tabs
+     * were enough: one switched a course to {@code PURCHASE} at 199 and saved, the other renamed a
+     * lesson from a copy loaded beforehand, and the course went back to free. Both were answered
+     * {@code 200}.
+     *
+     * <p>Nothing is written when this refuses. It runs before validation and before the content
+     * synchronizer, on a course row this transaction holds a lock on, so the losing request cannot
+     * have touched the course, its content version or its learners' badge — a rejected save is not
+     * a mutation.
+     *
+     * <p>The revision is required rather than optional. An update that cannot say what it was built
+     * from cannot be checked, and treating that as "no precondition" would leave the guarantee opt-out
+     * — the one shape of client this exists to stop is exactly the one that would not send it.
+     */
+    private void requireCurrentRevision(Course course, Long expected) {
+        if (expected == null) {
+            throw new BusinessException(ErrorCode.COURSE_REVISION_REQUIRED, "error.course.revisionRequired");
         }
-        return course;
+        long current = revisionOf(course);
+        if (expected != current) {
+            log.info("Stale course save rejected: courseId={} expectedRevision={} currentRevision={}",
+                    course.getId(), expected, current);
+            throw new ConflictException(ErrorCode.COURSE_VERSION_CONFLICT, "error.course.versionConflict");
+        }
+    }
+
+    /** Rows written before the column existed read as revision zero rather than as no revision. */
+    private static long revisionOf(Course course) {
+        return course.getRevision() == null ? 0L : course.getRevision();
+    }
+
+    /**
+     * Whether this save changes what the course costs or how it is sold.
+     *
+     * <p>Read before {@link #applyPricing} writes, and only so the revision can move: a price
+     * change is still not content, still does not stamp {@code contentUpdatedAt} and still never
+     * reaches a learner's badge.
+     */
+    private boolean repricing(Course course, ResolvedCourseSettings settings) {
+        if (course.getAccessType() != settings.accessType()) {
+            return true;
+        }
+        var current = course.getPurchasePrice();
+        var next = settings.purchasePrice();
+        if (current == null || next == null) {
+            return current != next;
+        }
+        // compareTo, not equals: 99.99 re-sent as 99.990 is the same price.
+        return current.compareTo(next) != 0;
     }
 
     private int activeLessonCount(Course course) {

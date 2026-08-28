@@ -70,8 +70,8 @@ class CourseAuthoringApiTest extends AbstractCourseAuthoringTest {
         assertThat(course.getDuration()).isZero();
 
         String body = """
-                {"title":"Renamed over the wire","description":"%s","duration":0}
-                """.formatted(course.getDescription());
+                {"title":"Renamed over the wire","description":"%s","duration":0,"expectedRevision":%d}
+                """.formatted(course.getDescription(), course.getRevision());
 
         mockMvc.perform(put(BASE + "/{id}", course.getId())
                         .with(user(instructorUser)).with(csrf())
@@ -101,8 +101,8 @@ class CourseAuthoringApiTest extends AbstractCourseAuthoringTest {
     void omittingStatusPreservesPublication() throws Exception {
         var course = publishedCourse();
         String body = """
-                {"title":"Still live","description":"%s"}
-                """.formatted(course.getDescription());
+                {"title":"Still live","description":"%s","expectedRevision":%d}
+                """.formatted(course.getDescription(), course.getRevision());
 
         mockMvc.perform(put(BASE + "/{id}", course.getId())
                         .with(user(instructorUser)).with(csrf())
@@ -120,10 +120,10 @@ class CourseAuthoringApiTest extends AbstractCourseAuthoringTest {
         Long realOwner = reload(course.getId()).getInstructor().getId();
 
         String body = """
-                {"title":"Mass assignment attempt","description":"%s",
-                 "id":123456,"instructorId":999999,"studentsCount":5000,
+                {"title":"Mass assignment attempt","description":"%s","expectedRevision":%d,
+                 "id":123456,"instructorId":999999,"studentsCount":5000,"revision":987654,
                  "lastPublishedAt":"2020-01-01T00:00:00","contentUpdatedAt":"2020-01-01T00:00:00"}
-                """.formatted(course.getDescription());
+                """.formatted(course.getDescription(), course.getRevision());
 
         mockMvc.perform(put(BASE + "/{id}", course.getId())
                         .with(user(instructorUser)).with(csrf())
@@ -135,6 +135,9 @@ class CourseAuthoringApiTest extends AbstractCourseAuthoringTest {
         assertThat(reloaded.getInstructor().getId()).isEqualTo(realOwner);
         assertThat(reloaded.getStudentsCount()).isZero();
         assertThat(reloaded.getLastPublishedAt()).isAfter(java.time.LocalDateTime.of(2021, 1, 1, 0, 0));
+        // The revision is the server's counter, not a field a payload gets to set. A client that
+        // sends one moves it by one from where the server had it, exactly as any other save does.
+        assertThat(reloaded.getRevision()).isEqualTo(course.getRevision() + 1);
     }
 
     @Test

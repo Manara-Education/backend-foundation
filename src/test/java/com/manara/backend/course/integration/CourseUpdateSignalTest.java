@@ -1,5 +1,6 @@
 package com.manara.backend.course.integration;
 
+import com.manara.backend.common.json.Patch;
 import com.manara.backend.common.exception.BusinessException;
 import com.manara.backend.course.dto.CourseRequest;
 import com.manara.backend.course.dto.InstructorCourseResponse;
@@ -75,7 +76,7 @@ class CourseUpdateSignalTest extends AbstractCourseAuthoringTest {
         void whenTheCoverImageChanges() {
             var course = publishedCourse();
             var request = echoOf(course);
-            request.setImage("/uploads/new-cover.png");
+            request.setImage(Patch.of("/uploads/new-cover.png"));
 
             courseService.updateCourse(instructorUser, course.getId(), request);
             assertThat(updatedFlagOf(course.getId())).isTrue();
