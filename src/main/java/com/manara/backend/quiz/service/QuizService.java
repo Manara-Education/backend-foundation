@@ -1,5 +1,6 @@
 package com.manara.backend.quiz.service;
 
+import com.manara.backend.course.model.ContentChangeType;
 import com.manara.backend.quiz.dto.QuizOptionRequest;
 import com.manara.backend.quiz.dto.QuizQuestionRequest;
 import com.manara.backend.quiz.dto.QuizRequest;
@@ -81,27 +82,59 @@ public class QuizService {
      * the request are deleted.
      */
     @Transactional
-    public Quiz sync(QuizOwnerType ownerType, Long ownerId, QuizRequest request) {
+    public QuizSyncResult sync(QuizOwnerType ownerType, Long ownerId, QuizRequest request) {
         Quiz existing = quizRepository.findByOwnerTypeAndOwnerId(ownerType, ownerId).orElse(null);
 
         if (request == null) {
-            if (existing != null) {
-                quizRepository.delete(existing);
+            if (existing == null) {
+                return QuizSyncResult.unchanged(null);
             }
-            return null;
+            quizRepository.delete(existing);
+            // Returned rather than dropped: a deleted quiz is the only thing left to describe the
+            // removal with, and after this method returns it is unreachable.
+            return QuizSyncResult.of(existing, ContentChangeType.REMOVED);
         }
 
         quizValidator.validate(request);
 
         if (existing == null) {
-            return quizRepository.save(quizMapper.toQuiz(request, ownerType, ownerId));
+            return QuizSyncResult.of(
+                    quizRepository.save(quizMapper.toQuiz(request, ownerType, ownerId)),
+                    ContentChangeType.CREATED);
         }
 
-        existing.setTitle(request.getTitle().trim());
-        existing.setInstructions(trimToNull(request.getInstructions()));
-        existing.setPassingScore(request.getPassingScore());
-        syncQuestions(existing, request.getQuestions());
-        return quizRepository.save(existing);
+        // Compared before assigned, throughout. Re-submitting a quiz unchanged has to come out as
+        // "nothing happened", because the course above this decides from that answer whether to
+        // tell every enrolled learner the course was updated.
+        boolean renamed = assign(existing.getTitle(), request.getTitle().trim(), existing::setTitle);
+        // The pass mark and the questions are what a learner is actually assessed on; the title and
+        // instructions are the label on the outside. Kept apart so the sentence the learner reads
+        // can be the accurate one rather than the generic one.
+        boolean rewritten = assign(existing.getInstructions(), trimToNull(request.getInstructions()),
+                existing::setInstructions);
+        rewritten |= assign(existing.getPassingScore(), request.getPassingScore(), existing::setPassingScore);
+        rewritten |= syncQuestions(existing, request.getQuestions());
+
+        Quiz saved = quizRepository.save(existing);
+        if (rewritten) {
+            return QuizSyncResult.of(saved, ContentChangeType.CONTENT_UPDATED);
+        }
+        return renamed
+                ? QuizSyncResult.of(saved, ContentChangeType.METADATA_UPDATED)
+                : QuizSyncResult.unchanged(saved);
+    }
+
+    /**
+     * Assigns only when the value actually differs.
+     *
+     * @return whether anything was written
+     */
+    private <T> boolean assign(T current, T incoming, java.util.function.Consumer<T> setter) {
+        if (java.util.Objects.equals(current, incoming)) {
+            return false;
+        }
+        setter.accept(incoming);
+        return true;
     }
 
     @Transactional
@@ -121,7 +154,8 @@ public class QuizService {
         quizRepository.deleteAll(quizRepository.findByOwnerTypeAndOwnerIdIn(ownerType, ownerIds));
     }
 
-    private void syncQuestions(Quiz quiz, List<QuizQuestionRequest> requests) {
+    /** @return whether any question was created, removed, reordered or edited */
+    private boolean syncQuestions(Quiz quiz, List<QuizQuestionRequest> requests) {
         Map<String, QuizQuestion> existingById = new HashMap<>();
         for (QuizQuestion question : quiz.getQuestions()) {
             existingById.put(String.valueOf(question.getId()), question);
@@ -129,6 +163,7 @@ public class QuizService {
 
         Set<QuizQuestion> retained = Collections.newSetFromMap(new IdentityHashMap<>());
         List<QuizQuestion> created = new ArrayList<>();
+        boolean changed = false;
 
         for (int order = 0; order < requests.size(); order++) {
             QuizQuestionRequest request = requests.get(order);
@@ -136,23 +171,38 @@ public class QuizService {
 
             if (question == null) {
                 created.add(quizMapper.toQuestion(request, quiz, order));
+                changed = true;
                 continue;
             }
 
-            question.setText(request.getText().trim());
-            question.setExplanation(trimToNull(request.getExplanation()));
-            question.setHintByAiEnabled(Boolean.TRUE.equals(request.getHintByAiEnabled()));
-            question.setOrderIndex(order);
-            syncOptions(question, request);
+            changed |= assign(question.getText(), request.getText().trim(), question::setText);
+            changed |= assign(question.getExplanation(), trimToNull(request.getExplanation()),
+                    question::setExplanation);
+            changed |= assign(question.getHintByAiEnabled(), Boolean.TRUE.equals(request.getHintByAiEnabled()),
+                    question::setHintByAiEnabled);
+            changed |= assign(question.getOrderIndex(), order, question::setOrderIndex);
+            changed |= syncOptions(question, request);
             retained.add(question);
         }
 
         // Orphan removal turns this into deletes for the questions the request dropped.
-        quiz.getQuestions().removeIf(question -> !retained.contains(question));
+        changed |= quiz.getQuestions().removeIf(question -> !retained.contains(question));
         created.forEach(quiz::addQuestion);
+        return changed;
     }
 
-    private void syncOptions(QuizQuestion question, QuizQuestionRequest request) {
+    /**
+     * @return whether any option was created, removed, reordered, re-worded or re-keyed
+     *
+     * <p>The answer key is granted in a second pass, after the option that held it has given it up
+     * and that release has been flushed. {@code uk_quiz_options_single_correct} is a partial unique
+     * index over {@code question_id WHERE is_correct}, so it is violated the moment two rows of one
+     * question claim the key at once — and moving the key from option A to option B produces
+     * exactly that if the grant reaches the database before the release. Which of the two statements
+     * Hibernate emitted first was a matter of action-queue ordering, so an instructor correcting the
+     * answer to an existing exam question was met with a constraint violation.
+     */
+    private boolean syncOptions(QuizQuestion question, QuizQuestionRequest request) {
         Map<String, QuizOption> existingById = new HashMap<>();
         for (QuizOption option : question.getOptions()) {
             existingById.put(String.valueOf(option.getId()), option);
@@ -161,6 +211,16 @@ public class QuizService {
         Set<QuizOption> retained = Collections.newSetFromMap(new IdentityHashMap<>());
         List<QuizOption> created = new ArrayList<>();
         String correctOptionId = request.getCorrectOptionId().trim();
+        boolean changed = false;
+
+        // The option that is to hold the key once this is done, whether it already exists or is
+        // being created here. New options are built without it and granted it below, so that an
+        // INSERT can never carry the key while the previous holder's UPDATE is still pending.
+        QuizOption incomingKeyHolder = null;
+        QuizOption currentKeyHolder = question.getOptions().stream()
+                .filter(option -> Boolean.TRUE.equals(option.getCorrect()))
+                .findFirst()
+                .orElse(null);
 
         List<QuizOptionRequest> optionRequests = request.getOptions();
         for (int order = 0; order < optionRequests.size(); order++) {
@@ -169,18 +229,40 @@ public class QuizService {
             QuizOption option = matchExisting(existingById, optionRequest.getId());
 
             if (option == null) {
-                created.add(quizMapper.toOption(optionRequest, question, order, correct));
-                continue;
+                option = quizMapper.toOption(optionRequest, question, order, false);
+                created.add(option);
+                changed = true;
+            } else {
+                changed |= assign(option.getText(), optionRequest.getText().trim(), option::setText);
+                changed |= assign(option.getOrderIndex(), order, option::setOrderIndex);
+                retained.add(option);
             }
 
-            option.setText(optionRequest.getText().trim());
-            option.setOrderIndex(order);
-            option.setCorrect(correct);
-            retained.add(option);
+            if (correct) {
+                incomingKeyHolder = option;
+            }
         }
 
-        question.getOptions().removeIf(option -> !retained.contains(option));
+        boolean keyMoves = currentKeyHolder != null && currentKeyHolder != incomingKeyHolder;
+        if (keyMoves) {
+            currentKeyHolder.setCorrect(false);
+            changed = true;
+        }
+
+        changed |= question.getOptions().removeIf(option -> !retained.contains(option));
         created.forEach(question::addOption);
+
+        // Nothing holds the key at this point, so the index is trivially satisfied while the
+        // release — and any option the request dropped — reaches the database.
+        if (keyMoves) {
+            quizRepository.flush();
+        }
+
+        if (incomingKeyHolder != null && !Boolean.TRUE.equals(incomingKeyHolder.getCorrect())) {
+            incomingKeyHolder.setCorrect(true);
+            changed = true;
+        }
+        return changed;
     }
 
     /**

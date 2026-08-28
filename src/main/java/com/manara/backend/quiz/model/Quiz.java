@@ -1,5 +1,7 @@
 package com.manara.backend.quiz.model;
 
+import com.manara.backend.course.model.ContentEntityType;
+import com.manara.backend.course.model.TrackedContent;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -37,7 +39,7 @@ import java.util.Objects;
         // with a btree index, so a separate @Index here would be redundant.
         uniqueConstraints = @UniqueConstraint(name = "uk_quizzes_owner", columnNames = {"owner_type", "owner_id"})
 )
-public class Quiz {
+public class Quiz implements TrackedContent {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -70,6 +72,15 @@ public class Quiz {
 
     private LocalDateTime updatedAt;
 
+    /**
+     * When an instructor last changed something about this quiz a learner can see — its title,
+     * instructions, pass mark, questions, answers or their order.
+     *
+     * <p>Starts equal to {@link #createdAt}; see {@link TrackedContent}.
+     */
+    @Column(name = "content_updated_at", nullable = false)
+    private LocalDateTime contentUpdatedAt;
+
     public void addQuestion(QuizQuestion question) {
         question.setQuiz(this);
         questions.add(question);
@@ -78,6 +89,31 @@ public class Quiz {
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();
+        if (contentUpdatedAt == null) {
+            contentUpdatedAt = createdAt;
+        }
+    }
+
+    /**
+     * A lesson's quiz is a quiz; a module's or a course's is an exam.
+     *
+     * <p>One row, two words. The schema is right to keep them together — they are validated,
+     * synchronised, attempted and scored identically — and the learner is right to hear them apart,
+     * so the split happens here and nowhere else.
+     */
+    @Override
+    public ContentEntityType contentType() {
+        return ownerType == QuizOwnerType.LESSON ? ContentEntityType.QUIZ : ContentEntityType.EXAM;
+    }
+
+    @Override
+    public String contentTitle() {
+        return title;
+    }
+
+    @Override
+    public void markContentChanged(LocalDateTime at) {
+        this.contentUpdatedAt = at;
     }
 
     @PreUpdate

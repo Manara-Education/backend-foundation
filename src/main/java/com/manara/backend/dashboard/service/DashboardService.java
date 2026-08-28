@@ -37,7 +37,7 @@ public class DashboardService {
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "error.profile.studentNotFound", user.getId().toString()));
 
-        return enrollmentRepository.findByStudentId(student.getId()).stream()
+        return enrollmentRepository.findByStudentIdWithCourse(student.getId()).stream()
                 .map(enrollment -> {
                     Long courseId = enrollment.getCourse().getId();
                     int total = lessonRepository.countByCourseId(courseId);

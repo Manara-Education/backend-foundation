@@ -51,9 +51,21 @@ public class CourseProgressionService {
                 aggregate, completedLessonIds, attemptsByQuiz(student, aggregate.course().getId()));
     }
 
+    /**
+     * The learner's attempts in this course, grouped by the quiz they were sat against.
+     *
+     * <p>Attempts whose quiz has since been deleted are skipped rather than grouped under a null
+     * key. They are kept as history — that is what {@code V10} is for — but progression is a
+     * statement about the curriculum as it stands, and a quiz that is no longer in the course
+     * gates nothing. Including them could only unlock or lock content by the ghost of an exam
+     * the instructor removed.
+     */
     private Map<Long, List<QuizAttempt>> attemptsByQuiz(Student student, Long courseId) {
         Map<Long, List<QuizAttempt>> byQuiz = new HashMap<>();
         for (QuizAttempt attempt : quizAttemptRepository.findCourseAttempts(student.getId(), courseId)) {
+            if (attempt.getQuiz() == null) {
+                continue;
+            }
             byQuiz.computeIfAbsent(attempt.getQuiz().getId(), id -> new ArrayList<>()).add(attempt);
         }
         return byQuiz;

@@ -75,6 +75,38 @@ public class Enrollment {
         enrolledAt = LocalDateTime.now();
     }
 
+    /**
+     * Whether this learner should be told their course has changed.
+     *
+     * <p>The whole business rule, and the only copy of it:
+     *
+     * <pre>{@code course.contentUpdatedAt > enrollment.enrolledAt}</pre>
+     *
+     * <p>Per enrollment, not per course. Two learners of one course get different answers — the one
+     * who joined this morning bought the version that already contained everything, and telling
+     * them it had been updated would be describing somebody else's experience of it.
+     *
+     * <p>It lives on this entity because this is the one object holding both halves of the
+     * comparison. My Courses reads it straight off the enrollment it already loaded, and
+     * {@code CourseUpdateWindow} asks the same method rather than repeating the line — a second
+     * copy is how two screens end up disagreeing about the same course.
+     *
+     * <p>Note which timestamp is <em>not</em> used: {@code enrolledAt} is {@code updatable = false}
+     * and nothing may ever move it. Clearing this badge by touching the enrollment date would
+     * rewrite when the learner joined in order to change what they are shown, and would take their
+     * whole change history with it.
+     *
+     * <p>Strictly after: a change landing in the same microsecond as the enrollment does not count,
+     * because a learner who joined at that instant joined the changed version.
+     */
+    public boolean hasCourseUpdates() {
+        if (course == null || enrolledAt == null) {
+            return false;
+        }
+        LocalDateTime contentUpdatedAt = course.getContentUpdatedAt();
+        return contentUpdatedAt != null && contentUpdatedAt.isAfter(enrolledAt);
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;

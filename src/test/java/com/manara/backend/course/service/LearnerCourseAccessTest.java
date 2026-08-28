@@ -74,7 +74,8 @@ class LearnerCourseAccessTest {
     void setUp() {
         learnerCourseAccess = new LearnerCourseAccess(
                 courseRepository, studentRepository, enrollmentRepository,
-                courseAggregateLoader, courseProgressionService, entitlementPolicy);
+                courseAggregateLoader, courseProgressionService, entitlementPolicy,
+                new CourseViewPolicy(courseRepository, studentRepository, enrollmentRepository));
     }
 
     // --- reading -------------------------------------------------------------

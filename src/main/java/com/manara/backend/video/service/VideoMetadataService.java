@@ -2,6 +2,7 @@ package com.manara.backend.video.service;
 
 import com.manara.backend.course.model.Course;
 import com.manara.backend.course.repository.CourseRepository;
+import com.manara.backend.lesson.model.LessonContentType;
 import com.manara.backend.lesson.repository.LessonRepository;
 import com.manara.backend.video.model.ResolvedVideo;
 import com.manara.backend.video.model.VideoMetadata;
@@ -76,9 +77,22 @@ public class VideoMetadataService {
      * <p>The lesson is re-read here: it may have been edited, or deleted, between the save that
      * scheduled this and now. A lesson that has since been pointed at a different video would
      * otherwise be given the previous video's running time.
+     *
+     * <p>And it may no longer be a video lesson at all. An instructor who saves a video lesson and
+     * immediately switches it to rich content leaves this lookup in flight against a lesson that
+     * now has no playback — and a duration written onto it would be counted into the course's total
+     * and printed on a curriculum row for an article. The type is therefore re-checked here rather
+     * than at the call site, because the call site's answer was true when it was asked and this is
+     * the only place that knows what is true when the write happens.
      */
     private void apply(Long lessonId, VideoMetadata metadata) {
         lessonRepository.findById(lessonId).ifPresent(lesson -> {
+            if (lesson.getContentType() == LessonContentType.RICH_CONTENT) {
+                log.debug("Lesson {} is no longer a video lesson; discarding its metadata lookup",
+                        lessonId);
+                return;
+            }
+
             boolean changed = false;
 
             if (metadata.hasDuration()) {

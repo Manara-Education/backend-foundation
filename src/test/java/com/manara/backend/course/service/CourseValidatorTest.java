@@ -14,7 +14,7 @@ import com.manara.backend.quiz.dto.QuizOptionRequest;
 import com.manara.backend.quiz.dto.QuizQuestionRequest;
 import com.manara.backend.quiz.dto.QuizRequest;
 import com.manara.backend.quiz.service.QuizValidator;
-import com.manara.backend.video.VideoProviderFixtures;
+import com.manara.backend.lesson.LessonContentFixtures;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -27,14 +27,17 @@ class CourseValidatorTest {
 
     private static final java.util.function.IntSupplier NO_PERSISTED_LESSONS = () -> 0;
 
+    /** A course with no stored videos to carry forward, so every lesson here is checked in full. */
+    private static final LessonVideoBaseline NO_STORED_VIDEOS = LessonVideoBaseline.none();
+
     private final CourseValidator validator =
-            new CourseValidator(new QuizValidator(), VideoProviderFixtures.resolver());
+            new CourseValidator(new QuizValidator(), LessonContentFixtures.validator());
 
     // --- structure ----------------------------------------------------------
 
     @Test
     void defaultsToFlatSoCoursesWrittenBeforeStructureExistedKeepBehaving() {
-        var settings = validator.resolveAndValidate(course().build(), null, NO_PERSISTED_LESSONS);
+        var settings = validator.resolveAndValidate(course().build(), null, NO_PERSISTED_LESSONS, NO_STORED_VIDEOS);
 
         assertThat(settings.structure()).isEqualTo(CourseStructure.FLAT);
         assertThat(settings.status()).isEqualTo(CourseStatus.DRAFT);
@@ -48,7 +51,7 @@ class CourseValidatorTest {
                 .status(CourseStatus.PUBLISHED)
                 .build();
 
-        assertThat(validator.resolveAndValidate(request, null, NO_PERSISTED_LESSONS).structure())
+        assertThat(validator.resolveAndValidate(request, null, NO_PERSISTED_LESSONS, NO_STORED_VIDEOS).structure())
                 .isEqualTo(CourseStructure.FLAT);
     }
 
@@ -60,7 +63,7 @@ class CourseValidatorTest {
                 .status(CourseStatus.PUBLISHED)
                 .build();
 
-        assertThat(validator.resolveAndValidate(request, null, NO_PERSISTED_LESSONS).structure())
+        assertThat(validator.resolveAndValidate(request, null, NO_PERSISTED_LESSONS, NO_STORED_VIDEOS).structure())
                 .isEqualTo(CourseStructure.MODULES);
     }
 
@@ -71,7 +74,7 @@ class CourseValidatorTest {
                 .modules(List.of(module(lesson())))
                 .build();
 
-        assertThatThrownBy(() -> validator.resolveAndValidate(request, null, NO_PERSISTED_LESSONS))
+        assertThatThrownBy(() -> validator.resolveAndValidate(request, null, NO_PERSISTED_LESSONS, NO_STORED_VIDEOS))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("error.course.flatWithModules");
     }
@@ -83,7 +86,7 @@ class CourseValidatorTest {
                 .lessons(List.of(lesson()))
                 .build();
 
-        assertThatThrownBy(() -> validator.resolveAndValidate(request, null, NO_PERSISTED_LESSONS))
+        assertThatThrownBy(() -> validator.resolveAndValidate(request, null, NO_PERSISTED_LESSONS, NO_STORED_VIDEOS))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("error.course.modulesWithLessons");
     }
@@ -93,7 +96,7 @@ class CourseValidatorTest {
         Course existing = persistedCourse(CourseStructure.FLAT, CourseAccessType.FREE);
         var request = course().structure(CourseStructure.MODULES).build();
 
-        assertThatThrownBy(() -> validator.resolveAndValidate(request, existing, NO_PERSISTED_LESSONS))
+        assertThatThrownBy(() -> validator.resolveAndValidate(request, existing, NO_PERSISTED_LESSONS, NO_STORED_VIDEOS))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("error.course.structureChangeRequiresContent");
     }
@@ -104,7 +107,7 @@ class CourseValidatorTest {
     void refusesToPublishACourseWithoutLessons() {
         var request = course().status(CourseStatus.PUBLISHED).lessons(List.of()).build();
 
-        assertThatThrownBy(() -> validator.resolveAndValidate(request, null, NO_PERSISTED_LESSONS))
+        assertThatThrownBy(() -> validator.resolveAndValidate(request, null, NO_PERSISTED_LESSONS, NO_STORED_VIDEOS))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("error.course.publishRequiresLesson");
     }
@@ -117,7 +120,7 @@ class CourseValidatorTest {
                 .modules(List.of(module()))
                 .build();
 
-        assertThatThrownBy(() -> validator.resolveAndValidate(request, null, NO_PERSISTED_LESSONS))
+        assertThatThrownBy(() -> validator.resolveAndValidate(request, null, NO_PERSISTED_LESSONS, NO_STORED_VIDEOS))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("error.course.publishRequiresLesson");
     }
@@ -127,10 +130,10 @@ class CourseValidatorTest {
         Course existing = persistedCourse(CourseStructure.FLAT, CourseAccessType.FREE);
         var request = course().status(CourseStatus.PUBLISHED).build();
 
-        assertThat(validator.resolveAndValidate(request, existing, () -> 3).status())
+        assertThat(validator.resolveAndValidate(request, existing, () -> 3, NO_STORED_VIDEOS).status())
                 .isEqualTo(CourseStatus.PUBLISHED);
 
-        assertThatThrownBy(() -> validator.resolveAndValidate(request, existing, () -> 0))
+        assertThatThrownBy(() -> validator.resolveAndValidate(request, existing, () -> 0, NO_STORED_VIDEOS))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("error.course.publishRequiresLesson");
     }
@@ -143,7 +146,7 @@ class CourseValidatorTest {
         module.setTitle(" ");
         var request = course().structure(CourseStructure.MODULES).modules(List.of(module)).build();
 
-        assertThatThrownBy(() -> validator.resolveAndValidate(request, null, NO_PERSISTED_LESSONS))
+        assertThatThrownBy(() -> validator.resolveAndValidate(request, null, NO_PERSISTED_LESSONS, NO_STORED_VIDEOS))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("error.course.moduleTitleRequired");
     }
@@ -154,7 +157,7 @@ class CourseValidatorTest {
         lesson.setVideoUrl(null);
         var request = course().lessons(List.of(lesson)).build();
 
-        assertThatThrownBy(() -> validator.resolveAndValidate(request, null, NO_PERSISTED_LESSONS))
+        assertThatThrownBy(() -> validator.resolveAndValidate(request, null, NO_PERSISTED_LESSONS, NO_STORED_VIDEOS))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("error.course.lessonVideoUrlRequired");
     }
@@ -168,7 +171,7 @@ class CourseValidatorTest {
         lesson.setQuiz(brokenQuiz);
         var flatRequest = course().lessons(List.of(lesson)).build();
 
-        assertThatThrownBy(() -> validator.resolveAndValidate(flatRequest, null, NO_PERSISTED_LESSONS))
+        assertThatThrownBy(() -> validator.resolveAndValidate(flatRequest, null, NO_PERSISTED_LESSONS, NO_STORED_VIDEOS))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("error.quiz.passingScoreRange");
 
@@ -179,7 +182,7 @@ class CourseValidatorTest {
                 .modules(List.of(module))
                 .build();
 
-        assertThatThrownBy(() -> validator.resolveAndValidate(moduleRequest, null, NO_PERSISTED_LESSONS))
+        assertThatThrownBy(() -> validator.resolveAndValidate(moduleRequest, null, NO_PERSISTED_LESSONS, NO_STORED_VIDEOS))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("error.quiz.passingScoreRange");
     }
@@ -190,7 +193,7 @@ class CourseValidatorTest {
         brokenQuiz.getQuestions().getFirst().setCorrectOptionId("not-an-option");
         var request = course().lessons(List.of(lesson())).finalQuiz(brokenQuiz).build();
 
-        assertThatThrownBy(() -> validator.resolveAndValidate(request, null, NO_PERSISTED_LESSONS))
+        assertThatThrownBy(() -> validator.resolveAndValidate(request, null, NO_PERSISTED_LESSONS, NO_STORED_VIDEOS))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("error.quiz.correctOptionUnknown");
     }
@@ -201,7 +204,7 @@ class CourseValidatorTest {
     void keepsFreeCoursesFreeAndStoresNoPrice() {
         var request = course().accessType(CourseAccessType.FREE).purchasePrice(new BigDecimal("30")).build();
 
-        var settings = validator.resolveAndValidate(request, null, NO_PERSISTED_LESSONS);
+        var settings = validator.resolveAndValidate(request, null, NO_PERSISTED_LESSONS, NO_STORED_VIDEOS);
 
         assertThat(settings.accessType()).isEqualTo(CourseAccessType.FREE);
         assertThat(settings.purchasePrice()).isNull();
@@ -211,7 +214,7 @@ class CourseValidatorTest {
     void refusesAPurchaseCourseWithoutAPositivePrice() {
         var request = course().accessType(CourseAccessType.PURCHASE).purchasePrice(BigDecimal.ZERO).build();
 
-        assertThatThrownBy(() -> validator.resolveAndValidate(request, null, NO_PERSISTED_LESSONS))
+        assertThatThrownBy(() -> validator.resolveAndValidate(request, null, NO_PERSISTED_LESSONS, NO_STORED_VIDEOS))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("error.course.purchasePriceRequired");
     }
@@ -219,8 +222,8 @@ class CourseValidatorTest {
     @Test
     void infersAccessTypeFromTheLegacyPriceFieldSoOlderClientsKeepWorking() {
         var paid = course().price(new BigDecimal("49.99")).build();
-        var freeSettings = validator.resolveAndValidate(course().price(BigDecimal.ZERO).build(), null, NO_PERSISTED_LESSONS);
-        var paidSettings = validator.resolveAndValidate(paid, null, NO_PERSISTED_LESSONS);
+        var freeSettings = validator.resolveAndValidate(course().price(BigDecimal.ZERO).build(), null, NO_PERSISTED_LESSONS, NO_STORED_VIDEOS);
+        var paidSettings = validator.resolveAndValidate(paid, null, NO_PERSISTED_LESSONS, NO_STORED_VIDEOS);
 
         assertThat(paidSettings.accessType()).isEqualTo(CourseAccessType.PURCHASE);
         assertThat(paidSettings.purchasePrice()).isEqualByComparingTo("49.99");
@@ -231,7 +234,7 @@ class CourseValidatorTest {
     void refusesASubscriptionCourseWithoutPlans() {
         var request = course().accessType(CourseAccessType.SUBSCRIPTION).build();
 
-        assertThatThrownBy(() -> validator.resolveAndValidate(request, null, NO_PERSISTED_LESSONS))
+        assertThatThrownBy(() -> validator.resolveAndValidate(request, null, NO_PERSISTED_LESSONS, NO_STORED_VIDEOS))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("error.course.subscriptionPlansRequired");
     }
@@ -247,9 +250,9 @@ class CourseValidatorTest {
                 .subscriptionPlans(List.of(plan(1, BigDecimal.ZERO)))
                 .build();
 
-        assertThatThrownBy(() -> validator.resolveAndValidate(zeroDuration, null, NO_PERSISTED_LESSONS))
+        assertThatThrownBy(() -> validator.resolveAndValidate(zeroDuration, null, NO_PERSISTED_LESSONS, NO_STORED_VIDEOS))
                 .hasMessage("error.course.planDurationPositive");
-        assertThatThrownBy(() -> validator.resolveAndValidate(zeroPrice, null, NO_PERSISTED_LESSONS))
+        assertThatThrownBy(() -> validator.resolveAndValidate(zeroPrice, null, NO_PERSISTED_LESSONS, NO_STORED_VIDEOS))
                 .hasMessage("error.course.planPricePositive");
     }
 
@@ -258,7 +261,7 @@ class CourseValidatorTest {
         Course existing = persistedCourse(CourseStructure.FLAT, CourseAccessType.SUBSCRIPTION);
         var request = course().build();
 
-        var settings = validator.resolveAndValidate(request, existing, NO_PERSISTED_LESSONS);
+        var settings = validator.resolveAndValidate(request, existing, NO_PERSISTED_LESSONS, NO_STORED_VIDEOS);
 
         assertThat(settings.accessType()).isEqualTo(CourseAccessType.SUBSCRIPTION);
         assertThat(settings.purchasePrice()).isNull();

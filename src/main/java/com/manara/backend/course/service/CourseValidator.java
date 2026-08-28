@@ -8,9 +8,10 @@ import com.manara.backend.course.model.Course;
 import com.manara.backend.course.model.CourseAccessType;
 import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseStructure;
+import com.manara.backend.course.model.CourseVisibility;
 import com.manara.backend.lesson.dto.LessonRequest;
 import com.manara.backend.quiz.service.QuizValidator;
-import com.manara.backend.video.service.VideoProviderResolver;
+import com.manara.backend.lesson.validation.LessonContentValidator;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -34,43 +35,78 @@ import java.util.function.IntSupplier;
 public class CourseValidator {
 
     /**
-     * How the resolver's refusals read once they are about lesson number N of a course payload.
+     * How a content refusal reads once it is about lesson number N of a course payload.
+     *
+     * <p>Both kinds of lesson are here. The scoped message takes the position as its only argument,
+     * so a refusal that carried a detail of its own — a length limit, say — loses it on the way
+     * through; inside a thirty-lesson payload "which lesson" is the fact the instructor is missing,
+     * and the standalone endpoint still gives the full reason when they open that lesson.
      *
      * @see #lessonScopedCode(String)
      */
-    private static final Map<String, String> LESSON_VIDEO_ERROR_CODES = Map.of(
-            "error.video.urlRequired", "error.course.lessonVideoUrlRequired",
-            "error.video.urlMalformed", "error.course.lessonVideoUrlMalformed",
-            "error.video.providerUnsupported", "error.course.lessonVideoProviderUnsupported",
-            "error.video.videoIdInvalid", "error.course.lessonVideoIdInvalid",
-            "error.video.providerMismatch", "error.course.lessonVideoProviderMismatch");
+    private static final Map<String, String> LESSON_CONTENT_ERROR_CODES = Map.ofEntries(
+            Map.entry("error.video.urlRequired", "error.course.lessonVideoUrlRequired"),
+            Map.entry("error.video.urlMalformed", "error.course.lessonVideoUrlMalformed"),
+            Map.entry("error.video.providerUnsupported", "error.course.lessonVideoProviderUnsupported"),
+            Map.entry("error.video.videoIdInvalid", "error.course.lessonVideoIdInvalid"),
+            Map.entry("error.video.providerMismatch", "error.course.lessonVideoProviderMismatch"),
+            Map.entry("error.richContent.required", "error.course.lessonRichContentRequired"),
+            Map.entry("error.richContent.empty", "error.course.lessonRichContentEmpty"),
+            Map.entry("error.richContent.malformed", "error.course.lessonRichContentMalformed"),
+            Map.entry("error.richContent.tooLarge", "error.course.lessonRichContentTooLarge"),
+            Map.entry("error.richContent.linkRequired", "error.course.lessonRichContentLinkInvalid"),
+            Map.entry("error.richContent.linkMalformed", "error.course.lessonRichContentLinkInvalid"),
+            Map.entry("error.richContent.linkTooLong", "error.course.lessonRichContentLinkInvalid"),
+            Map.entry("error.richContent.linkSchemeRequired", "error.course.lessonRichContentLinkUnsafe"),
+            Map.entry("error.richContent.linkSchemeUnsupported", "error.course.lessonRichContentLinkUnsafe"),
+            Map.entry("error.richContent.ctaLabelRequired", "error.course.lessonRichContentCtaInvalid"),
+            Map.entry("error.richContent.ctaLabelTooLong", "error.course.lessonRichContentCtaInvalid"),
+            Map.entry("error.richContent.ctaHrefRequired", "error.course.lessonRichContentCtaInvalid"),
+            Map.entry("error.richContent.ctaHrefMalformed", "error.course.lessonRichContentCtaInvalid"),
+            Map.entry("error.richContent.ctaHrefUnsupported", "error.course.lessonRichContentCtaUnsafe"));
 
     private final QuizValidator quizValidator;
-    private final VideoProviderResolver videoProviderResolver;
+    private final LessonContentValidator lessonContentValidator;
 
     /**
      * Validates the payload and resolves the course-level settings it implies.
+     *
+     * <h2>Scoped to what the save actually changes</h2>
+     * The editor posts the entire course on every save, so most of what arrives here is unchanged
+     * content being carried along. Content rules are therefore applied to what the payload
+     * <em>changes</em>, not to everything it mentions: a lesson whose video is exactly the one the
+     * course already stores is left alone, while a video the instructor actually chose — and every
+     * newly added lesson — is checked in full. Without that distinction one legacy row made a
+     * published course permanently uneditable, price and title included.
+     *
+     * <p>This is a narrower scope, not a weaker rule. Nothing that reaches the database unchecked
+     * was ever checked; what stops being re-checked is data that was already accepted, is already
+     * stored, and that this request is not touching.
      *
      * @param existing                    the course being updated, or {@code null} when creating
      * @param persistedActiveLessonCount  lessons the course already has in its active structure,
      *                                    consulted only when the payload carries no content of its
      *                                    own — so a metadata-only publish is still checked, without
      *                                    paying for the query when the payload answers the question
+     * @param videoBaseline               the videos the course already holds, consulted to tell a
+     *                                    changed video from a carried one
      */
     public ResolvedCourseSettings resolveAndValidate(CourseRequest request, Course existing,
-                                                     IntSupplier persistedActiveLessonCount) {
+                                                     IntSupplier persistedActiveLessonCount,
+                                                     LessonVideoBaseline videoBaseline) {
         CourseStructure structure = resolveStructure(request, existing);
         CourseStatus status = resolveStatus(request, existing);
+        CourseVisibility visibility = resolveVisibility(request, existing);
         CourseAccessType accessType = resolveAccessType(request, existing);
 
         validateStructure(request, structure);
         validateStructureChange(request, existing, structure);
-        validateContent(request, structure);
+        validateContent(request, structure, videoBaseline);
         validatePublishable(request, structure, status, persistedActiveLessonCount);
 
         BigDecimal purchasePrice = validateAccess(request, existing, accessType);
 
-        return new ResolvedCourseSettings(structure, status, accessType, purchasePrice);
+        return new ResolvedCourseSettings(structure, status, visibility, accessType, purchasePrice);
     }
 
     private CourseStructure resolveStructure(CourseRequest request, Course existing) {
@@ -85,6 +121,26 @@ public class CourseValidator {
             return request.getStatus();
         }
         return existing != null ? existing.getStatus() : CourseStatus.DRAFT;
+    }
+
+    /**
+     * Who the course is offered to: what the payload asked for, else what it already is, else
+     * {@link CourseVisibility#PUBLIC}.
+     *
+     * <p>Deliberately the same shape as {@link #resolveStatus}, and deliberately independent of it.
+     * The two are separate axes, so nothing here reads the status and nothing there reads this —
+     * publishing a private course leaves it private, and making a draft public leaves it a draft.
+     *
+     * <p>Absent means "unchanged" on update and {@code PUBLIC} on create, which is what keeps every
+     * client written before this field existed working exactly as it did: their saves never mention
+     * visibility, so their courses never become private, and the courses they create are on offer
+     * to everyone as they always were.
+     */
+    private CourseVisibility resolveVisibility(CourseRequest request, Course existing) {
+        if (request.getVisibility() != null) {
+            return request.getVisibility();
+        }
+        return existing != null ? existing.getVisibility() : CourseVisibility.PUBLIC;
     }
 
     /**
@@ -131,11 +187,12 @@ public class CourseValidator {
         }
     }
 
-    private void validateContent(CourseRequest request, CourseStructure structure) {
+    private void validateContent(CourseRequest request, CourseStructure structure,
+                                 LessonVideoBaseline videoBaseline) {
         quizValidator.validateIfPresent(request.getFinalQuiz());
 
         if (structure == CourseStructure.FLAT) {
-            validateLessons(request.getLessons());
+            validateLessons(request.getLessons(), videoBaseline);
             return;
         }
 
@@ -150,11 +207,11 @@ public class CourseValidator {
                 throw new BusinessException("error.course.moduleTitleRequired", position);
             }
             quizValidator.validateIfPresent(module.getQuiz());
-            validateLessons(module.getLessons());
+            validateLessons(module.getLessons(), videoBaseline);
         }
     }
 
-    private void validateLessons(List<LessonRequest> lessons) {
+    private void validateLessons(List<LessonRequest> lessons, LessonVideoBaseline videoBaseline) {
         if (lessons == null) {
             return;
         }
@@ -164,31 +221,48 @@ public class CourseValidator {
             if (lesson == null || isBlank(lesson.getTitle())) {
                 throw new BusinessException("error.course.lessonTitleRequired", position);
             }
-            if (isBlank(lesson.getVideoUrl())) {
-                throw new BusinessException("error.course.lessonVideoUrlRequired", position);
-            }
             // Checked here, with the rest of the payload, precisely because synchronization is
-            // destructive: a course whose fourth lesson carries an unplayable link must be turned
-            // away before the first three have had their modules and quizzes rewritten.
-            validateVideo(lesson, position);
+            // destructive: a course whose fourth lesson carries an unplayable link — or a document
+            // with a javascript: URL in it — must be turned away before the first three have had
+            // their modules and quizzes rewritten.
+            validateContent(lesson, position, videoBaseline);
+            // Always, and for every lesson. A quiz is submitted content whatever the lesson around
+            // it is doing, so a carried-forward video never carries a quiz past its own rules.
             quizValidator.validateIfPresent(lesson.getQuiz());
         }
     }
 
     /**
-     * Rejects a video Manara cannot play, naming the lesson that carries it.
+     * Rejects content a lesson of this kind cannot be published with, naming the lesson.
      *
-     * <p>The reason travels with the position, because "lesson 4 is on a platform we do not
-     * support" and "lesson 4's link has no video in it" send an instructor to different fixes. The
-     * message says which; it never says which adapter, host or pattern decided so.
+     * <p>Which rules apply is {@link LessonContentValidator}'s decision, not this class's — the
+     * same object the standalone lesson endpoints use, so a rich-content lesson authored through
+     * the course editor is sanitized by exactly the same code as one authored through the lesson
+     * API. Duplicating the branch here is how the two would eventually disagree about what a
+     * document may contain, and only one of the two would be the one enforcing the security rule.
      *
-     * <p>This is a real tightening. The prototype accepted any non-blank string as a video URL,
-     * which is how a typo became a lesson with a permanently empty player. Existing rows are not
-     * affected: validation runs on the write path only, and the read path is deliberately lenient.
+     * <p>What this class keeps is the position. The reason travels with it, because "lesson 4 is on
+     * a platform we do not support" and "lesson 4's link has no video in it" send an instructor to
+     * different fixes. The message says which; it never says which adapter, host or pattern decided
+     * so.
+     *
+     * <p>The video branch is a real tightening the prototype did not have: it accepted any non-blank
+     * string as a video URL, which is how a typo became a lesson with a permanently empty player.
+     * Existing rows are not affected — validation runs on the write path only, and the read path is
+     * deliberately lenient.
+     *
+     * <p>The baseline travels with the payload so that a video the course already stores, sent back
+     * unchanged, is not this save's to refuse. Note that it is consulted <em>inside</em> the content
+     * validator rather than here: whether a carried video exempts a lesson depends on what kind of
+     * lesson it is, and a rich-content lesson that happens to still hold a video URL must be judged
+     * on its document. See {@link LessonContentValidator} and {@link LessonVideoBaseline}.
      */
-    private void validateVideo(LessonRequest lesson, int position) {
+    private void validateContent(LessonRequest lesson, int position, LessonVideoBaseline videoBaseline) {
         try {
-            videoProviderResolver.resolve(lesson.getVideoUrl(), lesson.getVideoProvider());
+            // The baseline is asked the question here; the validator is handed the answer. It
+            // applies to the video branch alone — see LessonContentValidator.
+            lessonContentValidator.validate(lesson, videoBaseline.holds(
+                    lesson.getId(), lesson.getVideoUrl(), lesson.getVideoProvider()));
         } catch (BusinessException e) {
             throw new BusinessException(lessonScopedCode(e.getMessageCode()), position);
         }
@@ -205,8 +279,31 @@ public class CourseValidator {
      * <p>An unmapped code — a reason a future adapter invents — degrades to the generic invalid
      * message rather than surfacing a raw key.
      */
-    private String lessonScopedCode(String videoErrorCode) {
-        return LESSON_VIDEO_ERROR_CODES.getOrDefault(videoErrorCode, "error.course.lessonVideoUrlInvalid");
+    private String lessonScopedCode(String contentErrorCode) {
+        return LESSON_CONTENT_ERROR_CODES.getOrDefault(contentErrorCode, "error.course.lessonContentInvalid");
+    }
+
+    /**
+     * The completeness rules a course has to satisfy to go live, checked against what is stored.
+     *
+     * <p>Entry point for the explicit publish operation, which has no payload to check. It is the
+     * same single rule the payload path applies, stated once — a published course must actually
+     * teach something.
+     *
+     * <p>Deliberately <em>not</em> reused as a gate on later edits. Publication validation says what
+     * a course needs to become visible; treating it as a standing precondition for every subsequent
+     * save is how "published" turns into "read-only", which is the coupling this work exists to
+     * remove. What a published course may not do is edit its way into an invalid public state, and
+     * that is enforced where it belongs: {@code validatePublishable(request, ...)} runs on every
+     * update that leaves the course published, so deleting the last lesson of a live course is
+     * refused while every other edit goes through.
+     *
+     * @param activeLessonCount lessons the course currently has in its active structure
+     */
+    public void validatePublishable(int activeLessonCount) {
+        if (activeLessonCount == 0) {
+            throw new BusinessException("error.course.publishRequiresLesson");
+        }
     }
 
     /**
@@ -250,10 +347,17 @@ public class CourseValidator {
 
         return switch (accessType) {
             case PURCHASE -> {
-                if (purchasePrice == null || purchasePrice.compareTo(BigDecimal.ZERO) <= 0) {
+                // Same "absent means untouched" rule the plans and the content tree follow. A
+                // course that is already sold outright and says nothing about its price keeps the
+                // price it has — without this, a metadata-only save of any paid course was refused
+                // outright with "a purchase course must have a price", which made every published
+                // paid course impossible to rename.
+                BigDecimal effective = purchasePrice != null ? purchasePrice : existingPurchasePrice(existing);
+
+                if (effective == null || effective.compareTo(BigDecimal.ZERO) <= 0) {
                     throw new BusinessException("error.course.purchasePriceRequired");
                 }
-                yield purchasePrice;
+                yield effective;
             }
             case SUBSCRIPTION -> {
                 // Same "absent means untouched" rule the content tree follows: a course that is
@@ -268,6 +372,13 @@ public class CourseValidator {
             }
             case FREE -> null;
         };
+    }
+
+    /** The price a course already carries, but only while it is genuinely a purchase course. */
+    private BigDecimal existingPurchasePrice(Course existing) {
+        return existing != null && existing.getAccessType() == CourseAccessType.PURCHASE
+                ? existing.getPurchasePrice()
+                : null;
     }
 
     private void validateSubscriptionPlans(List<SubscriptionPlanRequest> plans) {

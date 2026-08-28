@@ -8,8 +8,12 @@ import com.manara.backend.course.model.CourseStructure;
 import com.manara.backend.course.repository.CourseModuleRepository;
 import com.manara.backend.course.repository.CourseRepository;
 import com.manara.backend.course.repository.EnrollmentRepository;
+import com.manara.backend.course.service.CourseContentChanges;
+import com.manara.backend.course.service.CourseContentJournal;
 import com.manara.backend.course.service.CourseProgression;
 import com.manara.backend.course.service.CourseProgressionService;
+import com.manara.backend.course.service.CourseUpdateResolver;
+import com.manara.backend.course.service.CourseUpdateWindow;
 import com.manara.backend.course.service.CourseViewer;
 import com.manara.backend.course.service.LearnerCourseAccess;
 import com.manara.backend.lesson.dto.LessonCompletionResponse;
@@ -23,16 +27,19 @@ import com.manara.backend.lesson.repository.LessonRepository;
 import com.manara.backend.quiz.mapper.QuizMapper;
 import com.manara.backend.quiz.model.Quiz;
 import com.manara.backend.quiz.model.QuizOwnerType;
+import com.manara.backend.lesson.validation.LessonContent;
+import com.manara.backend.lesson.validation.LessonContentValidator;
 import com.manara.backend.quiz.service.QuizService;
 import com.manara.backend.user.model.Role;
-import com.manara.backend.video.model.ResolvedVideo;
 import com.manara.backend.video.service.VideoMetadataService;
-import com.manara.backend.video.service.VideoProviderResolver;
 import com.manara.backend.user.model.User;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
+import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -45,6 +52,7 @@ import java.util.Set;
  * same row, validated the same way, as one saved through a course payload.
  */
 @Service
+@Slf4j
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
 public class LessonService {
@@ -55,18 +63,31 @@ public class LessonService {
     private final CompletedLessonRepository completedLessonRepository;
     private final EnrollmentRepository enrollmentRepository;
     private final LearnerCourseAccess learnerCourseAccess;
+    private final LessonPlacement lessonPlacement;
     private final CourseProgressionService courseProgressionService;
+    private final CourseContentJournal courseContentJournal;
     private final LessonMapper lessonMapper;
     private final QuizService quizService;
     private final QuizMapper quizMapper;
     private final VideoMetadataService videoMetadataService;
-    private final VideoProviderResolver videoProviderResolver;
+    private final LessonContentValidator lessonContentValidator;
+    private final LessonContentWriter lessonContentWriter;
+    private final CourseUpdateResolver courseUpdateResolver;
+    private final Clock clock;
 
+    /**
+     * Ownership, and the course row held for the rest of the transaction.
+     *
+     * <p>The lock is what makes two lessons added to the same scope at the same time land one after
+     * the other instead of both claiming the same position. It is taken before any lesson scope is
+     * read, matching the order every other authoring path takes its locks in, so a lesson write and
+     * a reorder command cannot wait on each other.
+     */
     private Course getCourseAndVerifyInstructor(User user, Long courseId) {
         if (user.getRole() != Role.INSTRUCTOR) {
             throw new BusinessException("error.course.onlyInstructor");
         }
-        Course course = courseRepository.findById(courseId)
+        Course course = courseRepository.findByIdForUpdate(courseId)
                 .orElseThrow(() -> new ResourceNotFoundException("error.course.notFound", courseId.toString()));
         if (!course.getInstructor().getUser().getId().equals(user.getId())) {
             throw new BusinessException("error.course.notOwner");
@@ -103,17 +124,51 @@ public class LessonService {
         courseRepository.save(course);
     }
 
+    /**
+     * Adds one lesson to a course.
+     *
+     * <p>{@code orderIndex} is optional: omitted appends, given inserts and shifts the siblings
+     * below it along. Where the lesson lands is {@link LessonPlacement}'s decision, not the
+     * client's — see it for why the previous contract could not work.
+     */
     @Transactional
     public LessonResponse addLesson(User user, Long courseId, LessonRequest request) {
         Course course = getCourseAndVerifyInstructor(user, courseId);
         CourseModule module = resolveModule(course, request.getModuleId());
 
-        Lesson lesson = lessonMapper.toLesson(request, course, module, request.getOrderIndex());
+        // Validated before a row exists, so a lesson carrying an unplayable URL — or a document
+        // carrying a javascript: link — is refused with nothing written rather than half-created.
+        LessonContent content = lessonContentValidator.validate(request);
+
+        // A new lesson is new content by definition, whichever endpoint created it. Learners of a
+        // published course have to be told the same thing whether the instructor used the course
+        // editor or this endpoint — and the lesson itself has to carry the same "new" state, so a
+        // learner is pointed at the row that appeared rather than at the course in general.
+        var changes = new CourseContentChanges();
+
+        // Saved with a provisional position and placed immediately afterwards. The per-scope
+        // uniqueness constraint is deferred to COMMIT precisely so a placeholder that collides with
+        // a sibling is not an error before then — the same arrangement the aggregate save relies on.
+        Lesson lesson = lessonMapper.toLesson(request, content, course, module, 0);
         lesson = lessonRepository.saveAndFlush(lesson);
+        changes.of(lesson).created();
+
+        lessonPlacement.insert(courseId, module, lesson, request.getOrderIndex(), changes);
+        lessonRepository.flush();
 
         Quiz quiz = syncQuizIfProvided(lesson, request);
 
-        videoMetadataService.refreshAsync(lesson.getId(), lesson.getVideo());
+        // Only a video lesson has a length to look up. Asking the provider about a rich-content
+        // lesson would be a request for nothing, and the callback would write a duration onto a
+        // lesson that has no playback to measure.
+        if (content.isVideo()) {
+            videoMetadataService.refreshAsync(lesson.getId(), lesson.getVideo());
+        }
+
+        if (quiz != null) {
+            changes.of(quiz).created();
+        }
+        commitContentChanges(course, changes);
 
         return lessonMapper.toLessonResponse(lesson, null, quizMapper.toLearnerResponse(quiz));
     }
@@ -124,35 +179,62 @@ public class LessonService {
         Lesson lesson = requireLessonOfCourse(courseId, lessonId);
         CourseModule module = resolveModule(course, request.getModuleId());
 
-        // Resolved before anything is written, so an edit that swaps in an unplayable URL is
-        // refused with the lesson untouched rather than half-applied.
-        ResolvedVideo video = videoProviderResolver.resolve(request.getVideoUrl(), request.getVideoProvider());
-        boolean videoUrlChanged = !video.url().equals(lesson.getVideo().getUrl());
+        // Resolved before anything is written, so an edit that swaps in an unplayable URL — or a
+        // document carrying an unsafe link — is refused with the lesson untouched rather than
+        // half-applied.
+        LessonContent content = lessonContentValidator.validate(request);
 
-        lesson.setTitle(request.getTitle());
-        lesson.setSummary(request.getSummary());
-        lesson.setDescription(request.getDescription());
-        lesson.setOrderIndex(request.getOrderIndex());
-        lesson.setModule(module);
+        // Compared before assigned throughout, so a form re-submitted unchanged does not announce a
+        // new version of the course to everyone enrolled in it.
+        var changes = new CourseContentChanges();
+        changes.of(lesson)
+                .metadata(lesson.getTitle(), request.getTitle(), lesson::setTitle)
+                .metadata(lesson.getSummary(), request.getSummary(), lesson::setSummary)
+                .content(lesson.getDescription(), request.getDescription(), lesson::setDescription);
 
-        // Rewritten on every save, not only when the URL changed: a lesson stored before providers
-        // existed picks up its provider, id and thumbnail the first time it is edited, with no
-        // migration and no separate back-fill pass.
-        lesson.setVideo(video.toVideoSource());
-
-        if (videoUrlChanged) {
-            lesson.setDuration(0);
+        CourseModule previousModule = lesson.getModule();
+        Long currentModuleId = previousModule == null ? null : previousModule.getId();
+        Long nextModuleId = module == null ? null : module.getId();
+        boolean reparented = !java.util.Objects.equals(currentModuleId, nextModuleId);
+        if (reparented) {
+            // Read before the write: the module a lesson came from is the only fact about a move
+            // that no longer exists once it has been made.
+            String from = previousModule == null ? null : previousModule.getTitle();
+            lesson.setModule(module);
+            changes.of(lesson).moved(from);
         }
+
+        // Placed after the re-parent, so "which scope" is settled before "where in it". Which of the
+        // two placements applies is the same question as whether it moved: a lesson arriving in a
+        // module is inserted (appending when no position is named), and one staying put is
+        // repositioned (staying exactly where it is when no position is named, so an edit that only
+        // renames a lesson does not also move it).
+        if (reparented) {
+            lessonPlacement.insert(courseId, module, lesson, request.getOrderIndex(), changes);
+        } else {
+            lessonPlacement.reposition(courseId, module, lesson, request.getOrderIndex(), changes);
+        }
+        if (reparented) {
+            // The scope it left has a hole in it until this runs.
+            lessonPlacement.compact(courseId, previousModule, changes);
+        }
+        lessonRepository.flush();
+
+        boolean videoNeedsMeasuring = lessonContentWriter.apply(lesson, content, changes);
 
         lesson = lessonRepository.save(lesson);
 
-        Quiz quiz = syncQuizIfProvided(lesson, request);
+        Quiz quiz = syncQuizIfProvided(lesson, request, changes);
 
-        if (videoUrlChanged) {
+        if (videoNeedsMeasuring) {
             videoMetadataService.refreshAsync(lesson.getId(), lesson.getVideo());
         } else {
+            // A rich-content lesson contributes nothing to the course's length, and switching one
+            // away from video is exactly when the course's total has to be re-added up.
             recalculateCourseDuration(lesson.getCourse());
         }
+
+        commitContentChanges(course, changes);
 
         return lessonMapper.toLessonResponse(lesson, null, quizMapper.toLearnerResponse(quiz));
     }
@@ -163,12 +245,44 @@ public class LessonService {
         Lesson lesson = requireLessonOfCourse(courseId, lessonId);
 
         Course course = lesson.getCourse();
+        // Recorded before the delete, while there is still something to read a title off. This row
+        // is what stops a learner's curriculum quietly losing a lesson between two visits.
+        var changes = new CourseContentChanges();
+        changes.of(lesson).removed();
+
         // The quiz owner reference is polymorphic and carries no foreign key, so its cleanup is
         // this method's responsibility — nothing in the database would do it.
+        CourseModule scope = lesson.getModule();
         quizService.deleteByOwner(QuizOwnerType.LESSON, lessonId);
         completedLessonRepository.deleteByLessonId(lessonId);
         lessonRepository.delete(lesson);
+        lessonRepository.flush();
+
+        // Positions are contiguous by construction, so removing the second of four has to leave
+        // three at 0, 1, 2 rather than a hole at 1 for the next reorder to reason about.
+        lessonPlacement.compact(courseId, scope, changes);
+        lessonRepository.flush();
+
         recalculateCourseDuration(course);
+        commitContentChanges(course, changes);
+    }
+
+    /**
+     * Records what this request changed, in the caller's transaction.
+     *
+     * <p>These endpoints edit one lesson, but a lesson is course content, so the course's version
+     * has to move with it — otherwise an instructor who adds a lesson here rather than through the
+     * course editor changes what learners see without any of them being told.
+     *
+     * <p>Through the same {@link CourseContentJournal} the course editor uses, so a lesson edited
+     * from either surface produces the same timestamps and the same log row. Two paths writing the
+     * signal two ways is how the same edit ends up described differently depending on which screen
+     * made it.
+     */
+    private void commitContentChanges(Course course, CourseContentChanges changes) {
+        if (courseContentJournal.commit(course, changes, LocalDateTime.now(clock))) {
+            courseRepository.save(course);
+        }
     }
 
     public LessonDetailsResponse getLesson(User user, Long courseId, Long lessonId) {
@@ -190,13 +304,24 @@ public class LessonService {
         Lesson previous = index > 0 ? lessons.get(index - 1) : null;
         Lesson next = index < lessons.size() - 1 ? lessons.get(index + 1) : null;
 
-        return lessonMapper.toLessonDetailsResponse(learnerLessonResponse(viewer, lesson), previous, next);
+        // The same window the curriculum is drawn from, resolved for the lesson page too.
+        //
+        // It used to be left null here, which meant a learner saw "Updated" against a lesson in the
+        // course listing and then opened it to no explanation at all — the one screen where the
+        // updated material actually is was the one screen that did not say so. Reusing the resolver
+        // rather than comparing timestamps locally is what keeps the two screens agreeing: the rule
+        // for what counts as updated exists once, and a learner who is not enrolled gets the
+        // not-enrolled window here exactly as they do there.
+        CourseUpdateWindow updates = courseUpdateResolver.resolve(user, viewer.aggregate());
+        return lessonMapper.toLessonDetailsResponse(
+                learnerLessonResponse(viewer, lesson, updates), previous, next);
     }
 
     public List<LessonResponse> getCourseLessons(User user, Long courseId) {
         CourseViewer viewer = learnerCourseAccess.resolveViewer(user, courseId);
+        CourseUpdateWindow updates = courseUpdateResolver.resolve(user, viewer.aggregate());
         return viewer.aggregate().lessons().stream()
-                .map(lesson -> learnerLessonResponse(viewer, lesson))
+                .map(lesson -> learnerLessonResponse(viewer, lesson, updates))
                 .toList();
     }
 
@@ -206,17 +331,20 @@ public class LessonService {
      * it, which made enrolment decorative. The listing still shows what a course contains; the
      * content behind it is served only to someone the curriculum has actually opened it for.
      */
-    private LessonResponse learnerLessonResponse(CourseViewer viewer, Lesson lesson) {
+    private LessonResponse learnerLessonResponse(CourseViewer viewer, Lesson lesson,
+                                                 CourseUpdateWindow updates) {
         CourseProgression progression = viewer.progression();
         if (!progression.isLessonAccessible(lesson)) {
-            return lessonMapper.toLockedLessonResponse(lesson, progression.completionOf(lesson));
+            return lessonMapper.toLockedLessonResponse(
+                    lesson, progression.completionOf(lesson), updates.describe(lesson));
         }
 
         Quiz quiz = viewer.aggregate().quizOfLesson(lesson);
         return lessonMapper.toLessonResponse(
                 lesson,
                 progression.completionOf(lesson),
-                quizMapper.toLearnerResponse(quiz, progression.stateOf(quiz)));
+                quizMapper.toLearnerResponse(quiz, progression.stateOf(quiz)),
+                updates.describe(lesson));
     }
 
     /**
@@ -243,7 +371,7 @@ public class LessonService {
 
         Set<Long> completedLessonIds = new HashSet<>(viewer.progression().completedLessonIds());
         if (completedLessonIds.add(lessonId)) {
-            completedLessonRepository.save(lessonMapper.toCompletedLesson(viewer.student(), lesson));
+            recordCompletion(viewer, lesson);
         }
 
         // Recomputed from the updated picture rather than read back: the completion above is not
@@ -265,16 +393,52 @@ public class LessonService {
     }
 
     /**
+     * Writes the completion, treating "already there" as success.
+     *
+     * <p>The read above answers whether this learner has completed the lesson, and for a single
+     * request that is enough. It is not enough for two: a double-tapped button, or a rich-content
+     * lesson whose completion the learner submits from two tabs, produces two transactions that
+     * both read "not completed" and both insert. The unique index on {@code (student_id,
+     * lesson_id)} is what stops the second row existing — this is what stops the second request
+     * being a 500 for a learner whose lesson is, by then, demonstrably complete.
+     *
+     * <p>Which is the whole of the idempotency guarantee, and it is deliberately the database's
+     * rather than a lock's: the constraint holds regardless of how many instances are serving, and
+     * a check-then-insert never does. The progress recomputed below is unaffected either way — it
+     * is derived from the set of completed lesson ids, and that set is the same whether this call
+     * or the one that raced it wrote the row.
+     */
+    private void recordCompletion(CourseViewer viewer, Lesson lesson) {
+        int inserted = completedLessonRepository.recordCompletion(
+                viewer.student().getId(), lesson.getId(), LocalDateTime.now(clock));
+        if (inserted == 0) {
+            log.debug("Lesson {} was already completed for student {}; treating as a no-op",
+                    lesson.getId(), viewer.student().getId());
+        }
+    }
+
+    /**
      * These endpoints edit one lesson; they are not the course editor. A payload that says nothing
      * about a quiz therefore leaves the existing one alone rather than deleting it — clients that
      * predate quizzes send exactly that. Removing a lesson quiz is done through the course
      * aggregate, whose payload is a deliberate full replacement.
      */
     private Quiz syncQuizIfProvided(Lesson lesson, LessonRequest request) {
+        return syncQuizIfProvided(lesson, request, new CourseContentChanges());
+    }
+
+    private Quiz syncQuizIfProvided(Lesson lesson, LessonRequest request, CourseContentChanges changes) {
         if (request.getQuiz() == null) {
             return quizService.findByOwner(QuizOwnerType.LESSON, lesson.getId()).orElse(null);
         }
-        return quizService.sync(QuizOwnerType.LESSON, lesson.getId(), request.getQuiz());
+        var result = quizService.sync(QuizOwnerType.LESSON, lesson.getId(), request.getQuiz());
+        if (result.quiz() != null && result.changed()) {
+            // Against the quiz, not the lesson: editing a lesson's questions is a change to its
+            // quiz, and marking the lesson updated for it would point the learner at a video that
+            // has not moved.
+            changes.of(result.quiz()).recordIf(true, result.outcome());
+        }
+        return result.quiz();
     }
 
     private Lesson requireLessonOfCourse(Long courseId, Long lessonId) {

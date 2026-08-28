@@ -8,7 +8,11 @@ import com.manara.backend.course.model.CourseStructure;
 import com.manara.backend.course.repository.CourseModuleRepository;
 import com.manara.backend.course.repository.CourseRepository;
 import com.manara.backend.course.repository.EnrollmentRepository;
+import com.manara.backend.course.repository.CourseChangeRepository;
+import com.manara.backend.course.service.CourseContentJournal;
 import com.manara.backend.course.service.CourseProgressionService;
+import com.manara.backend.course.service.CourseUpdateResolver;
+import com.manara.backend.course.service.CourseUpdateWindow;
 import com.manara.backend.course.service.LearnerCourseAccess;
 import com.manara.backend.lesson.dto.LessonRequest;
 import com.manara.backend.lesson.dto.LessonResponse;
@@ -21,6 +25,7 @@ import com.manara.backend.quiz.mapper.QuizMapper;
 import com.manara.backend.quiz.service.QuizService;
 import com.manara.backend.user.model.Role;
 import com.manara.backend.user.model.User;
+import com.manara.backend.lesson.LessonContentFixtures;
 import com.manara.backend.video.VideoProviderFixtures;
 import com.manara.backend.video.model.VideoProvider;
 import com.manara.backend.video.model.VideoSource;
@@ -43,6 +48,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
@@ -74,7 +80,11 @@ class LessonVideoLifecycleTest {
     @Mock private CourseProgressionService courseProgressionService;
     @Mock private QuizService quizService;
     @Mock private VideoMetadataService videoMetadataService;
+    @Mock private CourseUpdateResolver courseUpdateResolver;
     @Mock private MessageService messageService;
+
+    @Mock
+    private CourseChangeRepository courseChangeRepository;
 
     private LessonService lessonService;
     private Course course;
@@ -88,9 +98,17 @@ class LessonVideoLifecycleTest {
 
         lessonService = new LessonService(
                 lessonRepository, courseRepository, courseModuleRepository, completedLessonRepository,
-                enrollmentRepository, learnerCourseAccess, courseProgressionService,
+                enrollmentRepository, learnerCourseAccess, new LessonPlacement(lessonRepository),
+                courseProgressionService,
+                new CourseContentJournal(courseChangeRepository),
                 new LessonMapper(durationFormatter, resolver), quizService, new QuizMapper(),
-                videoMetadataService, resolver);
+                videoMetadataService, LessonContentFixtures.validator(), LessonContentFixtures.writer(),
+                courseUpdateResolver, java.time.Clock.systemUTC());
+
+        // Not enrolled is the window that reports nothing, which is what every test here that is
+        // not about the Updated badge wants: the lesson answers exactly as it always did.
+        lenient().when(courseUpdateResolver.resolve(any(), any()))
+                .thenReturn(CourseUpdateWindow.notEnrolled());
 
         course = Course.builder()
                 .id(COURSE_ID)
@@ -101,7 +119,9 @@ class LessonVideoLifecycleTest {
                 .build();
 
         given(messageService.get(any(), any())).willReturn("0s");
-        given(courseRepository.findById(COURSE_ID)).willReturn(Optional.of(course));
+        // The authoring paths hold the course row for the transaction; see
+        // LessonService#getCourseAndVerifyInstructor.
+        given(courseRepository.findByIdForUpdate(COURSE_ID)).willReturn(Optional.of(course));
         given(lessonRepository.saveAndFlush(any(Lesson.class)))
                 .willAnswer(invocation -> invocation.getArgument(0));
         given(lessonRepository.save(any(Lesson.class)))

@@ -1,6 +1,7 @@
 package com.manara.backend.course.service;
 
 import com.manara.backend.common.exception.BusinessException;
+import com.manara.backend.common.exception.ErrorCode;
 import com.manara.backend.common.exception.ResourceNotFoundException;
 import com.manara.backend.course.dto.CheckoutRequest;
 import com.manara.backend.course.dto.CheckoutResponse;
@@ -8,13 +9,16 @@ import com.manara.backend.course.mapper.CourseMapper;
 import com.manara.backend.course.mapper.EntitlementMapper;
 import com.manara.backend.course.model.Course;
 import com.manara.backend.course.model.CourseEntitlement;
+import com.manara.backend.course.model.CoursePurchase;
 import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseSubscription;
+import com.manara.backend.course.model.CourseVisibility;
 import com.manara.backend.course.model.EntitlementSource;
 import com.manara.backend.course.model.Enrollment;
 import com.manara.backend.course.model.SubscriptionPlan;
 import com.manara.backend.course.model.SubscriptionStatus;
 import com.manara.backend.course.repository.CourseEntitlementRepository;
+import com.manara.backend.course.repository.CoursePurchaseRepository;
 import com.manara.backend.course.repository.CourseRepository;
 import com.manara.backend.course.repository.CourseSubscriptionRepository;
 import com.manara.backend.course.repository.EnrollmentRepository;
@@ -49,6 +53,13 @@ import java.util.List;
  * belong to this course. The request carries an identifier and an instrument, and nothing else the
  * server acts on.
  *
+ * <p><strong>A later price change reaches none of it.</strong> What a learner may open is
+ * {@link CourseEntitlement}, a standing grant that is never re-read against the course's current
+ * price; that they joined is {@link Enrollment}, which nothing here rewrites; and what they were
+ * charged is on their own {@link CoursePurchase} or {@link CourseSubscription} row rather than
+ * derived from the course. Repricing therefore cannot charge a difference, cancel access, or
+ * require a repurchase — it decides what the next buyer pays and nothing else.
+ *
  * <p>Repeat calls are safe by construction. The first thing this does is take a write lock on the
  * learner's entitlement row; if the access it would grant is already open, it returns the current
  * state and charges nothing. A double-clicked purchase therefore cannot buy the same course twice,
@@ -65,6 +76,7 @@ public class CheckoutProcessor {
     private final StudentRepository studentRepository;
     private final EnrollmentRepository enrollmentRepository;
     private final CourseEntitlementRepository courseEntitlementRepository;
+    private final CoursePurchaseRepository coursePurchaseRepository;
     private final CourseSubscriptionRepository courseSubscriptionRepository;
     private final SubscriptionPlanRepository subscriptionPlanRepository;
     private final CourseMapper courseMapper;
@@ -74,10 +86,17 @@ public class CheckoutProcessor {
     private final PaymentGateway paymentGateway;
     private final Clock clock;
 
+    /**
+     * The platform prices in Egyptian pounds and nothing configures otherwise. Named rather than
+     * inlined so the day a second currency appears there is one place that has to answer for it —
+     * and so the rows written before that day say what they meant.
+     */
+    private static final String CURRENCY = "EGP";
+
     @Transactional
     public CheckoutResponse checkout(User user, Long courseId, CheckoutRequest request) {
         Student student = requireStudent(user);
-        Course course = requirePublishedCourse(courseId);
+        Course course = requireAcquirableCourse(courseId, student);
         LocalDateTime now = LocalDateTime.now(clock);
 
         CourseEntitlement entitlement =
@@ -120,6 +139,21 @@ public class CheckoutProcessor {
         PaymentReceipt receipt = paymentGateway.charge(
                 new PaymentCharge(price, course.getTitle(), idempotencyKey(course, student, "purchase")),
                 paymentMethodOf(request));
+
+        // Written in the same transaction as the entitlement it paid for, so a charge can never
+        // grant access without leaving a record of itself, and a rolled-back grant can never leave
+        // a receipt for access nobody has. Until this row existed the purchase path kept nothing at
+        // all, and repricing the course destroyed the only remaining evidence of what its existing
+        // buyers were charged.
+        coursePurchaseRepository.save(CoursePurchase.builder()
+                .course(course)
+                .student(student)
+                .listPrice(price)
+                .amountPaid(receipt.amount())
+                .currency(CURRENCY)
+                .paymentReference(receipt.reference())
+                .purchasedAt(receipt.paidAt())
+                .build());
 
         upsertPerpetual(course, student, existing, EntitlementSource.PURCHASE, now);
         return receipt;
@@ -235,6 +269,14 @@ public class CheckoutProcessor {
         if (!plan.getCourse().getId().equals(course.getId())) {
             throw new BusinessException("error.course.planNotInCourse", planId.toString());
         }
+        // A retired plan is still a real row — every subscriber who bought it still points at it —
+        // and it is no longer for sale. Refused by name rather than by absence, so a learner whose
+        // renewal screen was rendered before the instructor withdrew the plan is told what happened
+        // instead of being told their own plan does not exist.
+        if (!plan.isActive()) {
+            throw new BusinessException(ErrorCode.SUBSCRIPTION_PLAN_RETIRED,
+                    "error.course.planRetired", planId.toString());
+        }
         return plan;
     }
 
@@ -261,11 +303,35 @@ public class CheckoutProcessor {
                         "error.profile.studentNotFound", user.getId().toString()));
     }
 
-    /** Drafts are indistinguishable from a missing course on the learner side. */
-    private Course requirePublishedCourse(Long courseId) {
+    /**
+     * The course, if this learner may acquire access to it. Drafts and private courses are
+     * indistinguishable from a missing course on the learner side.
+     *
+     * <p>Two gates, and the second has an exception the first does not:
+     *
+     * <ul>
+     *   <li><strong>Draft.</strong> Refused outright, exactly as before. Nothing that is not
+     *       published is for sale, to anybody.
+     *   <li><strong>Private.</strong> Refused to everyone except the learner who already holds the
+     *       course. That exception is not a loophole — it is the requirement. A subscriber whose
+     *       window lapsed on a course that has since gone private must still be able to renew, and
+     *       a learner repeating a checkout that already succeeded must still get the same answer
+     *       rather than a {@code 404}. Both reach this line, and neither is the general population
+     *       a private course is being withheld from.
+     * </ul>
+     *
+     * <p>The enrolment is the test, not the entitlement: an expired entitlement is precisely the
+     * state a renewal starts from, so checking that instead would refuse the one case this exists
+     * to allow.
+     */
+    private Course requireAcquirableCourse(Long courseId, Student student) {
         Course course = courseRepository.findById(courseId)
                 .orElseThrow(() -> new ResourceNotFoundException("error.course.notFound", courseId.toString()));
         if (course.getStatus() != CourseStatus.PUBLISHED) {
+            throw new ResourceNotFoundException("error.course.notFound", courseId.toString());
+        }
+        if (course.getVisibility() == CourseVisibility.PRIVATE
+                && !enrollmentRepository.existsByCourseIdAndStudentId(courseId, student.getId())) {
             throw new ResourceNotFoundException("error.course.notFound", courseId.toString());
         }
         return course;

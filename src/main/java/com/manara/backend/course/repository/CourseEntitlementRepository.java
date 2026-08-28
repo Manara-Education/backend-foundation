@@ -15,6 +15,9 @@ public interface CourseEntitlementRepository extends JpaRepository<CourseEntitle
 
     Optional<CourseEntitlement> findByCourseIdAndStudentId(Long courseId, Long studentId);
 
+    /** Whether any learner's standing access was granted against this plan. */
+    boolean existsBySubscriptionPlanId(Long subscriptionPlanId);
+
     /**
      * The read every checkout starts from.
      *

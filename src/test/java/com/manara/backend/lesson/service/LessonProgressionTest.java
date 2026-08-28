@@ -13,16 +13,20 @@ import com.manara.backend.course.repository.EnrollmentRepository;
 import com.manara.backend.course.service.CourseAggregate;
 import com.manara.backend.course.service.CourseProgression;
 import com.manara.backend.course.service.CourseProgressionCalculator;
+import com.manara.backend.course.repository.CourseChangeRepository;
+import com.manara.backend.course.service.CourseContentJournal;
 import com.manara.backend.course.service.CourseProgressionService;
+import com.manara.backend.course.service.CourseUpdateResolver;
+import com.manara.backend.course.service.CourseUpdateWindow;
 import com.manara.backend.course.service.CourseViewer;
 import com.manara.backend.course.service.LearnerCourseAccess;
 import com.manara.backend.lesson.mapper.LessonMapper;
-import com.manara.backend.lesson.model.CompletedLesson;
 import com.manara.backend.lesson.model.Lesson;
 import com.manara.backend.lesson.repository.CompletedLessonRepository;
 import com.manara.backend.lesson.repository.LessonRepository;
 import com.manara.backend.profile.model.Student;
 import com.manara.backend.quiz.mapper.QuizMapper;
+import com.manara.backend.lesson.LessonContentFixtures;
 import com.manara.backend.video.VideoProviderFixtures;
 import com.manara.backend.video.model.VideoProvider;
 import com.manara.backend.video.service.VideoMetadataService;
@@ -51,6 +55,7 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -97,7 +102,13 @@ class LessonProgressionTest {
     private VideoMetadataService videoMetadataService;
 
     @Mock
+    private CourseUpdateResolver courseUpdateResolver;
+
+    @Mock
     private MessageService messageService;
+
+    @Mock
+    private CourseChangeRepository courseChangeRepository;
 
     private LessonService lessonService;
 
@@ -111,10 +122,18 @@ class LessonProgressionTest {
         DurationFormatter durationFormatter = new DurationFormatter(messageService);
         lessonService = new LessonService(
                 lessonRepository, courseRepository, courseModuleRepository, completedLessonRepository,
-                enrollmentRepository, learnerCourseAccess, courseProgressionService,
+                enrollmentRepository, learnerCourseAccess, new LessonPlacement(lessonRepository),
+                courseProgressionService,
+                new CourseContentJournal(courseChangeRepository),
                 new LessonMapper(durationFormatter, VideoProviderFixtures.resolver()), quizService,
-                new QuizMapper(), videoMetadataService, VideoProviderFixtures.resolver());
+                new QuizMapper(), videoMetadataService, LessonContentFixtures.validator(),
+                LessonContentFixtures.writer(), courseUpdateResolver,
+                java.time.Clock.systemUTC());
         lenient().when(messageService.get(any(), any())).thenReturn("0s");
+        // Not enrolled is the window that reports nothing, which is what every test here
+        // that is not about the Updated badge wants: the lesson answers as it always did.
+        lenient().when(courseUpdateResolver.resolve(any(), any()))
+                .thenReturn(CourseUpdateWindow.notEnrolled());
     }
 
     // --- completion gating ---------------------------------------------------
@@ -132,7 +151,7 @@ class LessonProgressionTest {
         assertThat(response.getCourseProgress()).isEqualTo(50);
         assertThat(response.getNextLessonId()).isEqualTo(2L);
         assertThat(response.getCourseCompleted()).isFalse();
-        verify(completedLessonRepository).save(any(CompletedLesson.class));
+        verify(completedLessonRepository).recordCompletion(eq(student.getId()), eq(1L), any());
     }
 
     @Test
@@ -145,7 +164,7 @@ class LessonProgressionTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("error.quiz.lessonRequiresPass");
 
-        verify(completedLessonRepository, never()).save(any());
+        verify(completedLessonRepository, never()).recordCompletion(any(), any(), any());
         verify(enrollmentRepository, never()).save(any());
     }
 
@@ -199,7 +218,7 @@ class LessonProgressionTest {
 
         assertThat(response.getCompleted()).isTrue();
         assertThat(response.getCourseProgress()).isEqualTo(50);
-        verify(completedLessonRepository, never()).save(any());
+        verify(completedLessonRepository, never()).recordCompletion(any(), any(), any());
     }
 
     @Test

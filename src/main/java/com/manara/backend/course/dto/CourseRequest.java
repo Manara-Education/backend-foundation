@@ -1,17 +1,22 @@
 package com.manara.backend.course.dto;
 
+import com.manara.backend.common.json.Patch;
+import com.manara.backend.common.json.PatchDeserializer;
 import com.manara.backend.course.model.CourseAccessType;
 import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseStructure;
+import com.manara.backend.course.model.CourseVisibility;
 import com.manara.backend.lesson.dto.LessonRequest;
 import com.manara.backend.quiz.dto.QuizRequest;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.PositiveOrZero;
+import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import tools.jackson.databind.annotation.JsonDeserialize;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -29,26 +34,78 @@ import java.util.List;
  *
  * <p>Cross-field rules (pricing, structure, publishing, quizzes) live in {@code CourseValidator}
  * and {@code QuizValidator} rather than in annotations, because they depend on each other.
+ *
+ * <h2>Full replacement is not last-write-wins</h2>
+ * Because the payload is the whole course, a copy of it built an hour ago is an hour-old course. An
+ * update therefore has to say which revision of the server's course it was built from — see
+ * {@link #expectedRevision} — and is refused rather than applied if that is no longer the current
+ * one. Without it, correcting a typo in one tab silently restored every other field to whatever
+ * that tab had loaded, including the price.
+ *
+ * <p>The constructor is deliberately private. Jackson picks a properties-based creator over the
+ * no-arg constructor when it can see one, and which of the two it picks used to decide whether
+ * this DTO worked at all; hiding it removes the choice. The presence-aware fields below are
+ * correct either way regardless, and that is the actual guarantee — this only removes the
+ * ambiguity.
  */
 @Getter
 @Setter
 @Builder
-@AllArgsConstructor
+@AllArgsConstructor(access = AccessLevel.PRIVATE)
 @NoArgsConstructor
 public class CourseRequest {
 
     @NotBlank(message = "{validation.course.title.required}")
     private String title;
 
-    private String subtitle;
+    /**
+     * Optional metadata, and one of the two fields where "absent" and "null" mean different things.
+     *
+     * <p>Typed as a {@link Patch} rather than a {@code String} for exactly that reason: a save that
+     * says nothing about the subtitle must leave it alone, and one that sends {@code null} must
+     * clear it. See {@link Patch} for why the distinction lives in the type instead of in the
+     * setters.
+     */
+    @JsonDeserialize(using = PatchDeserializer.class)
+    private Patch<String> subtitle;
 
-    private String image;
+    /** The cover image URL. Presence-tracked for the same reason as {@link #subtitle}. */
+    @JsonDeserialize(using = PatchDeserializer.class)
+    private Patch<String> image;
 
     @NotBlank(message = "{validation.course.description.required}")
     private String description;
 
-    @Positive(message = "{validation.course.duration.positive}")
+    /**
+     * Accepted, and then ignored on update.
+     *
+     * <p>A course's duration is the sum of its lessons' durations, which only the video providers
+     * know. The server recomputes it from the lessons after every content change and hands the
+     * result back in the response — so the value a client sends is at best a stale echo of the
+     * server's own figure, and honouring it would let a client that omitted the field wipe it.
+     *
+     * <p>{@code @PositiveOrZero}, not {@code @Positive}. A course whose videos have not been
+     * measured yet legitimately has a duration of {@code 0} — every lesson starts there and stays
+     * there until an out-of-band lookup lands. {@code @Positive} rejected exactly the value the API
+     * had just returned, which meant a client that echoed the aggregate back verbatim, as the
+     * editor does, was answered {@code 400} on every save. That made a course permanently
+     * uneditable through its own editor.
+     */
+    @PositiveOrZero(message = "{validation.course.duration.positive}")
     private Integer duration;
+
+    /**
+     * The course revision this payload was built from, as the server last reported it.
+     *
+     * <p>Required on update, absent on create. The server compares it against the course's current
+     * revision under a row lock and refuses the save if they differ, so an aggregate assembled from
+     * a copy someone else has since edited writes nothing at all rather than restoring every field
+     * it is holding. The value is server-generated and echoed back unchanged; a client never
+     * computes one.
+     *
+     * @see com.manara.backend.course.model.Course#getRevision()
+     */
+    private Long expectedRevision;
 
     /** Defaults to {@link CourseStructure#FLAT} when omitted, matching pre-existing courses. */
     private CourseStructure structure;
@@ -86,10 +143,46 @@ public class CourseRequest {
     private CourseStatus status;
 
     /**
+     * Who the course is offered to. Independent of {@link #status} — see {@link CourseVisibility}.
+     *
+     * <p>Defaults to {@link CourseVisibility#PUBLIC} on create and to the course's current
+     * visibility on update, so a payload that never mentions the field can neither hide an existing
+     * course nor create a hidden one. That is what keeps every client written against the previous
+     * contract — including the editor's own metadata-only saves — behaving exactly as it did.
+     *
+     * <p>Accepted on update, unlike {@link #status}, and that difference is intentional. Publication
+     * has its own endpoints because a stale full-replacement save must not be able to take a live
+     * course off the catalogue in passing; visibility has no such endpoint because it is a course
+     * setting the instructor edits on the same screen as the title, and the revision check already
+     * refuses a save built on a copy that predates somebody else's change to it.
+     */
+    private CourseVisibility visibility;
+
+    /**
      * The one-off price to store, preferring the current field name over the legacy one.
      */
     public BigDecimal resolvePurchasePrice() {
         return purchasePrice != null ? purchasePrice : price;
+    }
+
+    /** Whether the payload mentioned {@code subtitle}, whatever value it gave it. */
+    public boolean carriesSubtitle() {
+        return Patch.isPresent(subtitle);
+    }
+
+    /** The subtitle the payload asked for, or {@code null} when it never mentioned one. */
+    public String subtitleValue() {
+        return Patch.valueOf(subtitle);
+    }
+
+    /** Whether the payload mentioned {@code image}, whatever value it gave it. */
+    public boolean carriesImage() {
+        return Patch.isPresent(image);
+    }
+
+    /** The cover the payload asked for, or {@code null} when it never mentioned one. */
+    public String imageValue() {
+        return Patch.valueOf(image);
     }
 
     /**
@@ -101,5 +194,27 @@ public class CourseRequest {
      */
     public boolean carriesContentFor(CourseStructure structure) {
         return structure == CourseStructure.MODULES ? modules != null : lessons != null;
+    }
+
+    /**
+     * The builder, with the two presence-tracked fields taking their plain value.
+     *
+     * <p>{@code subtitle("x")} reads as "the payload said x" and {@code subtitle(null)} as "the
+     * payload said null", which are the two states a client can express — and not calling it at all
+     * is absence, exactly as omitting the key is on the wire. Deliberately only this overload: a
+     * second one taking a {@link Patch} would make {@code image(null)} ambiguous, which is the one
+     * call that most needs to mean something definite.
+     */
+    public static class CourseRequestBuilder {
+
+        public CourseRequestBuilder subtitle(String subtitle) {
+            this.subtitle = Patch.of(subtitle);
+            return this;
+        }
+
+        public CourseRequestBuilder image(String image) {
+            this.image = Patch.of(image);
+            return this;
+        }
     }
 }

@@ -1,0 +1,229 @@
+# Deploys a published backend release to the production server.
+#
+# The pipeline this is the last stage of:
+#
+#     push tag vX.Y.Z
+#       -> Release        creates the GitHub Release (validates semver, main-only)
+#       -> Publish image  builds and pushes the image to GHCR
+#       -> THIS WORKFLOW  pulls that image on the server and restarts the backend
+#
+# Nothing is built here and nothing is built on the server. The artifact that
+# reaches production is byte-for-byte the one Publish image pushed, which is the
+# one built from the released commit that CI had already proven.
+
+name: Deploy to production
+
+# Chained to "Publish image" finishing, NOT to `release: published`, and NOT to
+# the Release workflow.
+#
+# Two separate traps are being avoided here, and both fail silently:
+#
+#   1. `on: release: published` NEVER FIRES for a release created with
+#      GITHUB_TOKEN — GitHub's recursion guard. release.yml creates the release
+#      exactly that way. This is not theoretical: v1.0.0 shipped a release with
+#      no image because publish.yml was originally written that way.
+#
+#   2. Chaining to "Publish image" — the obvious choice, since the image existing
+#      is the precondition for deploying — LOSES THE VERSION. A workflow_run-
+#      triggered run's own `head_branch` is the DEFAULT BRANCH, not the tag that
+#      started the chain. Publish can still see the tag because it reads the
+#      *Release* run's head_branch; a third workflow chained behind Publish reads
+#      Publish's own, which is `develop`. Observed exactly that on frontend
+#      v1.0.1:
+#
+#          RAW_TAG: develop
+#          ##[error]Resolved 'develop', which is not a vMAJOR.MINOR.PATCH tag.
+#
+#      So this chains to "Release", whose head_branch IS the tag, and waits for
+#      the image to appear rather than assuming it already has. The wait is the
+#      step below, and it is a guard worth having regardless.
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  # Redeploy an existing release: a deployment that failed on a transient error,
+  # or a rollback to a known-good tag. Re-running the same tag is safe — it pulls
+  # the same immutable image and restarts the same service.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Published release tag to deploy, e.g. v1.4.0"
+        required: true
+
+permissions:
+  contents: read
+  # Reading the image manifest from GHCR to prove the tag exists before the
+  # server is touched at all.
+  packages: read
+
+# One deployment at a time. cancel-in-progress is deliberately false: cancelling
+# a run mid-way could leave .env rewritten with the service half-restarted.
+concurrency:
+  group: deploy-production-backend
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy the backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # Scopes the deployment secrets to this job and applies whatever protection
+    # rules the Production environment carries.
+    environment:
+      name: Production
+      url: https://manara-edu.com
+
+    # workflow_run fires on completion whatever the outcome, so a FAILED publish
+    # would otherwise deploy. The conclusion has to be checked explicitly.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      # ---------------------------------------------------------------------
+      # 1. Which version is being deployed
+      # ---------------------------------------------------------------------
+      # For a run chained from a tag push, workflow_run.head_branch carries the
+      # TAG name rather than a branch. It is validated rather than trusted: if
+      # it is ever anything else the deployment stops here, with the server
+      # untouched, instead of guessing at a version.
+      - name: Resolve the release tag
+        id: resolve
+        env:
+          RAW_TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$RAW_TAG" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "::error::Resolved '$RAW_TAG', which is not a vMAJOR.MINOR.PATCH release tag."
+            echo "::error::A publish triggered by something other than a release tag does not deploy."
+            exit 1
+          fi
+          echo "tag=$RAW_TAG" >> "$GITHUB_OUTPUT"
+          echo "Deploying $RAW_TAG"
+
+      # ---------------------------------------------------------------------
+      # 2. Prove the image exists BEFORE touching production
+      # ---------------------------------------------------------------------
+      # The server pulls this tag in a moment. Resolving it here first means a
+      # missing or half-published image fails on the runner, while production is
+      # still happily serving the previous version, rather than mid-deployment.
+      # It also records the digest, which is what actually identifies the
+      # artifact — a tag is a movable label, a digest is not.
+      - name: Wait for the image to be published to GHCR
+        id: image
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          echo "$GH_TOKEN" | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+          # "Publish image" starts from the same Release run this workflow did, so
+          # it is usually still building. Polling for the tag is what synchronises
+          # the two without needing the version to survive a second workflow_run
+          # hop — and it fails on the runner, with production still serving the
+          # previous version, rather than part-way through a deployment.
+          deadline=$(( SECONDS + 900 ))
+          until docker manifest inspect "$IMAGE:$TAG" > /dev/null 2>&1; do
+            if (( SECONDS >= deadline )); then
+              echo "::error::$IMAGE:$TAG never appeared in GHCR after 15 minutes."
+              echo "::error::Check whether the 'Publish image' run for $TAG succeeded."
+              exit 1
+            fi
+            echo "waiting for $IMAGE:$TAG ..."
+            sleep 20
+          done
+          DIGEST="$(docker buildx imagetools inspect "$IMAGE:$TAG" --format '{{.Manifest.Digest}}')"
+          echo "image=$IMAGE"   >> "$GITHUB_OUTPUT"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "Resolved $IMAGE:$TAG -> $DIGEST"
+
+      # ---------------------------------------------------------------------
+      # 3. SSH
+      # ---------------------------------------------------------------------
+      # The host key is pinned rather than accepted on first sight. `ssh-keyscan`
+      # into known_hosts trusts whatever answers on the day, which is the one
+      # thing host-key checking exists to prevent — and this connection carries
+      # the right to restart production.
+      - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets.HETZNER_SSH_KEY }}
+          HOST: ${{ secrets.HETZNER_HOST }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC9vjpkD1lqIDMx/gUnhc3AbZgWXBPIQwBPYWr6JvY6H\n' \
+            "$HOST" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      # ---------------------------------------------------------------------
+      # 4. Deploy
+      # ---------------------------------------------------------------------
+      # scripts/deploy.sh is the deployment abstraction that lives with the
+      # compose file on the server: it pulls the exact tag, rewrites only the
+      # BACKEND_IMAGE pin, restarts only this service, waits for the container to
+      # report healthy, and restores the previous pin and exits non-zero if it
+      # does not. Reimplementing that here would mean two definitions of what a
+      # deployment is, drifting apart.
+      #
+      # No secret is passed over this connection. The server's .env already holds
+      # them at mode 600 and is the only place they exist.
+      - name: Deploy to Hetzner
+        env:
+          HOST: ${{ secrets.HETZNER_HOST }}
+          USER: ${{ secrets.HETZNER_USER }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes \
+              -o ConnectTimeout=20 "$USER@$HOST" \
+              "cd /opt/manara && ./scripts/deploy.sh backend '$TAG'"
+
+      # ---------------------------------------------------------------------
+      # 5. Prove it from outside
+      # ---------------------------------------------------------------------
+      # deploy.sh asserts the container reports healthy. This asserts the site
+      # actually serves over the public internet — through Caddy, over TLS, from
+      # off the machine — which is the only claim that matters to a user. A
+      # container can be healthy while the ingress in front of it is not.
+      - name: Verify production is serving
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 10); do
+            code="$(curl -fsS -m 20 -o /dev/null -w '%{http_code}' https://manara-edu.com/ || echo 000)"
+            if [ "$code" = "200" ]; then
+              echo "https://manara-edu.com/ -> 200"
+              exit 0
+            fi
+            echo "attempt $attempt: got $code, retrying..."
+            sleep 10
+          done
+          echo "::error::Production did not return 200 after the deployment."
+          exit 1
+
+      - name: Summarise the deployment
+        if: always()
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+          IMAGE: ${{ steps.image.outputs.image }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          {
+            echo "### Backend deployment — ${{ job.status }}"
+            echo
+            echo '```'
+            echo "tag     $TAG"
+            echo "image   $IMAGE:$TAG"
+            echo "digest  $DIGEST"
+            echo '```'
+            echo
+            echo "If this failed, production is still serving whatever it was before the"
+            echo "restart, and no volume was touched. Roll back with:"
+            echo
+            echo '```'
+            echo "ssh <deploy-user>@<host> 'cd /opt/manara && ./scripts/rollback.sh backend'"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -3,6 +3,7 @@ package com.manara.backend.course.dto;
 import com.manara.backend.course.model.CourseAccessType;
 import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseStructure;
+import com.manara.backend.course.model.CourseVisibility;
 import com.manara.backend.lesson.dto.InstructorLessonResponse;
 import com.manara.backend.quiz.dto.InstructorQuizResponse;
 import lombok.AllArgsConstructor;
@@ -42,6 +43,39 @@ public class InstructorCourseResponse {
 
     private CourseStructure structure;
     private CourseStatus status;
+
+    /**
+     * Who the course is offered to. The editor's own copy of the setting it just saved, and what
+     * the instructor's course card renders its "private" marker from.
+     *
+     * <p>Beside {@code status}, not folded into it. The editor shows both, because "published" and
+     * "private" are answers to different questions and an instructor needs to see both answers.
+     */
+    private CourseVisibility visibility;
+
+    /**
+     * Whether the course has changed in a way its learners should be told about.
+     *
+     * <p>The server's answer, derived from the publication baseline and the content version, so
+     * every screen that shows an "Updated" badge shows the same thing. Deliberately not a pair of
+     * timestamps for clients to compare: two clients comparing them would eventually disagree, and
+     * the rule ("published, and edited since it was last published") belongs in one place.
+     *
+     * <p>False for a draft, false for a course that was never published, and false for every course
+     * that already existed when this was introduced.
+     */
+    private Boolean hasUpdatesSincePublish;
+
+    /**
+     * The revision this editor model was read at. Echoed back as {@code expectedRevision} on save.
+     *
+     * <p>The whole of the editor's concurrency contract. An aggregate save is full replacement, so
+     * the server has to be told which version of the course the payload was built from; it answers
+     * every read <em>and</em> every accepted write with the current one, so an editor that keeps
+     * adopting the value it was last given never conflicts with itself — including after a reorder,
+     * which moves the revision like any other accepted change.
+     */
+    private Long revision;
 
     private List<InstructorLessonResponse> lessons;
     private List<InstructorModuleResponse> modules;

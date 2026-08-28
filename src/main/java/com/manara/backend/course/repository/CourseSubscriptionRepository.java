@@ -11,6 +11,9 @@ import java.util.Optional;
 @Repository
 public interface CourseSubscriptionRepository extends JpaRepository<CourseSubscription, Long> {
 
+    /** Whether any subscription term was ever bought against this plan. */
+    boolean existsByPlanId(Long planId);
+
     List<CourseSubscription> findByCourseIdAndStudentIdAndStatus(
             Long courseId, Long studentId, SubscriptionStatus status);
 

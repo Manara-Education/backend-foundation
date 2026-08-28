@@ -1,10 +1,10 @@
 package com.manara.backend.lesson.dto;
 
 import com.fasterxml.jackson.annotation.JsonAlias;
+import com.manara.backend.lesson.model.LessonContentType;
 import com.manara.backend.quiz.dto.QuizRequest;
 import com.manara.backend.video.model.VideoProvider;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -37,13 +37,24 @@ public class LessonRequest {
     private String description;
 
     /**
+     * Which kind of lesson this is, and therefore which of the two content fields below is read.
+     *
+     * <p>Optional on the wire, defaulting to {@code VIDEO}, and that default is a compatibility
+     * guarantee rather than a convenience: every client written before this field existed sends a
+     * video URL and no type, and must keep creating video lessons. A client that wants the other
+     * kind has to say so.
+     *
+     * @see LessonContentType
+     */
+    private LessonContentType contentType;
+
+    /**
      * The lesson's video, on any platform Manara supports. The provider is worked out from this by
      * the server, so a client never has to know how to tell YouTube from Vimeo.
      *
      * <p>Named for what it is rather than for one platform: the prototype's field carried the same
      * value under the same name, so this is not a contract change, only an honest one.
      */
-    @NotBlank(message = "{validation.lesson.videoUrl.required}")
     private String videoUrl;
 
     /**
@@ -57,7 +68,18 @@ public class LessonRequest {
      */
     private VideoProvider videoProvider;
 
-    @NotNull(message = "{validation.lesson.orderIndex.required}")
+    /**
+     * Where the lesson should sit among its siblings, counting from zero. Optional.
+     *
+     * <p>Omitted means "at the end", which is what adding a lesson normally means and what no
+     * client could previously say. Given, it is an insertion point: the lesson goes there and the
+     * siblings from that position down move one place along. Out of range is refused by name.
+     *
+     * <p>It was mandatory, and written straight into a {@code UNIQUE (course_id, module_id,
+     * order_index)} constraint, so a client had to compute a value it had no safe way to compute —
+     * and the obvious choice, {@code 0}, was a duplicate-key {@code 409}. Inside a course payload
+     * this field is ignored entirely: position in the array is the order there.
+     */
     @JsonAlias("order")
     private Integer orderIndex;
 
@@ -66,6 +88,19 @@ public class LessonRequest {
      * modules; inside a course payload the nesting already says it, and this field is ignored.
      */
     private Long moduleId;
+
+    /**
+     * The authored document for a {@code RICH_CONTENT} lesson, as JSON.
+     *
+     * <p>Untrusted in full. It is never stored as sent — see
+     * {@link com.manara.backend.lesson.content.RichContentSanitizer}, which rebuilds it from the
+     * values it recognises and refuses the ones it must not keep.
+     *
+     * <p>A string rather than a typed tree on purpose: the field is a document in a schema the
+     * server owns, and binding it to Java classes here would let Jackson accept shapes before the
+     * sanitizer has had an opinion about them.
+     */
+    private String richContent;
 
     /** Optional — {@code null} removes the lesson's quiz. */
     private QuizRequest quiz;

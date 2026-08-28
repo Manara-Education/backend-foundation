@@ -57,6 +57,6 @@ public class CourseAggregateLoader {
                 quizService.findByOwners(QuizOwnerType.LESSON, lessonIds),
                 quizService.findByOwners(QuizOwnerType.MODULE, moduleIds),
                 quizService.findByOwner(QuizOwnerType.COURSE, course.getId()).orElse(null),
-                subscriptionPlanRepository.findByCourseIdOrderByOrderIndexAsc(course.getId()));
+                subscriptionPlanRepository.findByCourseIdAndRetiredAtIsNullOrderByOrderIndexAsc(course.getId()));
     }
 }
