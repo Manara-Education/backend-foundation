@@ -61,6 +61,42 @@ class RichContentSanitizerTest {
     }
 
     @Test
+    @DisplayName("keeps both list types, their items in order, and the formatting inside them")
+    void keepsBothListTypes() {
+        // The storage format is a closed JSON schema rather than markup, so there is no HTML
+        // allowlist here to widen — but a list block the sanitizer did not rebuild would come back
+        // as a lesson with its bullets and numbers turned into nothing, which is what makes this
+        // worth stating rather than assuming.
+        String result = sanitizer.sanitize("""
+                {"blocks":[
+                  {"type":"bulletList","items":[
+                    {"content":[{"type":"text","text":"عنصر أول"}]},
+                    {"content":[{"type":"text","text":"عنصر ثانٍ","marks":[{"type":"bold"}]}]}
+                  ]},
+                  {"type":"orderedList","align":"START","items":[
+                    {"content":[{"type":"text","text":"خطوة أولى"}]},
+                    {"content":[{"type":"text","text":"خطوة ثانية"}]},
+                    {"content":[{"type":"text","text":"خطوة ثالثة","marks":[
+                        {"type":"link","href":"https://example.com/step"}]}]}
+                  ]}
+                ]}""");
+
+        assertThat(result)
+                .contains("\"type\":\"bulletList\"")
+                .contains("\"type\":\"orderedList\"")
+                .contains("عنصر أول")
+                .contains("عنصر ثانٍ")
+                .contains("\"type\":\"bold\"")
+                .contains("https://example.com/step");
+
+        // Order is the whole point of a numbered list; an items array the sanitizer reshuffled
+        // would renumber the instructor's steps.
+        assertThat(result.indexOf("خطوة أولى"))
+                .isLessThan(result.indexOf("خطوة ثانية"))
+                .isLessThan(result.indexOf("خطوة ثالثة"));
+    }
+
+    @Test
     @DisplayName("keeps mixed Arabic and English, numbers and punctuation exactly as written")
     void keepsMixedDirectionText() {
         String text = "التفكير النقدي (Critical Thinking) — 3 خطوات: analyse, evaluate, decide.";
