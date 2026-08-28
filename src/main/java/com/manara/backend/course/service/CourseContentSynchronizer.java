@@ -22,7 +22,7 @@ import com.manara.backend.lesson.mapper.LessonMapper;
 import com.manara.backend.lesson.model.Lesson;
 import com.manara.backend.lesson.repository.CompletedLessonRepository;
 import com.manara.backend.lesson.repository.LessonRepository;
-import com.manara.backend.video.model.ResolvedVideo;
+import com.manara.backend.video.model.VideoSource;
 import com.manara.backend.video.service.VideoMetadataService;
 import com.manara.backend.video.service.VideoProviderResolver;
 import com.manara.backend.quiz.dto.QuizRequest;
@@ -209,18 +209,15 @@ public class CourseContentSynchronizer {
                 lesson = resolveOwnChild(lessonsById, state.seenLessonIds, request.getId(),
                         "error.course.lessonNotInCourse", "error.course.lessonDuplicate");
 
-                // The whole payload was already validated, so this cannot fail here; resolving
-                // again is how the provider columns are kept in step with the URL on every save,
-                // including for a lesson that predates them.
-                ResolvedVideo video = videoProviderResolver.resolve(
-                        request.getVideoUrl(), request.getVideoProvider());
+                VideoSource storedVideo = lesson.getVideo();
+                VideoSource nextVideo = nextVideoFor(storedVideo, request);
 
-                boolean videoChanged = !video.url().equals(lesson.getVideo().getUrl());
+                boolean videoChanged = !nextVideo.getUrl().equals(storedVideo.getUrl());
                 changes.of(lesson)
                         .metadata(lesson.getTitle(), request.getTitle().trim(), lesson::setTitle)
                         .metadata(lesson.getSummary(), request.getSummary(), lesson::setSummary)
                         .content(lesson.getDescription(), request.getDescription(), lesson::setDescription)
-                        .content(lesson.getVideo(), video.toVideoSource(lesson.getVideo()), lesson::setVideo);
+                        .content(storedVideo, nextVideo, lesson::setVideo);
                 // Re-parenting is how a structure switch keeps a lesson the payload still wants.
                 // Compared by id rather than by entity: `lesson.getModule()` can be an uninitialised
                 // proxy, whose id-based equals reads a field that is not there yet.
@@ -258,6 +255,35 @@ public class CourseContentSynchronizer {
         }
 
         state.lessonOrderings.add(slots);
+    }
+
+    /**
+     * The video to store for a lesson the payload is updating.
+     *
+     * <p>Two cases, and the difference between them is the whole of the legacy-content fix.
+     *
+     * <p>A video the payload <strong>changed</strong> is resolved strictly, exactly as before: the
+     * validator has already refused an unplayable one, so this cannot fail, and resolving is what
+     * fills the provider columns for the new URL.
+     *
+     * <p>A video the payload is only <strong>carrying back</strong> is resolved leniently. It is
+     * still re-derived when it can be — that is how a row written before the provider columns
+     * existed gets them filled in by an ordinary save, which is behaviour worth keeping — but a URL
+     * no adapter claims now keeps the source it already has instead of failing the save. That row
+     * was accepted under the rules of its time and this request is not touching it; the read path
+     * has always treated it that way, and this is the write path agreeing.
+     *
+     * @param stored  what the lesson currently holds, never null — {@code video_url} is NOT NULL
+     * @param request the lesson as submitted
+     */
+    private VideoSource nextVideoFor(VideoSource stored, LessonRequest request) {
+        if (stored.matches(request.getVideoUrl(), request.getVideoProvider())) {
+            return videoProviderResolver.tryResolve(stored.getUrl())
+                    .map(resolved -> resolved.toVideoSource(stored))
+                    .orElse(stored);
+        }
+        return videoProviderResolver.resolve(request.getVideoUrl(), request.getVideoProvider())
+                .toVideoSource(stored);
     }
 
     /**

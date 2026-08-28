@@ -51,21 +51,36 @@ public class CourseValidator {
     /**
      * Validates the payload and resolves the course-level settings it implies.
      *
+     * <h2>Scoped to what the save actually changes</h2>
+     * The editor posts the entire course on every save, so most of what arrives here is unchanged
+     * content being carried along. Content rules are therefore applied to what the payload
+     * <em>changes</em>, not to everything it mentions: a lesson whose video is exactly the one the
+     * course already stores is left alone, while a video the instructor actually chose — and every
+     * newly added lesson — is checked in full. Without that distinction one legacy row made a
+     * published course permanently uneditable, price and title included.
+     *
+     * <p>This is a narrower scope, not a weaker rule. Nothing that reaches the database unchecked
+     * was ever checked; what stops being re-checked is data that was already accepted, is already
+     * stored, and that this request is not touching.
+     *
      * @param existing                    the course being updated, or {@code null} when creating
      * @param persistedActiveLessonCount  lessons the course already has in its active structure,
      *                                    consulted only when the payload carries no content of its
      *                                    own — so a metadata-only publish is still checked, without
      *                                    paying for the query when the payload answers the question
+     * @param videoBaseline               the videos the course already holds, consulted to tell a
+     *                                    changed video from a carried one
      */
     public ResolvedCourseSettings resolveAndValidate(CourseRequest request, Course existing,
-                                                     IntSupplier persistedActiveLessonCount) {
+                                                     IntSupplier persistedActiveLessonCount,
+                                                     LessonVideoBaseline videoBaseline) {
         CourseStructure structure = resolveStructure(request, existing);
         CourseStatus status = resolveStatus(request, existing);
         CourseAccessType accessType = resolveAccessType(request, existing);
 
         validateStructure(request, structure);
         validateStructureChange(request, existing, structure);
-        validateContent(request, structure);
+        validateContent(request, structure, videoBaseline);
         validatePublishable(request, structure, status, persistedActiveLessonCount);
 
         BigDecimal purchasePrice = validateAccess(request, existing, accessType);
@@ -131,11 +146,12 @@ public class CourseValidator {
         }
     }
 
-    private void validateContent(CourseRequest request, CourseStructure structure) {
+    private void validateContent(CourseRequest request, CourseStructure structure,
+                                 LessonVideoBaseline videoBaseline) {
         quizValidator.validateIfPresent(request.getFinalQuiz());
 
         if (structure == CourseStructure.FLAT) {
-            validateLessons(request.getLessons());
+            validateLessons(request.getLessons(), videoBaseline);
             return;
         }
 
@@ -150,11 +166,11 @@ public class CourseValidator {
                 throw new BusinessException("error.course.moduleTitleRequired", position);
             }
             quizValidator.validateIfPresent(module.getQuiz());
-            validateLessons(module.getLessons());
+            validateLessons(module.getLessons(), videoBaseline);
         }
     }
 
-    private void validateLessons(List<LessonRequest> lessons) {
+    private void validateLessons(List<LessonRequest> lessons, LessonVideoBaseline videoBaseline) {
         if (lessons == null) {
             return;
         }
@@ -164,13 +180,12 @@ public class CourseValidator {
             if (lesson == null || isBlank(lesson.getTitle())) {
                 throw new BusinessException("error.course.lessonTitleRequired", position);
             }
-            if (isBlank(lesson.getVideoUrl())) {
-                throw new BusinessException("error.course.lessonVideoUrlRequired", position);
-            }
             // Checked here, with the rest of the payload, precisely because synchronization is
             // destructive: a course whose fourth lesson carries an unplayable link must be turned
             // away before the first three have had their modules and quizzes rewritten.
-            validateVideo(lesson, position);
+            validateVideo(lesson, position, videoBaseline);
+            // Always, and for every lesson. A quiz is submitted content whatever the lesson around
+            // it is doing, so a carried-forward video never carries a quiz past its own rules.
             quizValidator.validateIfPresent(lesson.getQuiz());
         }
     }
@@ -186,7 +201,17 @@ public class CourseValidator {
      * which is how a typo became a lesson with a permanently empty player. Existing rows are not
      * affected: validation runs on the write path only, and the read path is deliberately lenient.
      */
-    private void validateVideo(LessonRequest lesson, int position) {
+    private void validateVideo(LessonRequest lesson, int position, LessonVideoBaseline videoBaseline) {
+        // The video the course already stores for this lesson, sent back unchanged. It was accepted
+        // when it was written and this save is not touching it, so it is not this save's to refuse
+        // — see LessonVideoBaseline for why an aggregate PUT makes this the common case rather than
+        // an edge one.
+        if (videoBaseline.holds(lesson.getId(), lesson.getVideoUrl(), lesson.getVideoProvider())) {
+            return;
+        }
+        if (isBlank(lesson.getVideoUrl())) {
+            throw new BusinessException("error.course.lessonVideoUrlRequired", position);
+        }
         try {
             videoProviderResolver.resolve(lesson.getVideoUrl(), lesson.getVideoProvider());
         } catch (BusinessException e) {
