@@ -10,7 +10,7 @@ import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseStructure;
 import com.manara.backend.lesson.dto.LessonRequest;
 import com.manara.backend.quiz.service.QuizValidator;
-import com.manara.backend.video.service.VideoProviderResolver;
+import com.manara.backend.lesson.validation.LessonContentValidator;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -34,19 +34,38 @@ import java.util.function.IntSupplier;
 public class CourseValidator {
 
     /**
-     * How the resolver's refusals read once they are about lesson number N of a course payload.
+     * How a content refusal reads once it is about lesson number N of a course payload.
+     *
+     * <p>Both kinds of lesson are here. The scoped message takes the position as its only argument,
+     * so a refusal that carried a detail of its own — a length limit, say — loses it on the way
+     * through; inside a thirty-lesson payload "which lesson" is the fact the instructor is missing,
+     * and the standalone endpoint still gives the full reason when they open that lesson.
      *
      * @see #lessonScopedCode(String)
      */
-    private static final Map<String, String> LESSON_VIDEO_ERROR_CODES = Map.of(
-            "error.video.urlRequired", "error.course.lessonVideoUrlRequired",
-            "error.video.urlMalformed", "error.course.lessonVideoUrlMalformed",
-            "error.video.providerUnsupported", "error.course.lessonVideoProviderUnsupported",
-            "error.video.videoIdInvalid", "error.course.lessonVideoIdInvalid",
-            "error.video.providerMismatch", "error.course.lessonVideoProviderMismatch");
+    private static final Map<String, String> LESSON_CONTENT_ERROR_CODES = Map.ofEntries(
+            Map.entry("error.video.urlRequired", "error.course.lessonVideoUrlRequired"),
+            Map.entry("error.video.urlMalformed", "error.course.lessonVideoUrlMalformed"),
+            Map.entry("error.video.providerUnsupported", "error.course.lessonVideoProviderUnsupported"),
+            Map.entry("error.video.videoIdInvalid", "error.course.lessonVideoIdInvalid"),
+            Map.entry("error.video.providerMismatch", "error.course.lessonVideoProviderMismatch"),
+            Map.entry("error.richContent.required", "error.course.lessonRichContentRequired"),
+            Map.entry("error.richContent.empty", "error.course.lessonRichContentEmpty"),
+            Map.entry("error.richContent.malformed", "error.course.lessonRichContentMalformed"),
+            Map.entry("error.richContent.tooLarge", "error.course.lessonRichContentTooLarge"),
+            Map.entry("error.richContent.linkRequired", "error.course.lessonRichContentLinkInvalid"),
+            Map.entry("error.richContent.linkMalformed", "error.course.lessonRichContentLinkInvalid"),
+            Map.entry("error.richContent.linkTooLong", "error.course.lessonRichContentLinkInvalid"),
+            Map.entry("error.richContent.linkSchemeRequired", "error.course.lessonRichContentLinkUnsafe"),
+            Map.entry("error.richContent.linkSchemeUnsupported", "error.course.lessonRichContentLinkUnsafe"),
+            Map.entry("error.richContent.ctaLabelRequired", "error.course.lessonRichContentCtaInvalid"),
+            Map.entry("error.richContent.ctaLabelTooLong", "error.course.lessonRichContentCtaInvalid"),
+            Map.entry("error.richContent.ctaHrefRequired", "error.course.lessonRichContentCtaInvalid"),
+            Map.entry("error.richContent.ctaHrefMalformed", "error.course.lessonRichContentCtaInvalid"),
+            Map.entry("error.richContent.ctaHrefUnsupported", "error.course.lessonRichContentCtaUnsafe"));
 
     private final QuizValidator quizValidator;
-    private final VideoProviderResolver videoProviderResolver;
+    private final LessonContentValidator lessonContentValidator;
 
     /**
      * Validates the payload and resolves the course-level settings it implies.
@@ -181,9 +200,10 @@ public class CourseValidator {
                 throw new BusinessException("error.course.lessonTitleRequired", position);
             }
             // Checked here, with the rest of the payload, precisely because synchronization is
-            // destructive: a course whose fourth lesson carries an unplayable link must be turned
-            // away before the first three have had their modules and quizzes rewritten.
-            validateVideo(lesson, position, videoBaseline);
+            // destructive: a course whose fourth lesson carries an unplayable link — or a document
+            // with a javascript: URL in it — must be turned away before the first three have had
+            // their modules and quizzes rewritten.
+            validateContent(lesson, position, videoBaseline);
             // Always, and for every lesson. A quiz is submitted content whatever the lesson around
             // it is doing, so a carried-forward video never carries a quiz past its own rules.
             quizValidator.validateIfPresent(lesson.getQuiz());
@@ -191,29 +211,36 @@ public class CourseValidator {
     }
 
     /**
-     * Rejects a video Manara cannot play, naming the lesson that carries it.
+     * Rejects content a lesson of this kind cannot be published with, naming the lesson.
      *
-     * <p>The reason travels with the position, because "lesson 4 is on a platform we do not
-     * support" and "lesson 4's link has no video in it" send an instructor to different fixes. The
-     * message says which; it never says which adapter, host or pattern decided so.
+     * <p>Which rules apply is {@link LessonContentValidator}'s decision, not this class's — the
+     * same object the standalone lesson endpoints use, so a rich-content lesson authored through
+     * the course editor is sanitized by exactly the same code as one authored through the lesson
+     * API. Duplicating the branch here is how the two would eventually disagree about what a
+     * document may contain, and only one of the two would be the one enforcing the security rule.
      *
-     * <p>This is a real tightening. The prototype accepted any non-blank string as a video URL,
-     * which is how a typo became a lesson with a permanently empty player. Existing rows are not
-     * affected: validation runs on the write path only, and the read path is deliberately lenient.
+     * <p>What this class keeps is the position. The reason travels with it, because "lesson 4 is on
+     * a platform we do not support" and "lesson 4's link has no video in it" send an instructor to
+     * different fixes. The message says which; it never says which adapter, host or pattern decided
+     * so.
+     *
+     * <p>The video branch is a real tightening the prototype did not have: it accepted any non-blank
+     * string as a video URL, which is how a typo became a lesson with a permanently empty player.
+     * Existing rows are not affected — validation runs on the write path only, and the read path is
+     * deliberately lenient.
+     *
+     * <p>The baseline travels with the payload so that a video the course already stores, sent back
+     * unchanged, is not this save's to refuse. Note that it is consulted <em>inside</em> the content
+     * validator rather than here: whether a carried video exempts a lesson depends on what kind of
+     * lesson it is, and a rich-content lesson that happens to still hold a video URL must be judged
+     * on its document. See {@link LessonContentValidator} and {@link LessonVideoBaseline}.
      */
-    private void validateVideo(LessonRequest lesson, int position, LessonVideoBaseline videoBaseline) {
-        // The video the course already stores for this lesson, sent back unchanged. It was accepted
-        // when it was written and this save is not touching it, so it is not this save's to refuse
-        // — see LessonVideoBaseline for why an aggregate PUT makes this the common case rather than
-        // an edge one.
-        if (videoBaseline.holds(lesson.getId(), lesson.getVideoUrl(), lesson.getVideoProvider())) {
-            return;
-        }
-        if (isBlank(lesson.getVideoUrl())) {
-            throw new BusinessException("error.course.lessonVideoUrlRequired", position);
-        }
+    private void validateContent(LessonRequest lesson, int position, LessonVideoBaseline videoBaseline) {
         try {
-            videoProviderResolver.resolve(lesson.getVideoUrl(), lesson.getVideoProvider());
+            // The baseline is asked the question here; the validator is handed the answer. It
+            // applies to the video branch alone — see LessonContentValidator.
+            lessonContentValidator.validate(lesson, videoBaseline.holds(
+                    lesson.getId(), lesson.getVideoUrl(), lesson.getVideoProvider()));
         } catch (BusinessException e) {
             throw new BusinessException(lessonScopedCode(e.getMessageCode()), position);
         }
@@ -230,8 +257,8 @@ public class CourseValidator {
      * <p>An unmapped code — a reason a future adapter invents — degrades to the generic invalid
      * message rather than surfacing a raw key.
      */
-    private String lessonScopedCode(String videoErrorCode) {
-        return LESSON_VIDEO_ERROR_CODES.getOrDefault(videoErrorCode, "error.course.lessonVideoUrlInvalid");
+    private String lessonScopedCode(String contentErrorCode) {
+        return LESSON_CONTENT_ERROR_CODES.getOrDefault(contentErrorCode, "error.course.lessonContentInvalid");
     }
 
     /**

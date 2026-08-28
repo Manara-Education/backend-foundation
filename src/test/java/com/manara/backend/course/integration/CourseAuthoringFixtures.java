@@ -19,6 +19,7 @@ import com.manara.backend.course.model.CourseStructure;
 import com.manara.backend.course.model.SubscriptionUnit;
 import com.manara.backend.lesson.dto.InstructorLessonResponse;
 import com.manara.backend.lesson.dto.LessonRequest;
+import com.manara.backend.lesson.model.LessonContentType;
 import com.manara.backend.profile.model.Instructor;
 import com.manara.backend.profile.model.Student;
 import com.manara.backend.user.model.Role;
@@ -62,6 +63,38 @@ final class CourseAuthoringFixtures {
                 .description(title + " description")
                 .videoUrl("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
                 .build();
+    }
+
+    /**
+     * A rich-content lesson, carrying a document and no video.
+     *
+     * <p>The document is written as a client would send it — not canonically — so every test using
+     * it goes through the sanitizer the way a real save does.
+     */
+    static LessonRequest contentLesson(String title, String body) {
+        return LessonRequest.builder()
+                .title(title)
+                .description(title + " description")
+                .contentType(LessonContentType.RICH_CONTENT)
+                .richContent(document(body))
+                .build();
+    }
+
+    /** A minimal document with one paragraph of the given text. */
+    static String document(String body) {
+        return """
+                {"blocks":[{"type":"paragraph","content":[{"type":"text","text":"%s"}]}]}"""
+                .formatted(body);
+    }
+
+    /** A document with a link and a call-to-action, for the tests that are about those. */
+    static String documentWithLinkAndCta(String body, String linkHref, String ctaHref) {
+        return """
+                {"blocks":[
+                  {"type":"paragraph","content":[
+                    {"type":"text","text":"%s","marks":[{"type":"link","href":"%s"}]}]},
+                  {"type":"cta","label":"ابدأ التمرين","href":"%s","variant":"PRIMARY","align":"CENTER"}
+                ]}""".formatted(body, linkHref, ctaHref);
     }
 
     /** A lesson carrying its own quiz, for the tests that are about the quiz. */
@@ -199,13 +232,23 @@ final class CourseAuthoringFixtures {
                 .build();
     }
 
+    /**
+     * A lesson echoed back with its kind and both content branches intact.
+     *
+     * <p>The type in particular is load-bearing. An echo that dropped it would send every lesson
+     * back as a video — the wire default — so re-saving a course would turn its written lessons into
+     * broken video lessons, and a fixture that did that would be testing a client nobody ships. The
+     * real editor carries the type for exactly this reason.
+     */
     static LessonRequest echoOf(InstructorLessonResponse lesson) {
         return LessonRequest.builder()
                 .id(lesson.getId())
                 .title(lesson.getTitle())
                 .summary(lesson.getSummary())
                 .description(lesson.getDescription())
+                .contentType(lesson.getContentType())
                 .videoUrl(lesson.getVideoUrl())
+                .richContent(lesson.getRichContent())
                 .quiz(echoOf(lesson.getQuiz()))
                 .build();
     }

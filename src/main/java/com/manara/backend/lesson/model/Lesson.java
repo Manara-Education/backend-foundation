@@ -56,6 +56,22 @@ public class Lesson implements TrackedContent {
     private String description;
 
     /**
+     * What this lesson teaches with, and the only thing that decides it.
+     *
+     * <p>Never inferred. A {@code RICH_CONTENT} lesson may still hold a video URL — one it had
+     * before its type was changed — and a {@code VIDEO} lesson may still hold a document. Which of
+     * the two is read is this column and nothing else, which is what makes changing a lesson's type
+     * reversible rather than destructive.
+     *
+     * <p>{@code NOT NULL} with a default of {@code VIDEO}, so every row that existed before this
+     * column did is a video lesson, which is exactly what it was.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "content_type", nullable = false, length = 32)
+    @Builder.Default
+    private LessonContentType contentType = LessonContentType.VIDEO;
+
+    /**
      * The lesson's video, whoever hosts it.
      *
      * <p>Embedded, so {@code video.url} is still the {@code lessons.video_url} column the prototype
@@ -64,6 +80,26 @@ public class Lesson implements TrackedContent {
      */
     @Embedded
     private VideoSource video;
+
+    /**
+     * The authored document, canonical JSON, for a {@code RICH_CONTENT} lesson.
+     *
+     * <p>Written only by {@link com.manara.backend.lesson.content.RichContentSanitizer}, which is
+     * what makes the two guarantees this column needs true at the same time: nothing unsafe is in
+     * it, and two saves of the same document produce identical bytes. The second is not a tidiness
+     * concern — update tracking compares these strings, and a document that re-serialised its keys
+     * in a different order every time would tell every enrolled learner the lesson had changed
+     * whenever the instructor opened the form.
+     *
+     * <p>{@code TEXT} rather than {@code jsonb} deliberately. Nothing queries inside it, and
+     * {@code jsonb} would normalise the value on its own terms on the way in and out — leaving Java
+     * comparing a string it wrote against a string Postgres rewrote.
+     *
+     * <p>Null for a lesson that has never had rich content. Retained, not cleared, when a lesson is
+     * switched back to {@code VIDEO}.
+     */
+    @Column(name = "rich_content", columnDefinition = "TEXT")
+    private String richContent;
 
     @Column
     private Integer duration;

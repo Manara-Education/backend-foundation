@@ -22,9 +22,11 @@ import com.manara.backend.lesson.mapper.LessonMapper;
 import com.manara.backend.lesson.model.Lesson;
 import com.manara.backend.lesson.repository.CompletedLessonRepository;
 import com.manara.backend.lesson.repository.LessonRepository;
+import com.manara.backend.lesson.service.LessonContentWriter;
 import com.manara.backend.video.model.VideoSource;
+import com.manara.backend.lesson.validation.LessonContent;
+import com.manara.backend.lesson.validation.LessonContentValidator;
 import com.manara.backend.video.service.VideoMetadataService;
-import com.manara.backend.video.service.VideoProviderResolver;
 import com.manara.backend.quiz.dto.QuizRequest;
 import com.manara.backend.quiz.model.QuizOwnerType;
 import com.manara.backend.quiz.service.QuizService;
@@ -99,7 +101,8 @@ public class CourseContentSynchronizer {
     private final SubscriptionPlanMapper subscriptionPlanMapper;
     private final QuizService quizService;
     private final VideoMetadataService videoMetadataService;
-    private final VideoProviderResolver videoProviderResolver;
+    private final LessonContentValidator lessonContentValidator;
+    private final LessonContentWriter lessonContentWriter;
 
     public void sync(Course course, CourseRequest request, ResolvedCourseSettings settings,
                      CourseContentChanges changes) {
@@ -201,23 +204,44 @@ public class CourseContentSynchronizer {
             Lesson lesson;
 
             if (request.getId() == null) {
-                lesson = lessonRepository.save(lessonMapper.toLesson(request, course, module, order));
-                state.videoRefreshTargets.add(lesson);
+                // A new lesson has no stored video to be carrying back, so its content is held to
+                // today's rules in full. Re-validated rather than trusted: the whole payload passed
+                // CourseValidator a moment ago, so this cannot fail here, and running it again is
+                // how the sanitized document and the resolved video reach the write without either
+                // being derived a second way.
+                LessonContent content = lessonContentValidator.validate(request);
+                lesson = lessonRepository.save(
+                        lessonMapper.toLesson(request, content, course, module, order));
+                // Only a video has a length to measure.
+                if (content.isVideo()) {
+                    state.videoRefreshTargets.add(lesson);
+                }
                 changes.of(lesson).created();
                 slots.add(SiblingOrdering.Slot.unplaced(lesson));
             } else {
                 lesson = resolveOwnChild(lessonsById, state.seenLessonIds, request.getId(),
                         "error.course.lessonNotInCourse", "error.course.lessonDuplicate");
 
+                // Asked of the lesson itself rather than of a baseline: this path has already
+                // loaded the entity, so the cheapest and most current answer is right here. The
+                // course validator asks the same question of its own baseline a moment earlier,
+                // because it has the payload but not the entities.
                 VideoSource storedVideo = lesson.getVideo();
-                VideoSource nextVideo = nextVideoFor(storedVideo, request);
+                boolean videoAlreadyStored = storedVideo != null
+                        && storedVideo.matches(request.getVideoUrl(), request.getVideoProvider());
+                LessonContent content = lessonContentValidator.validate(request, videoAlreadyStored);
 
-                boolean videoChanged = !nextVideo.getUrl().equals(storedVideo.getUrl());
                 changes.of(lesson)
                         .metadata(lesson.getTitle(), request.getTitle().trim(), lesson::setTitle)
                         .metadata(lesson.getSummary(), request.getSummary(), lesson::setSummary)
-                        .content(lesson.getDescription(), request.getDescription(), lesson::setDescription)
-                        .content(storedVideo, nextVideo, lesson::setVideo);
+                        .content(lesson.getDescription(), request.getDescription(), lesson::setDescription);
+
+                // The content branch, its type, and whether the video has to be re-measured — all
+                // through the same writer the standalone lesson endpoints use, so a lesson edited
+                // from either surface lands identically. The writer is also where a carried-forward
+                // video is re-derived leniently rather than re-resolved strictly, which is what
+                // keeps one legacy row from freezing the course around it.
+                boolean videoNeedsMeasuring = lessonContentWriter.apply(lesson, content, changes);
                 // Re-parenting is how a structure switch keeps a lesson the payload still wants.
                 // Compared by id rather than by entity: `lesson.getModule()` can be an uninitialised
                 // proxy, whose id-based equals reads a field that is not there yet.
@@ -242,10 +266,10 @@ public class CourseContentSynchronizer {
                         ? SiblingOrdering.Slot.unplaced(lesson)
                         : SiblingOrdering.Slot.stored(lesson, lesson.getOrderIndex()));
 
-                if (videoChanged) {
+                if (videoNeedsMeasuring) {
                     // Not a content change of its own — the duration is derived, and the real
-                    // change (a different video) has already been recorded above.
-                    lesson.setDuration(0);
+                    // change (a different video, or a lesson that is now a video at all) has
+                    // already been recorded by the writer.
                     state.videoRefreshTargets.add(lesson);
                 }
             }
@@ -255,35 +279,6 @@ public class CourseContentSynchronizer {
         }
 
         state.lessonOrderings.add(slots);
-    }
-
-    /**
-     * The video to store for a lesson the payload is updating.
-     *
-     * <p>Two cases, and the difference between them is the whole of the legacy-content fix.
-     *
-     * <p>A video the payload <strong>changed</strong> is resolved strictly, exactly as before: the
-     * validator has already refused an unplayable one, so this cannot fail, and resolving is what
-     * fills the provider columns for the new URL.
-     *
-     * <p>A video the payload is only <strong>carrying back</strong> is resolved leniently. It is
-     * still re-derived when it can be — that is how a row written before the provider columns
-     * existed gets them filled in by an ordinary save, which is behaviour worth keeping — but a URL
-     * no adapter claims now keeps the source it already has instead of failing the save. That row
-     * was accepted under the rules of its time and this request is not touching it; the read path
-     * has always treated it that way, and this is the write path agreeing.
-     *
-     * @param stored  what the lesson currently holds, never null — {@code video_url} is NOT NULL
-     * @param request the lesson as submitted
-     */
-    private VideoSource nextVideoFor(VideoSource stored, LessonRequest request) {
-        if (stored.matches(request.getVideoUrl(), request.getVideoProvider())) {
-            return videoProviderResolver.tryResolve(stored.getUrl())
-                    .map(resolved -> resolved.toVideoSource(stored))
-                    .orElse(stored);
-        }
-        return videoProviderResolver.resolve(request.getVideoUrl(), request.getVideoProvider())
-                .toVideoSource(stored);
     }
 
     /**
