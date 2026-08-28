@@ -45,9 +45,13 @@ public class InstructorCourseController {
 
     private final CourseService courseService;
 
+    /**
+     * Every course on the platform, drafts and private courses included — for instructors and
+     * administrators, and now enforced as such rather than merely documented.
+     */
     @GetMapping
-    public ApiResponse<List<CourseResponse>> getAllCourses() {
-        return ApiResponse.success(courseService.getAllCourses());
+    public ApiResponse<List<CourseResponse>> getAllCourses(@AuthenticationPrincipal User user) {
+        return ApiResponse.success(courseService.getAllCourses(user));
     }
 
     @GetMapping("/my-courses")

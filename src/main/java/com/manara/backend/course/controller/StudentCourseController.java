@@ -30,9 +30,17 @@ public class StudentCourseController {
     private final CourseService courseService;
     private final CourseCheckoutService courseCheckoutService;
 
+    /**
+     * The catalogue: every course a learner may discover.
+     *
+     * <p>Published and public. A draft is unfinished; a private course is finished and off the
+     * catalogue, and reaches its own learners through their library instead. Both are excluded by
+     * the query itself, so what a caller counts, pages through and searches over is only ever
+     * courses they are allowed to see.
+     */
     @GetMapping
     public ApiResponse<List<CourseResponse>> getAllCourses() {
-        return ApiResponse.success(courseService.getPublishedCourses());
+        return ApiResponse.success(courseService.getDiscoverableCourses());
     }
 
     @GetMapping("/{courseId}")

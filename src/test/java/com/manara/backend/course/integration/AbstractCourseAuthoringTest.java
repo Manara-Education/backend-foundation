@@ -90,6 +90,15 @@ abstract class AbstractCourseAuthoringTest extends AbstractPostgresBackedTest {
         return other;
     }
 
+    /**
+     * An administrator. No profile row, because the platform has none for staff — an admin is a
+     * {@code users} row with a role and nothing else, which is exactly what the authorization rules
+     * read.
+     */
+    protected User newAdminUser() {
+        return userRepository.save(user(Role.ADMIN));
+    }
+
     protected Student studentProfileOf(User user) {
         return studentRepository.findByUserId(user.getId()).orElseThrow();
     }

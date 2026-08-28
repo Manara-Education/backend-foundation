@@ -3,6 +3,7 @@ package com.manara.backend.course.dto;
 import com.manara.backend.course.model.CourseAccessType;
 import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseStructure;
+import com.manara.backend.course.model.CourseVisibility;
 import com.manara.backend.lesson.dto.InstructorLessonResponse;
 import com.manara.backend.quiz.dto.InstructorQuizResponse;
 import lombok.AllArgsConstructor;
@@ -42,6 +43,15 @@ public class InstructorCourseResponse {
 
     private CourseStructure structure;
     private CourseStatus status;
+
+    /**
+     * Who the course is offered to. The editor's own copy of the setting it just saved, and what
+     * the instructor's course card renders its "private" marker from.
+     *
+     * <p>Beside {@code status}, not folded into it. The editor shows both, because "published" and
+     * "private" are answers to different questions and an instructor needs to see both answers.
+     */
+    private CourseVisibility visibility;
 
     /**
      * Whether the course has changed in a way its learners should be told about.

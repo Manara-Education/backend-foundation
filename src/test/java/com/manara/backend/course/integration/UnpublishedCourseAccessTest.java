@@ -179,12 +179,12 @@ class UnpublishedCourseAccessTest extends AbstractCourseAuthoringTest {
         @DisplayName("cannot find it in the catalogue")
         void itLeavesTheCatalogue() {
             var course = enrolledModularCourse();
-            assertThat(courseService.getPublishedCourses()).extracting(c -> c.getId())
+            assertThat(courseService.getDiscoverableCourses()).extracting(c -> c.getId())
                     .contains(course.getId());
 
             unpublish(course.getId());
 
-            assertThat(courseService.getPublishedCourses()).extracting(c -> c.getId())
+            assertThat(courseService.getDiscoverableCourses()).extracting(c -> c.getId())
                     .doesNotContain(course.getId());
         }
 
@@ -245,7 +245,7 @@ class UnpublishedCourseAccessTest extends AbstractCourseAuthoringTest {
             unpublish(course.getId());
             courseService.publish(instructorUser, course.getId());
 
-            assertThat(courseService.getPublishedCourses()).extracting(c -> c.getId())
+            assertThat(courseService.getDiscoverableCourses()).extracting(c -> c.getId())
                     .contains(course.getId());
             assertThat(courseService.getCourseDetails(stranger, course.getId(), CourseViewMode.DISCOVER)
                     .getCourse().getTitle()).isEqualTo("Withdrawn");

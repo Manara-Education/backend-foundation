@@ -58,6 +58,7 @@ public class CourseAggregateMapper {
                 .instructorName(course.getInstructor().getUser().getFullName())
                 .structure(course.getStructure())
                 .status(course.getStatus())
+                .visibility(course.getVisibility())
                 .hasUpdatesSincePublish(course.hasUpdatesSincePublish())
                 // What the next save has to quote back. Read and write both answer with it, so the
                 // editor is never holding a revision the server has already moved past.

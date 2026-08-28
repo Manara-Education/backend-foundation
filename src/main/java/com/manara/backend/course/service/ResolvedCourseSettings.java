@@ -3,6 +3,7 @@ package com.manara.backend.course.service;
 import com.manara.backend.course.model.CourseAccessType;
 import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseStructure;
+import com.manara.backend.course.model.CourseVisibility;
 
 import java.math.BigDecimal;
 
@@ -16,6 +17,7 @@ import java.math.BigDecimal;
 public record ResolvedCourseSettings(
         CourseStructure structure,
         CourseStatus status,
+        CourseVisibility visibility,
         CourseAccessType accessType,
         BigDecimal purchasePrice) {
 }

@@ -8,6 +8,7 @@ import com.manara.backend.course.model.Course;
 import com.manara.backend.course.model.CourseAccessType;
 import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseStructure;
+import com.manara.backend.course.model.CourseVisibility;
 import com.manara.backend.lesson.dto.LessonRequest;
 import com.manara.backend.quiz.service.QuizValidator;
 import com.manara.backend.lesson.validation.LessonContentValidator;
@@ -95,6 +96,7 @@ public class CourseValidator {
                                                      LessonVideoBaseline videoBaseline) {
         CourseStructure structure = resolveStructure(request, existing);
         CourseStatus status = resolveStatus(request, existing);
+        CourseVisibility visibility = resolveVisibility(request, existing);
         CourseAccessType accessType = resolveAccessType(request, existing);
 
         validateStructure(request, structure);
@@ -104,7 +106,7 @@ public class CourseValidator {
 
         BigDecimal purchasePrice = validateAccess(request, existing, accessType);
 
-        return new ResolvedCourseSettings(structure, status, accessType, purchasePrice);
+        return new ResolvedCourseSettings(structure, status, visibility, accessType, purchasePrice);
     }
 
     private CourseStructure resolveStructure(CourseRequest request, Course existing) {
@@ -119,6 +121,26 @@ public class CourseValidator {
             return request.getStatus();
         }
         return existing != null ? existing.getStatus() : CourseStatus.DRAFT;
+    }
+
+    /**
+     * Who the course is offered to: what the payload asked for, else what it already is, else
+     * {@link CourseVisibility#PUBLIC}.
+     *
+     * <p>Deliberately the same shape as {@link #resolveStatus}, and deliberately independent of it.
+     * The two are separate axes, so nothing here reads the status and nothing there reads this —
+     * publishing a private course leaves it private, and making a draft public leaves it a draft.
+     *
+     * <p>Absent means "unchanged" on update and {@code PUBLIC} on create, which is what keeps every
+     * client written before this field existed working exactly as it did: their saves never mention
+     * visibility, so their courses never become private, and the courses they create are on offer
+     * to everyone as they always were.
+     */
+    private CourseVisibility resolveVisibility(CourseRequest request, Course existing) {
+        if (request.getVisibility() != null) {
+            return request.getVisibility();
+        }
+        return existing != null ? existing.getVisibility() : CourseVisibility.PUBLIC;
     }
 
     /**
