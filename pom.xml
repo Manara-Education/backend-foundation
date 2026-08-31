@@ -98,7 +98,7 @@
 		<dependency>
 			<groupId>com.resend</groupId>
 			<artifactId>resend-java</artifactId>
-			<version>4.19.0</version>
+			<version>4.22.0</version>
 			<exclusions>
 				<!-- Replaced by okhttp-jvm below; see the comment on that dependency. -->
 				<exclusion>
