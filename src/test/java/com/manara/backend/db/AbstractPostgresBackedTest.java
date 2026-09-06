@@ -25,17 +25,25 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  * <p>The image tags match docker-compose.yml deliberately. A test that passes on a different major
  * version of PostgreSQL than the one production runs is not evidence about production.
  *
- * <p>Which is why this tag moves whenever production's does. 17.11 is the current 17.x patch
- * release; production pins the same version by digest in the infrastructure repository's
- * {@code docker-compose.prod.yml}. The digest is deliberately not repeated here — a developer
- * running the suite wants the version production runs, not a specific artifact to keep in step by
- * hand — but the version itself is not optional, and leaving it behind would quietly turn the
- * paragraph above into a false claim.
+ * <p>Which is why this tag moves whenever production's does. Production pins the same version by
+ * digest in the infrastructure repository's {@code docker-compose.prod.yml}. The digest is
+ * deliberately not repeated here — a developer running the suite wants the version production
+ * runs, not a specific artifact to keep in step by hand — but the version itself is not optional,
+ * and leaving it behind would quietly turn the paragraph above into a false claim.
+ *
+ * <p>The pin is 17.10 rather than the newest 17.11. CVE-2025-8713, CVE-2025-8714 and
+ * CVE-2025-8715 — the three that put 17.5 out of date, and the only ones above CVSS 4 on this
+ * branch — were all fixed in 17.6, so 17.10 carries them. The single CVE 17.11 adds is
+ * CVE-2026-14681, which needs GSSAPI encryption coupled with SSL; this application does not use
+ * GSSAPI at all. Meanwhile the arm64 build of 17.11 aborts with a bus error inside initdb on
+ * Docker Desktop every single time, which would leave the suite unable to start a container on an
+ * Apple Silicon machine while looking perfectly correct in a diff. Revisit when a working arm64
+ * 17.12 exists.
  */
 @SpringBootTest
 public abstract class AbstractPostgresBackedTest {
 
-    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17.11")
+    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17.10")
             .withDatabaseName("manara_db")
             .withUsername("postgres")
             .withPassword("password");
