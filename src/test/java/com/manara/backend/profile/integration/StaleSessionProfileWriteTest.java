@@ -1,7 +1,6 @@
 package com.manara.backend.profile.integration;
 
 import com.manara.backend.db.AbstractPostgresBackedTest;
-import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -9,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
@@ -38,9 +38,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * <p>Each test below therefore holds a session across an out-of-band change to the row, renames
  * through it, and then asks the <em>database</em> what happened — not the response body, which was
- * always a cheerful success either way. The session is carried the way a browser carries it, by
- * replaying the cookies the server set, so these requests go through the real filter chain, the
- * real Redis session store and the real CSRF check.
+ * always a cheerful success either way.
+ *
+ * <p>The session is carried by holding on to the {@code HttpSession} the sign-in created and
+ * replaying it on the later request. Not by replaying the cookie: {@code MockMvc} is built with
+ * {@code springSecurity()}, which installs Spring Security's filter chain but not Spring Session's
+ * {@code SessionRepositoryFilter}, so a {@code MANARA_SESSION} cookie means nothing here and every
+ * request would otherwise get a new, empty session. Carrying the session object is the faithful
+ * part regardless, because {@code HttpSessionSecurityContextRepository} keeps the authenticated
+ * principal in a session attribute — that stored {@code User}, serialised at sign-in and never
+ * refreshed, is the stale snapshot this whole test is about.
  *
  * <p>These cases stay meaningful after account-wide session revocation (MANARA-SEC-003) lands:
  * at that point the old session is rejected outright and the rename never reaches the service,
@@ -81,7 +88,7 @@ class StaleSessionProfileWriteTest extends AbstractPostgresBackedTest {
     @DisplayName("A rename through a pre-recovery session cannot restore the old password")
     void renameCannotRollBackARecoveredPassword() throws Exception {
         String email = "recovered" + DOMAIN;
-        Cookie[] oldSession = registerVerifyAndCaptureSession(email, "STUDENT");
+        MockHttpSession oldSession = registerVerifyAndCaptureSession(email, "STUDENT");
 
         String hashBeforeRecovery = passwordHash(email);
         recoverPasswordTo(email, NEW_PASSWORD);
@@ -105,7 +112,7 @@ class StaleSessionProfileWriteTest extends AbstractPostgresBackedTest {
     @DisplayName("A rename through a pre-demotion session cannot restore the old role")
     void renameCannotRollBackARoleCorrection() throws Exception {
         String email = "demoted" + DOMAIN;
-        Cookie[] oldSession = registerVerifyAndCaptureSession(email, "INSTRUCTOR");
+        MockHttpSession oldSession = registerVerifyAndCaptureSession(email, "INSTRUCTOR");
 
         // An operator correcting a role directly on the row, which is the only mechanism that
         // exists today — there is no role-management API.
@@ -128,7 +135,7 @@ class StaleSessionProfileWriteTest extends AbstractPostgresBackedTest {
         // allowed while the flag is set by design, so this second session's snapshot carries
         // requiresPasswordReset = true.
         jdbc.update("UPDATE users SET requires_password_reset = true WHERE email = ?", email);
-        Cookie[] flaggedSession = cookiesOf(login(email, ORIGINAL_PASSWORD)
+        MockHttpSession flaggedSession = sessionOf(login(email, ORIGINAL_PASSWORD)
                 .andExpect(status().isOk())
                 .andReturn());
 
@@ -150,7 +157,7 @@ class StaleSessionProfileWriteTest extends AbstractPostgresBackedTest {
     @DisplayName("The rename itself still works, and touches nothing but the name")
     void renameStillChangesTheNameAndNothingElse() throws Exception {
         String email = "ordinary" + DOMAIN;
-        Cookie[] session = registerVerifyAndCaptureSession(email, "STUDENT");
+        MockHttpSession session = registerVerifyAndCaptureSession(email, "STUDENT");
 
         String hashBefore = passwordHash(email);
         rename(session, "Perfectly Ordinary Rename");
@@ -166,7 +173,7 @@ class StaleSessionProfileWriteTest extends AbstractPostgresBackedTest {
     // ------------------------------------------------------------ flow helpers
 
     /** Registers, verifies the emailed code, and returns the cookies that session is carried by. */
-    private Cookie[] registerVerifyAndCaptureSession(String email, String role) throws Exception {
+    private MockHttpSession registerVerifyAndCaptureSession(String email, String role) throws Exception {
         mockMvc.perform(post("/api/v1/auth/register").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -182,7 +189,7 @@ class StaleSessionProfileWriteTest extends AbstractPostgresBackedTest {
                 .andExpect(status().isOk())
                 .andReturn();
 
-        return cookiesOf(verified);
+        return sessionOf(verified);
     }
 
     /** The anonymous forgot-password flow, run to completion. */
@@ -201,9 +208,9 @@ class StaleSessionProfileWriteTest extends AbstractPostgresBackedTest {
                 .andExpect(status().isOk());
     }
 
-    private void rename(Cookie[] session, String newName) throws Exception {
+    private void rename(MockHttpSession session, String newName) throws Exception {
         mockMvc.perform(put("/api/v1/profile").with(csrf())
-                        .cookie(session)
+                        .session(session)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"fullName":"%s"}""".formatted(newName)))
@@ -217,12 +224,22 @@ class StaleSessionProfileWriteTest extends AbstractPostgresBackedTest {
                         {"email":"%s","password":"%s"}""".formatted(email, password)));
     }
 
-    private static Cookie[] cookiesOf(MvcResult result) {
-        Cookie[] cookies = result.getResponse().getCookies();
-        assertThat(cookies)
-                .as("the server must have set a session cookie for this response")
-                .isNotEmpty();
-        return cookies;
+    /**
+     * The session the request ended up authenticated against.
+     *
+     * <p>Read off the request rather than the response, because sign-in replaces the session and
+     * rotates its id: the interesting session is the one that exists after
+     * {@code HttpSessionManager.establish} has saved the security context into it.
+     */
+    private static MockHttpSession sessionOf(MvcResult result) {
+        MockHttpSession session = (MockHttpSession) result.getRequest().getSession(false);
+        assertThat(session)
+                .as("sign-in must have established a session holding the security context")
+                .isNotNull();
+        assertThat(session.getAttribute("SPRING_SECURITY_CONTEXT"))
+                .as("the established session must carry the authenticated principal")
+                .isNotNull();
+        return session;
     }
 
     // ------------------------------------------------------------ database helpers
