@@ -22,7 +22,7 @@ import static com.manara.backend.course.integration.CourseAuthoringFixtures.modu
 import static com.manara.backend.course.integration.CourseAuthoringFixtures.modularCourse;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
+import static com.manara.backend.session.security.SignedIn.signedIn;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -105,7 +105,7 @@ class CourseAggregateHttpContractTest extends AbstractCourseAuthoringTest {
 
     private String save(InstructorCourseResponse course, String extraFields) throws Exception {
         return mockMvc.perform(put(BASE + "/{id}", course.getId())
-                        .with(user(instructorUser)).with(csrf())
+                        .with(signedIn(instructorUser)).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON).content(body(course, extraFields)))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
@@ -268,7 +268,7 @@ class CourseAggregateHttpContractTest extends AbstractCourseAuthoringTest {
                     """.formatted(course.getTitle(), course.getDescription());
 
             mockMvc.perform(put(BASE + "/{id}", course.getId())
-                            .with(user(instructorUser)).with(csrf())
+                            .with(signedIn(instructorUser)).with(csrf())
                             .contentType(MediaType.APPLICATION_JSON).content(noRevision))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.code").value("COURSE_REVISION_REQUIRED"));
@@ -290,7 +290,7 @@ class CourseAggregateHttpContractTest extends AbstractCourseAuthoringTest {
                     """.formatted(course.getDescription(), course.getRevision());
 
             mockMvc.perform(put(BASE + "/{id}", course.getId())
-                            .with(user(instructorUser)).with(csrf())
+                            .with(signedIn(instructorUser)).with(csrf())
                             .contentType(MediaType.APPLICATION_JSON).content(stale))
                     .andExpect(status().isConflict())
                     .andExpect(jsonPath("$.status").value("error"))
