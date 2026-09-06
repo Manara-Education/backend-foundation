@@ -7,7 +7,6 @@ import com.manara.backend.user.model.User;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -51,16 +50,36 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 class UploadAuthorizationTest extends AbstractPostgresBackedTest {
 
-    @TempDir
-    static Path uploadDir;
+    /**
+     * A directory of this test's own, so the files it counts are unambiguously the ones it caused
+     * and the repository's own {@code uploads/} is untouched.
+     *
+     * <p>Created in a static initialiser rather than with {@code @TempDir}, deliberately.
+     * {@code FileUploadService} resolves {@code app.uploads.dir} in its <em>constructor</em>, so the
+     * value has to exist by the time the application context is built; a {@code @TempDir} static
+     * field is populated by a JUnit callback whose ordering against Spring's context loading is not
+     * something this test should be relying on. A static initialiser runs before either.
+     */
+    static final Path uploadDir = createIsolatedUploadDir();
+
+    private static Path createIsolatedUploadDir() {
+        try {
+            return Files.createTempDirectory("manara-upload-auth-test");
+        } catch (IOException e) {
+            throw new IllegalStateException("could not create the test upload directory", e);
+        }
+    }
 
     /**
-     * Redirects storage into a per-run temporary directory, so the files this test counts are
-     * unambiguously the ones it caused and the repository's own {@code uploads/} is untouched.
+     * Redirects storage into that directory.
+     *
+     * <p>Declaring a second {@code @DynamicPropertySource} alongside the one inherited from
+     * {@link AbstractPostgresBackedTest} also gives this class its own context cache key, so the
+     * override cannot be lost to a context another test class built first.
      */
     @DynamicPropertySource
     static void uploadDirectory(DynamicPropertyRegistry registry) {
-        registry.add("app.uploads.dir", () -> uploadDir.toAbsolutePath().toString());
+        registry.add("app.uploads.dir", uploadDir::toString);
     }
 
     private MockMvc mockMvc;
