@@ -1,6 +1,8 @@
 package com.manara.backend.common.file;
 
 import com.manara.backend.common.exception.BusinessException;
+import com.manara.backend.user.model.Role;
+import com.manara.backend.user.model.User;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -45,8 +47,22 @@ public class FileUploadService {
      * any authenticated instructor could place a file of any type, under any extension, into a
      * directory the web server hands out — with the extension chosen by the uploader. This now
      * refuses anything that is not demonstrably one of the permitted image formats.
+     *
+     * <p>It also refuses anyone who is not an instructor. {@link UploadSecurityConfig} already
+     * rejects those callers a filter earlier, which is what keeps a denied request from being
+     * parsed at all; the check is repeated here because that one is a statement about a URL, and
+     * this is the method that writes to the disk. Any future caller reaching the filesystem through
+     * this service is covered without having to remember a matcher.
+     *
+     * <p>The uploader is taken as an argument rather than read from {@code SecurityContextHolder}
+     * so that identity arrives explicitly, at the same boundary that will need to record who owns
+     * the stored file.
      */
-    public String storeFile(MultipartFile file) {
+    public String storeFile(MultipartFile file, User uploader) {
+        if (uploader == null || uploader.getRole() != Role.INSTRUCTOR) {
+            throw new BusinessException("error.file.onlyInstructor");
+        }
+
         if (file == null || file.isEmpty()) {
             throw new BusinessException("error.file.empty");
         }
