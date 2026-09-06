@@ -6,6 +6,7 @@ import com.manara.backend.payment.model.PaymentCharge;
 import com.manara.backend.payment.model.PaymentReceipt;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.time.Clock;
@@ -30,8 +31,27 @@ import java.util.UUID;
  * and no PCI DSS scope. The checks went when the fields did. The client-side form remains free to
  * validate whatever it collects; the difference is that it is no longer sent here.
  */
+/*
+ * Registered only in DEMONSTRATION mode.
+ *
+ * This bean returns a successful receipt for every charge without contacting anybody, and checkout
+ * grants a paid entitlement from that receipt. In a demonstration that is the intended behaviour.
+ * In a deployment that believes it is selling courses it is a way to be given a paid entitlement for
+ * nothing -- and nothing in the code could previously tell those two deployments apart, because the
+ * bean was registered unconditionally.
+ *
+ * The condition is what tells them apart. matchIfMissing = true keeps today's behaviour exactly as
+ * it is: an existing deployment that sets nothing stays in demonstration mode and nothing changes
+ * for it. What it can no longer do is quietly become a real-money deployment while still being
+ * served by this class -- selecting LIVE removes this bean, and CommerceConfig then refuses to start
+ * unless a real provider has taken its place.
+ */
 @Slf4j
 @Component
+@ConditionalOnProperty(
+        name = "manara.commerce.mode",
+        havingValue = "DEMONSTRATION",
+        matchIfMissing = true)
 @RequiredArgsConstructor
 public class SimulatedPaymentGateway implements PaymentGateway {
 
