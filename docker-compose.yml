@@ -1,7 +1,10 @@
 services:
   postgres:
     container_name: manara_db
-    image: postgres:17.5
+    # Kept in step with production (infrastructure repo, docker-compose.prod.yml)
+    # and with AbstractPostgresBackedTest. 17.5 was inside the affected range of
+    # several vendor advisories for the 17 branch; 17.11 carries the fixes.
+    image: postgres:17.11
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}

@@ -24,11 +24,18 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  *
  * <p>The image tags match docker-compose.yml deliberately. A test that passes on a different major
  * version of PostgreSQL than the one production runs is not evidence about production.
+ *
+ * <p>Which is why this tag moves whenever production's does. 17.11 is the current 17.x patch
+ * release; production pins the same version by digest in the infrastructure repository's
+ * {@code docker-compose.prod.yml}. The digest is deliberately not repeated here — a developer
+ * running the suite wants the version production runs, not a specific artifact to keep in step by
+ * hand — but the version itself is not optional, and leaving it behind would quietly turn the
+ * paragraph above into a false claim.
  */
 @SpringBootTest
 public abstract class AbstractPostgresBackedTest {
 
-    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17.5")
+    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17.11")
             .withDatabaseName("manara_db")
             .withUsername("postgres")
             .withPassword("password");
