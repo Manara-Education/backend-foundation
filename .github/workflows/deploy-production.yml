@@ -52,6 +52,8 @@ on:
 
 permissions:
   contents: read
+  checks: read
+  actions: read
   # Reading the image manifest from GHCR to prove the tag exists before the
   # server is touched at all.
   packages: read
@@ -76,6 +78,11 @@ jobs:
 
     # workflow_run fires on completion whatever the outcome, so a FAILED publish
     # would otherwise deploy. The conclusion has to be checked explicitly.
+    #
+    # A manual dispatch used to be waved through here. Dispatching needs only
+    # write access, and nothing beyond the tag's shape was checked — so any
+    # semver tag pointing at any commit could be deployed to production. Both
+    # paths now go through the same validation below.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success'
@@ -103,7 +110,32 @@ jobs:
           echo "Deploying $RAW_TAG"
 
       # ---------------------------------------------------------------------
-      # 2. Prove the image exists BEFORE touching production
+      # 2. Prove the release may be deployed at all
+      # ---------------------------------------------------------------------
+      # Same validator, same answers, as release and publish: the tag resolves
+      # to a commit on main, a published release still points at it, and CI
+      # passed on that exact commit. Run from this workflow's own checkout, so
+      # nothing from the candidate decides whether the candidate is allowed.
+      - name: Check out the validation scripts
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate the release
+        id: commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          .github/scripts/validate-promotion.sh \
+            --tag "$TAG" \
+            --require-release \
+            --require-checks \
+            --checks "Build and test,Build the container image"
+
+      # ---------------------------------------------------------------------
+      # 3. Bind the image to that commit BEFORE touching production
       # ---------------------------------------------------------------------
       # The server pulls this tag in a moment. Resolving it here first means a
       # missing or half-published image fails on the runner, while production is
@@ -115,6 +147,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.resolve.outputs.tag }}
+          SHA: ${{ steps.commit.outputs.sha }}
         run: |
           set -euo pipefail
           IMAGE="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
@@ -135,9 +168,32 @@ jobs:
             sleep 20
           done
           DIGEST="$(docker buildx imagetools inspect "$IMAGE:$TAG" --format '{{.Manifest.Digest}}')"
+
+          # The version tag is a movable label; :sha-<commit> is not. Publishing
+          # writes both to the same image, so if they still resolve to the same
+          # digest then the artifact behind "$TAG" really is a build of the
+          # commit that was just validated. If someone has re-pointed the version
+          # tag at another image since, the two disagree and this stops.
+          SHA_DIGEST="$(docker buildx imagetools inspect "$IMAGE:sha-$SHA" --format '{{.Manifest.Digest}}' 2>/dev/null || true)"
+          [[ -n "$SHA_DIGEST" ]] \
+            || { echo "::error::No $IMAGE:sha-$SHA image. $TAG was not published from the validated commit."; exit 1; }
+          [[ "$DIGEST" == "$SHA_DIGEST" ]] \
+            || { echo "::error::$IMAGE:$TAG is $DIGEST but :sha-$SHA is $SHA_DIGEST. The version tag has been moved."; exit 1; }
+
+          # The image's own provenance label must name the same commit. Self
+          # asserted, so it is a consistency check rather than proof — but a
+          # mismatch here means something is wrong that the digests alone did
+          # not catch.
+          REVISION="$(docker buildx imagetools inspect "$IMAGE@$DIGEST" --format '{{json .Image}}' \
+                      | jq -r '.config.Labels["org.opencontainers.image.revision"] // ""' 2>/dev/null || true)"
+          if [[ -n "$REVISION" && "$REVISION" != "$SHA" ]]; then
+            echo "::error::Image revision label is $REVISION, expected $SHA."
+            exit 1
+          fi
+
           echo "image=$IMAGE"   >> "$GITHUB_OUTPUT"
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
-          echo "Resolved $IMAGE:$TAG -> $DIGEST"
+          echo "Approved $IMAGE:$TAG == :sha-$SHA -> $DIGEST"
 
       # ---------------------------------------------------------------------
       # 3. SSH
@@ -176,11 +232,19 @@ jobs:
           HOST: ${{ secrets.HETZNER_HOST }}
           USER: ${{ secrets.HETZNER_USER }}
           TAG: ${{ steps.resolve.outputs.tag }}
+          DIGEST: ${{ steps.image.outputs.digest }}
         run: |
           set -euo pipefail
+          # The digest goes with the tag. The host pins repo:tag@digest and
+          # refuses anything else, so what runs in production is the artifact
+          # verified above rather than whatever that tag resolves to by the time
+          # the server pulls it. An empty digest here would silently degrade
+          # into a tag deployment, so it is checked rather than assumed.
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] \
+            || { echo "::error::No verified digest to deploy."; exit 1; }
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes \
               -o ConnectTimeout=20 "$USER@$HOST" \
-              "cd /opt/manara && ./scripts/deploy.sh backend '$TAG'"
+              "cd /opt/manara && ./scripts/deploy.sh backend '$TAG' '$DIGEST'"
 
       # ---------------------------------------------------------------------
       # 5. Prove it from outside

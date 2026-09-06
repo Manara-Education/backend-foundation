@@ -39,6 +39,9 @@ on:
 # contents: write is required to create the release. Nothing else is granted.
 permissions:
   contents: write
+  # Reading the check runs that decide whether this commit may be released.
+  checks: read
+  actions: read
 
 # Two pushes of the same tag must never race to create the same release.
 concurrency:
@@ -49,7 +52,8 @@ jobs:
   release:
     name: Create the GitHub release
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Above 10: the promotion gate waits for CI on the tagged commit.
+    timeout-minutes: 30
 
     steps:
       - name: Check out the repository
@@ -71,23 +75,23 @@ jobs:
           fi
           echo "Releasing $TAG"
 
-      # A production release must be reachable from main. Without this check a
-      # tag pushed from a feature branch would produce a GitHub Release — and,
-      # through the publishing workflow, a deployable image — from code that was
-      # never reviewed or merged.
-      - name: Refuse to release a commit that is not on main
+      # A production release must be reachable from main, and must be code CI
+      # has actually passed on. Both are decided by the shared validator, so
+      # this workflow, publishing and deployment cannot drift apart on what
+      # "releasable" means.
+      #
+      # Deliberately WITHOUT --require-release: this is the workflow that
+      # creates the release, so requiring one to exist first would be circular
+      # and nothing could ever be released.
+      - name: Validate the candidate
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
-          set -euo pipefail
-          git fetch origin main --quiet
-          if git merge-base --is-ancestor "$TAG" origin/main; then
-            echo "$TAG is on main."
-          else
-            echo "::error::$TAG is not an ancestor of main. Releases are cut from main only:"
-            echo "::error::merge develop into main first, then tag the merge commit."
-            exit 1
-          fi
+          .github/scripts/validate-promotion.sh \
+            --tag "$TAG" \
+            --require-checks \
+            --checks "Build and test,Build the container image"
 
       # --generate-notes builds the body from the PRs merged since the previous
       # tag, grouped by the categories in .github/release.yml.
