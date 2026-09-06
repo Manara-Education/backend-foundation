@@ -7,16 +7,56 @@
 #                     semver-major anything (a Spring Boot major is a migration)
 #                     every security update
 #
-# Why this workflow waits for CI instead of just calling `gh pr merge --auto`:
-#   GitHub's auto-merge merges a PR as soon as nothing *required* is blocking it.
-#   The `develop_branch_rule` ruleset in this repository is currently DISABLED, so
-#   there are no required status checks — auto-merge alone would therefore merge a
-#   Dependabot PR before CI had even finished, which is exactly what this pipeline
-#   exists to prevent. So we first wait for the CI check runs on this commit to
-#   conclude, and only hand the PR to GitHub's auto-merge once they are green.
-#   Once required status checks are enabled on `develop`, this stays correct — it
-#   simply becomes belt-and-braces, and auto-merge continues to respect every
-#   protection (required reviews, linear history, merge queue) rather than bypass it.
+# The eligibility rules in "Decide whether this update may auto-merge" are not
+# changed by the merge binding this file now carries, and nothing here decides
+# them. They do not currently match the "every security update" line above: a
+# Dependabot security patch reports `version-update:semver-patch` and is
+# therefore eligible today. Reconciling the two is an open policy decision,
+# recorded here rather than guessed at, because guessing either way silently
+# changes what ships.
+#
+# Why this workflow verifies CI itself instead of just calling `gh pr merge --auto`:
+#   GitHub's auto-merge merges a pull request as soon as nothing *required* is
+#   blocking it. Whether anything is required is a repository setting that can
+#   be changed, or disabled, without touching this file — so a pipeline that
+#   relies on that setting alone is only as strong as something it cannot see.
+#   This workflow therefore proves the property itself on every run: the named
+#   CI checks for this repository must exist on the pull request's current head,
+#   must have been produced by GitHub Actions rather than by any app that
+#   happens to hold checks:write, and must have concluded `success` — not
+#   skipped, not neutral, not merely present. Auto-merge is still what performs
+#   the merge, so every protection that IS configured — required reviews,
+#   required status checks, linear history, merge queues — continues to apply
+#   and is never bypassed.
+#
+#   The merge is then bound to the commit that was verified.
+#   `--match-head-commit` carries that SHA to GitHub, which refuses the request
+#   if the head has moved, so a commit pushed after verification cannot merge on
+#   the strength of an earlier commit's green ticks.
+#
+#   The check names below are a contract with ci.yml. Renaming a CI job means
+#   renaming it here in the same pull request, or every dependency update will
+#   be held until someone notices — which is the intended failure direction.
+#
+# This workflow never runs code from the pull request, and that claim needs
+# stating carefully, because the trigger is `pull_request_target`.
+#
+#   `pull_request_target` is used deliberately and is the reason this can merge
+#   at all: a `pull_request` run on a Dependabot pull request receives a
+#   read-only token, so the gate could verify but never act. The trade is that
+#   the job now runs in the context of the base repository, holding a write
+#   token — which makes what it checks out the whole of the question.
+#
+#   It checks out `github.event.pull_request.base.sha`. Not the pull request's
+#   head, not the merge ref, not a branch name that could resolve to either. So
+#   the gate always executes the reviewed version of itself rather than a
+#   version the pull request could have edited, and the dependency changes
+#   under review are never fetched, built, installed, or executed here. Nothing
+#   in this job runs a package manager, a build, or a test.
+#
+#   If a step is ever added that needs the pull request's own contents, it does
+#   not belong in this file. Put it in a `pull_request`-triggered workflow with
+#   no write scopes, and let this one read its conclusion like any other check.
 #
 # This workflow never triggers a deployment. Deployment remains the frozen,
 # manual-only workflow in deploy.yml, which has no push trigger.
@@ -28,22 +68,34 @@
 name: Dependabot auto-merge
 
 on:
-  pull_request:
+  pull_request_target:
 
-# Least privilege, and every scope is used:
-#   contents: write       -> completing the merge
-#   pull-requests: write  -> enabling auto-merge, requesting a reviewer, commenting
-#   checks: read          -> reading the CI check runs this job waits on
-permissions:
-  contents: write
-  pull-requests: write
-  checks: read
+# Nothing by default. Each job asks for exactly what it uses, so a job added to
+# this workflow later starts with no token scopes rather than inheriting these.
+permissions: {}
+
+# One decision per pull request at a time. Dependabot rebases by force-pushing,
+# so without this the run that verified the old head would still be polling
+# while the run for the new head is deciding.
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   dependabot:
     name: Dependabot auto-merge
     runs-on: ubuntu-latest
     timeout-minutes: 45
+
+    # Least privilege, and every scope is used:
+    #   contents: write       -> completing the merge, reading the base commit
+    #   pull-requests: write  -> enabling and revoking auto-merge, requesting a
+    #                            reviewer, commenting
+    #   checks: read          -> reading the CI check runs this job verifies
+    permissions:
+      contents: write
+      pull-requests: write
+      checks: read
 
     # Ignore human PRs and any other bot. Both the triggering actor and the PR
     # author must be Dependabot, so a re-run by a human on a Dependabot PR, or a
@@ -90,57 +142,42 @@ jobs:
           echo "Ecosystem=$ECOSYSTEM UpdateType=$UPDATE_TYPE Eligible=$eligible"
 
       # ---------------------------------------------------------------------
-      # Eligible updates: wait for CI on this exact commit, then auto-merge.
+      # Eligible updates: verify CI on this exact commit, then merge it.
       # ---------------------------------------------------------------------
-      - name: Wait for CI to pass on this commit
+
+      # `ref` is the BASE commit, deliberately, and never the pull request head.
+      # This job holds a write token; checking out the head would put code the
+      # pull request controls — including a rewritten copy of the gate below —
+      # on disk inside a privileged context. The base commit is code that has
+      # already been reviewed and merged. `persist-credentials: false` keeps the
+      # token out of the working copy's git config as well.
+      - name: Check out the merge gate from the base branch
+        if: steps.policy.outputs.eligible == 'true'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Verify CI on this commit and merge that same commit
         if: steps.policy.outputs.eligible == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          SHA: ${{ github.event.pull_request.head.sha }}
-          SELF: Dependabot auto-merge
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        # The check names are passed one --check at a time rather than as one
+        # delimited list. A check-run name is free text: the sibling frontend
+        # repository's CI job is called "Install, type-check and build", and a
+        # comma-separated list would split that name in half and then refuse
+        # every update for want of a check called "Install".
         run: |
-          set -euo pipefail
-
-          # Poll for up to ~30 minutes. Every check run on this commit except this
-          # job itself must finish; excluding self avoids waiting on our own run.
-          for attempt in $(seq 1 60); do
-            runs="$(gh api "repos/$REPO/commits/$SHA/check-runs" \
-              --jq "[.check_runs[] | select(.name != \"$SELF\") | {name, status, conclusion}]")"
-
-            total="$(echo "$runs"   | jq 'length')"
-            pending="$(echo "$runs" | jq '[.[] | select(.status != "completed")] | length')"
-
-            if [ "$total" -gt 0 ] && [ "$pending" -eq 0 ]; then
-              # Anything not success/skipped/neutral is a failure for our purposes.
-              bad="$(echo "$runs" | jq -r \
-                '[.[] | select(.conclusion | IN("success","skipped","neutral") | not)]')"
-              if [ "$(echo "$bad" | jq 'length')" -gt 0 ]; then
-                echo "::error::CI did not pass on $SHA; refusing to auto-merge."
-                echo "$bad" | jq -r '.[] | "  failed: \(.name) (\(.conclusion))"'
-                exit 1
-              fi
-              echo "All $total CI check run(s) passed on $SHA."
-              exit 0
-            fi
-
-            echo "attempt $attempt: $pending of $total check run(s) still running..."
-            sleep 30
-          done
-
-          echo "::error::Timed out waiting for CI on $SHA; refusing to auto-merge."
-          exit 1
-
-      # Hands the PR to GitHub's own auto-merge. This respects — and cannot
-      # bypass — required reviews, required checks, linear history and merge
-      # queues. Squash matches this repository's history, where every merged PR
-      # appears as a single "<title> (#NN)" commit on develop.
-      - name: Enable auto-merge
-        if: steps.policy.outputs.eligible == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-        run: gh pr merge --auto --squash "$PR_URL"
+          .github/scripts/verify-dependabot-merge.sh \
+            --repo "$REPO" \
+            --pr "$PR_NUMBER" \
+            --expected-head "$HEAD_SHA" \
+            --producer github-actions \
+            --check "Build and test" \
+            --check "Build the container image"
 
       # ---------------------------------------------------------------------
       # Everything else: route to a human. Never merged by this workflow.
