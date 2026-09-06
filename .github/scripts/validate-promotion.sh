@@ -33,8 +33,14 @@
 #
 # Usage:
 #   validate-promotion.sh --tag v1.4.0 [--require-release] [--require-checks]
-#                         [--checks "Build and test,Build the container image"]
+#                         [--check "Build and test"] [--check "Build the image"]
 #                         [--timeout-seconds 900]
+#
+# --check is repeated once per required check rather than taking one delimited
+# list. A check run's name is free text chosen by whoever wrote the workflow, and
+# this repository's own CI job is called "Install, type-check and build" — a
+# comma-separated list would have split that in half and then refused every
+# release for want of a check named "Install".
 #
 # Writes `sha=<commit>` to $GITHUB_OUTPUT when it passes.
 
@@ -43,7 +49,7 @@ set -euo pipefail
 TAG=""
 REQUIRE_RELEASE=false
 REQUIRE_CHECKS=false
-CHECKS=""
+REQUIRED_CHECKS=()
 TIMEOUT_SECONDS="${PROMOTION_CHECK_TIMEOUT:-900}"
 POLL_SECONDS="${PROMOTION_POLL_SECONDS:-15}"
 
@@ -60,7 +66,7 @@ while [[ $# -gt 0 ]]; do
         --tag)             TAG="${2:-}"; shift 2 ;;
         --require-release) REQUIRE_RELEASE=true; shift ;;
         --require-checks)  REQUIRE_CHECKS=true; shift ;;
-        --checks)          CHECKS="${2:-}"; shift 2 ;;
+        --check)           REQUIRED_CHECKS+=("${2:-}"); shift 2 ;;
         --timeout-seconds) TIMEOUT_SECONDS="${2:-}"; shift 2 ;;
         *) die "Unknown argument '$1'." ;;
     esac
@@ -77,8 +83,11 @@ fi
 # ------------------------------------------------------- 2. tag -> commit SHA
 
 # ^{commit} peels an annotated tag object through to the commit it points at,
-# and is a no-op for a lightweight tag. Both kinds exist in this repository —
-# v1.1.0 is annotated — so neither form can be assumed.
+# and is a no-op for a lightweight tag. Both kinds exist across Manara's
+# repositories, and not in a tidy pattern — some releases were cut with
+# `git tag -a` and some with a plain `git tag`, sometimes alternating between
+# consecutive versions. Whoever cuts the next one could produce either, so
+# neither form can be assumed.
 #
 # Anchored at refs/tags/ so that a *branch* called v9.9.9 cannot answer this
 # question. That is not hypothetical: creating such a branch is exactly how
@@ -126,9 +135,8 @@ fi
 # --------------------------------------------------------- 5. green CI on it?
 
 if [[ "$REQUIRE_CHECKS" == true ]]; then
-    [[ -n "$CHECKS" ]] || die "--require-checks needs --checks."
+    (( ${#REQUIRED_CHECKS[@]} > 0 )) || die "--require-checks needs at least one --check."
 
-    IFS=',' read -r -a required <<< "$CHECKS"
     deadline=$(( SECONDS + TIMEOUT_SECONDS ))
 
     while :; do
@@ -136,9 +144,8 @@ if [[ "$REQUIRE_CHECKS" == true ]]; then
                         --jq '.check_runs' 2>/dev/null || echo '[]')"
 
         pending=0
-        for name in "${required[@]}"; do
-            name="$(printf '%s' "$name" | sed 's/^ *//; s/ *$//')"
-            [[ -n "$name" ]] || continue
+        for name in "${REQUIRED_CHECKS[@]}"; do
+            [[ -n "$name" ]] || die "An empty --check was given."
 
             # The producer is part of the requirement. A check run can be
             # created by any app with the right permission, so a green tick

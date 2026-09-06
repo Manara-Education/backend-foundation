@@ -164,43 +164,59 @@ STUB_RELEASE=present \
 build_repo "$WORK/c7" lightweight main
 STUB_CHECKS='[]' \
   expect "no check runs at all" fail "No check run named" \
-  -- --tag v1.4.0 --require-checks --checks "Build and test" --timeout-seconds 1
+  -- --tag v1.4.0 --require-checks --check "Build and test" --timeout-seconds 1
 
 STUB_CHECKS='[{"name":"Build and test","status":"completed","conclusion":"failure","completed_at":"2026-01-01T00:00:00Z","app":{"slug":"github-actions"}}]' \
   expect "a failed check" fail "concluded 'failure'" \
-  -- --tag v1.4.0 --require-checks --checks "Build and test" --timeout-seconds 1
+  -- --tag v1.4.0 --require-checks --check "Build and test" --timeout-seconds 1
 
 STUB_CHECKS='[{"name":"Build and test","status":"completed","conclusion":"cancelled","completed_at":"2026-01-01T00:00:00Z","app":{"slug":"github-actions"}}]' \
   expect "a cancelled check" fail "concluded 'cancelled'" \
-  -- --tag v1.4.0 --require-checks --checks "Build and test" --timeout-seconds 1
+  -- --tag v1.4.0 --require-checks --check "Build and test" --timeout-seconds 1
 
 STUB_CHECKS='[{"name":"Build and test","status":"completed","conclusion":"skipped","completed_at":"2026-01-01T00:00:00Z","app":{"slug":"github-actions"}}]' \
   expect "a skipped check is not a pass" fail "concluded 'skipped'" \
-  -- --tag v1.4.0 --require-checks --checks "Build and test" --timeout-seconds 1
+  -- --tag v1.4.0 --require-checks --check "Build and test" --timeout-seconds 1
 
 STUB_CHECKS='[{"name":"Build and test","status":"completed","conclusion":"success","completed_at":"2026-01-01T00:00:00Z","app":{"slug":"some-other-app"}}]' \
   expect "green, but from the wrong producer" fail "No check run named" \
-  -- --tag v1.4.0 --require-checks --checks "Build and test" --timeout-seconds 1
+  -- --tag v1.4.0 --require-checks --check "Build and test" --timeout-seconds 1
 
 STUB_CHECKS="$(green_checks)" \
   expect "one required check missing from an otherwise green set" fail "No check run named" \
-  -- --tag v1.4.0 --require-checks --checks "Build and test,Nonexistent check" --timeout-seconds 1
+  -- --tag v1.4.0 --require-checks --check "Build and test" --check "Nonexistent check" --timeout-seconds 1
 
 STUB_CHECKS="$(green_checks)" \
   expect "both required checks green" pass "approved for promotion" \
-  -- --tag v1.4.0 --require-checks --checks "Build and test,Build the container image" --timeout-seconds 1
+  -- --tag v1.4.0 --require-checks --check "Build and test" --check "Build the container image" --timeout-seconds 1
+
+# A check-run name is free text, and this organisation's frontend CI job really
+# is called "Install, type-check and build". An earlier version of this script
+# took one comma-separated list and split on it, which turned that single name
+# into "Install" plus " type-check and build" and refused every frontend release.
+COMMA_CHECK='[{"name":"Install, type-check and build","status":"completed","conclusion":"success","completed_at":"2026-01-01T00:00:00Z","app":{"slug":"github-actions"}}]'
+STUB_CHECKS="$COMMA_CHECK" \
+  expect "a check whose NAME CONTAINS A COMMA" pass "approved for promotion" \
+  -- --tag v1.4.0 --require-checks --check "Install, type-check and build" --timeout-seconds 1
+
+STUB_CHECKS="$COMMA_CHECK" \
+  expect "half of a comma-containing name is not a match" fail "No check run named" \
+  -- --tag v1.4.0 --require-checks --check "Install" --timeout-seconds 1
+
+expect "--require-checks with no --check" fail "at least one --check" \
+  -- --tag v1.4.0 --require-checks --timeout-seconds 1
 
 # ------------------------------------------------ the release.yml circularity
 STUB_CHECKS="$(green_checks)" \
   expect "checks required WITHOUT a release (release.yml's own case)" pass "approved for promotion" \
-  -- --tag v1.4.0 --require-checks --checks "Build and test" --timeout-seconds 1
+  -- --tag v1.4.0 --require-checks --check "Build and test" --timeout-seconds 1
 
 # --------------------------------------------------------------- everything
 build_repo "$WORK/c8" annotated main
 STUB_RELEASE=present STUB_CHECKS="$(green_checks)" \
   expect "annotated tag, on main, released, all checks green" pass "approved for promotion" \
   -- --tag v1.4.0 --require-release --require-checks \
-     --checks "Build and test,Build the container image" --timeout-seconds 1
+     --check "Build and test" --check "Build the container image" --timeout-seconds 1
 
 echo
 echo "  $PASS passed, $FAIL failed"

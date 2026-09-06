@@ -91,7 +91,8 @@ jobs:
           .github/scripts/validate-promotion.sh \
             --tag "$TAG" \
             --require-checks \
-            --checks "Build and test,Build the container image"
+            --check "Build and test" \
+            --check "Build the container image"
 
       # --generate-notes builds the body from the PRs merged since the previous
       # tag, grouped by the categories in .github/release.yml.

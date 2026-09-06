@@ -132,7 +132,8 @@ jobs:
             --tag "$TAG" \
             --require-release \
             --require-checks \
-            --checks "Build and test,Build the container image"
+            --check "Build and test" \
+            --check "Build the container image"
 
       # ---------------------------------------------------------------------
       # 3. Bind the image to that commit BEFORE touching production

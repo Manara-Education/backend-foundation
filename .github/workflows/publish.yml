@@ -126,7 +126,8 @@ jobs:
             --tag "$TAG" \
             --require-release \
             --require-checks \
-            --checks "Build and test,Build the container image"
+            --check "Build and test" \
+            --check "Build the container image"
 
       - name: Check out the approved commit
         uses: actions/checkout@v7
