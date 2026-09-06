@@ -102,10 +102,28 @@ public class OtpService {
         return otp;
     }
 
+    /**
+     * Consumes a code, once.
+     *
+     * <p>The check and the spend are one statement. Previously this loaded the row, set
+     * {@code used} on the loaded copy and saved it, which meant several requests carrying the same
+     * correct code could each read it while it was still unused and each go on to succeed — a
+     * one-time code accepted as many times as there were requests in flight. The conditional update
+     * gives exactly one of them the row.
+     *
+     * <p>It also no longer writes the whole entity back. That full-column UPDATE rewrote
+     * {@code attempts} from the value loaded at the start of the transaction, so a consume could
+     * silently roll back failure counts committed alongside it.
+     */
     @Transactional
     public void verify(String email, String code, OtpType type) {
         var otp = validateCode(email, code, type);
-        otp.setUsed(true);
-        otpRepository.save(otp);
+
+        if (otpRepository.consume(otp.getId()) == 0) {
+            // Another request spent this code between the read above and here. From the caller's
+            // side that is indistinguishable from submitting an already-used code, which is what it
+            // is, and it is answered the same way.
+            throw new BusinessException("auth.otp.invalid");
+        }
     }
 }
