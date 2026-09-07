@@ -29,5 +29,18 @@ public enum ErrorCode {
     INVALID_LESSON_POSITION,
 
     /** The subscription plan is no longer offered; existing subscribers keep their term. */
-    SUBSCRIPTION_PLAN_RETIRED
+    SUBSCRIPTION_PLAN_RETIRED,
+
+    /**
+     * The Terms and Conditions version a registration accepted is not the one in force — either
+     * superseded, or one this build has never published. One code for both, because the client's
+     * remedy is the same: re-read the current terms and accept them. Nothing was created.
+     */
+    TERMS_VERSION_OUTDATED,
+
+    /**
+     * The server cannot say which Terms and Conditions version is current, so it will not take
+     * consent. Answered {@code 503}: the caller did nothing wrong and retrying later is right.
+     */
+    TERMS_UNAVAILABLE
 }
