@@ -4,6 +4,7 @@ import com.manara.backend.common.exception.BusinessException;
 import com.manara.backend.db.AbstractPostgresBackedTest;
 import com.manara.backend.user.model.Role;
 import com.manara.backend.user.model.User;
+import com.manara.backend.user.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -26,7 +27,7 @@ import java.util.stream.Stream;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
+import static com.manara.backend.session.security.SignedIn.signedIn;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -49,6 +50,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * both are present or only the first.
  */
 class UploadAuthorizationTest extends AbstractPostgresBackedTest {
+
+    private static final String DOMAIN = "@uploadauth.example";
 
     /**
      * A directory of this test's own, so the files it counts are unambiguously the ones it caused
@@ -90,9 +93,15 @@ class UploadAuthorizationTest extends AbstractPostgresBackedTest {
     @Autowired
     private FileUploadService fileUploadService;
 
+    @Autowired
+    private UserRepository userRepository;
+
     @BeforeEach
     void buildMockMvc() {
         mockMvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
+        userRepository.deleteAll(userRepository.findAll().stream()
+                .filter(candidate -> candidate.getEmail().endsWith(DOMAIN))
+                .toList());
     }
 
     @Test
@@ -113,7 +122,7 @@ class UploadAuthorizationTest extends AbstractPostgresBackedTest {
 
         mockMvc.perform(multipart("/api/v1/uploads").file(pngPart())
                         .with(csrf())
-                        .with(user(account(Role.STUDENT))))
+                        .with(signedIn(account(Role.STUDENT))))
                 .andExpect(status().isForbidden());
 
         assertThat(storedFileCount())
@@ -128,7 +137,7 @@ class UploadAuthorizationTest extends AbstractPostgresBackedTest {
 
         mockMvc.perform(multipart("/api/v1/uploads").file(pngPart())
                         .with(csrf())
-                        .with(user(account(Role.ADMIN))))
+                        .with(signedIn(account(Role.ADMIN))))
                 .andExpect(status().isForbidden());
 
         assertThat(storedFileCount()).isEqualTo(before);
@@ -141,7 +150,7 @@ class UploadAuthorizationTest extends AbstractPostgresBackedTest {
 
         mockMvc.perform(multipart("/api/v1/uploads").file(pngPart())
                         .with(csrf())
-                        .with(user(account(Role.INSTRUCTOR))))
+                        .with(signedIn(account(Role.INSTRUCTOR))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.url").value(
                         org.hamcrest.Matchers.matchesPattern("^/uploads/[0-9a-f-]{36}\\.png$")));
@@ -169,16 +178,24 @@ class UploadAuthorizationTest extends AbstractPostgresBackedTest {
 
     // ------------------------------------------------------------ helpers
 
-    /** An in-memory account. Never persisted: authorization here is decided by the role alone. */
-    private static User account(Role role) {
-        return User.builder()
-                .id(1L)
+    /**
+     * A persisted account, signed in the way the application signs one in.
+     *
+     * <p>It used to be an in-memory {@code User} with a fabricated id, on the reasoning that
+     * authorization here is decided by the role alone. That stopped being true when MANARA-SEC-003
+     * landed: every protected request now re-reads the account's row to compare its authentication
+     * epoch, so an id naming no row is refused 401 — before the 403 this test is about. Persisting
+     * the account restores what the test is actually asking, and asks it of the real filter chain
+     * rather than around it.
+     */
+    private User account(Role role) {
+        return userRepository.save(User.builder()
                 .fullName("Upload Tester")
-                .email(role.name().toLowerCase() + "@uploadauth.example")
+                .email(role.name().toLowerCase() + DOMAIN)
                 .password("irrelevant")
                 .role(role)
                 .emailVerified(true)
-                .build();
+                .build());
     }
 
     /** A real 1x1 PNG — the service decodes the bytes, so a fake payload would fail validation. */
