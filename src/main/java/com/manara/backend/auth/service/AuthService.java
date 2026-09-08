@@ -25,6 +25,9 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.EnumSet;
+import java.util.Set;
+
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
@@ -43,6 +46,21 @@ public class AuthService {
     private final TermsService termsService;
 
     /**
+     * The roles a stranger may give themselves by filling in the public registration form.
+     *
+     * <p>An allowlist rather than a check for ADMIN, so that the answer to "may the public assign
+     * this role?" is no by default. A role added to {@link Role} later is refused here until
+     * someone decides otherwise, which is the opposite of what a blacklist would do.
+     *
+     * <p>INSTRUCTOR is on the list because today it is the only way an instructor account comes
+     * into existence — there is no instructor sign-up screen, no provisioning endpoint and no
+     * seeder. Removing it here would close the sole onboarding path in the name of fixing a
+     * different problem. Whether instructors ought to self-register is a product question, still
+     * open; this method is only the place that stops ADMIN.
+     */
+    private static final Set<Role> SELF_ASSIGNABLE_ROLES = EnumSet.of(Role.STUDENT, Role.INSTRUCTOR);
+
+    /**
      * Creates an account.
      *
      * <p>This method is the application's <strong>only</strong> account-creation path — there is no
@@ -55,6 +73,11 @@ public class AuthService {
      * written. A refused registration leaves no user row, no student or instructor profile, no
      * consent row, no OTP and no email — the account and its consent are created together in this
      * one transaction, or neither is.
+     *
+     * <p>The role allowlist is checked immediately after, and still before the duplicate-address
+     * read: a privileged registration is refused without writing a user, a profile or an OTP,
+     * without sending mail, and without the reply revealing whether the address was already
+     * registered.
      */
     @Transactional
     public MessageResponse register(RegisterRequest request) {
@@ -63,11 +86,20 @@ public class AuthService {
         // version accepted is the version in force.
         var acceptedTermsVersion = termsService.requireCurrentVersionAccepted(request.getTermsVersion());
 
+        var roleToSet = request.getRole() != null ? request.getRole() : Role.STUDENT;
+
+        // Before the duplicate-address check, not after it. A privileged request must be refused
+        // without writing a user, a profile or an OTP, without sending mail — and without the
+        // reply revealing whether the address was already registered, which is the very oracle
+        // the duplicate check below would otherwise hand over as a side effect of this refusal.
+        if (!SELF_ASSIGNABLE_ROLES.contains(roleToSet)) {
+            throw new BusinessException("auth.role.notSelfAssignable");
+        }
+
         if (userRepository.existsByEmail(request.getEmail())) {
             throw new BusinessException("auth.email.duplicate");
         }
 
-        var roleToSet = request.getRole() != null ? request.getRole() : Role.STUDENT;
         var encodedPassword = passwordEncoder.encode(request.getPassword());
         var user = userRepository.save(authMapper.toUser(request, encodedPassword, roleToSet));
 
