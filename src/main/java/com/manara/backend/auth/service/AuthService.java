@@ -8,6 +8,7 @@ import com.manara.backend.session.manager.SessionManager;
 import com.manara.backend.common.exception.BusinessException;
 import com.manara.backend.common.exception.ResourceNotFoundException;
 import com.manara.backend.common.service.MessageService;
+import com.manara.backend.terms.service.TermsService;
 import com.manara.backend.user.model.Role;
 import com.manara.backend.user.model.User;
 import com.manara.backend.user.repository.UserRepository;
@@ -24,6 +25,9 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.EnumSet;
+import java.util.Set;
+
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
@@ -39,16 +43,67 @@ public class AuthService {
     private final SessionManager sessionManager;
     private final AuthMapper authMapper;
     private final ProfileMapper profileMapper;
+    private final TermsService termsService;
 
+    /**
+     * The roles a stranger may give themselves by filling in the public registration form.
+     *
+     * <p>An allowlist rather than a check for ADMIN, so that the answer to "may the public assign
+     * this role?" is no by default. A role added to {@link Role} later is refused here until
+     * someone decides otherwise, which is the opposite of what a blacklist would do.
+     *
+     * <p>INSTRUCTOR is on the list because today it is the only way an instructor account comes
+     * into existence — there is no instructor sign-up screen, no provisioning endpoint and no
+     * seeder. Removing it here would close the sole onboarding path in the name of fixing a
+     * different problem. Whether instructors ought to self-register is a product question, still
+     * open; this method is only the place that stops ADMIN.
+     */
+    private static final Set<Role> SELF_ASSIGNABLE_ROLES = EnumSet.of(Role.STUDENT, Role.INSTRUCTOR);
+
+    /**
+     * Creates an account.
+     *
+     * <p>This method is the application's <strong>only</strong> account-creation path — there is no
+     * social sign-up, no OAuth, no invitation flow, no admin-created account and no service-account
+     * provisioning — which makes it the one place consent to the Terms and Conditions can be
+     * required, and therefore the shared consent boundary. A future way to create a user that does
+     * not come through here would be a way to create a user who never agreed to anything.
+     *
+     * <p>The terms check runs first, before the duplicate-address read and before anything at all is
+     * written. A refused registration leaves no user row, no student or instructor profile, no
+     * consent row, no OTP and no email — the account and its consent are created together in this
+     * one transaction, or neither is.
+     *
+     * <p>The role allowlist is checked immediately after, and still before the duplicate-address
+     * read: a privileged registration is refused without writing a user, a profile or an OTP,
+     * without sending mail, and without the reply revealing whether the address was already
+     * registered.
+     */
     @Transactional
     public MessageResponse register(RegisterRequest request) {
+        // Decided before any side effect. That the acceptance flag itself is an explicit `true` has
+        // already been settled by validation on the request; what is checked here is that the
+        // version accepted is the version in force.
+        var acceptedTermsVersion = termsService.requireCurrentVersionAccepted(request.getTermsVersion());
+
+        var roleToSet = request.getRole() != null ? request.getRole() : Role.STUDENT;
+
+        // Before the duplicate-address check, not after it. A privileged request must be refused
+        // without writing a user, a profile or an OTP, without sending mail — and without the
+        // reply revealing whether the address was already registered, which is the very oracle
+        // the duplicate check below would otherwise hand over as a side effect of this refusal.
+        if (!SELF_ASSIGNABLE_ROLES.contains(roleToSet)) {
+            throw new BusinessException("auth.role.notSelfAssignable");
+        }
+
         if (userRepository.existsByEmail(request.getEmail())) {
             throw new BusinessException("auth.email.duplicate");
         }
 
-        var roleToSet = request.getRole() != null ? request.getRole() : Role.STUDENT;
         var encodedPassword = passwordEncoder.encode(request.getPassword());
         var user = userRepository.save(authMapper.toUser(request, encodedPassword, roleToSet));
+
+        termsService.recordAcceptance(user, acceptedTermsVersion);
 
         if (roleToSet == Role.INSTRUCTOR) {
             instructorRepository.save(profileMapper.toInstructor(user));
@@ -150,18 +205,33 @@ public class AuthService {
     }
 
     /**
-     * Changes the password of the signed-in account, and with it clears any forced-reset flag.
+     * Changes the password of the signed-in account, clears any forced-reset flag, and signs the
+     * account's other devices out.
      *
      * Separate from {@link #resetPassword} on purpose: that one serves the anonymous
      * forgot-password flow and proves identity with an emailed OTP. This one serves a caller who
      * is already authenticated and knows the current password -- the case where an operator has
      * required the account to move off a provisioned or compromised password.
      *
-     * The hash and the flag are written together, in this one transaction. If the new password
-     * is rejected, nothing is persisted and the account still owes the change.
+     * The hash, the flag and the authentication epoch are written together, in this one
+     * transaction. That atomicity is the point of doing it here rather than by deleting sessions
+     * afterwards: a multi-key delete against the session store can half succeed, and a reset the
+     * user was told had worked would then leave live sessions behind it. If the new password is
+     * rejected, nothing is persisted, the account still owes the change, and no session is
+     * disturbed.
+     *
+     * The caller keeps working, on a new session. It is issued only after the epoch has been
+     * bumped and re-read, so it is stamped with the new value and not the one it replaced -- the
+     * device that changed the password stays signed in and every other device for the account is
+     * refused on its next request. Should this transaction roll back after that point, the caller
+     * is signed out too rather than left holding a session on a superseded epoch, which is the
+     * direction the failure has to fall.
      */
     @Transactional
-    public MessageResponse changePassword(User principal, ChangePasswordRequest request) {
+    public MessageResponse changePassword(User principal,
+                                          ChangePasswordRequest request,
+                                          HttpServletRequest httpRequest,
+                                          HttpServletResponse httpResponse) {
         var user = findUserByEmail(principal.getUsername());
 
         if (!passwordEncoder.matches(request.getCurrentPassword(), user.getPassword())) {
@@ -176,11 +246,29 @@ public class AuthService {
         user.setRequiresPasswordReset(false);
         userRepository.save(user);
 
+        // Retires every session for this account, this one included.
+        userRepository.bumpAuthVersion(user.getId());
+
+        // Re-read, because the epoch the new session is stamped with has to be the one the database
+        // now holds. The bump is a statement the database executes, so the instance above is not
+        // updated by it -- stamping from that instance would mint a session on the old epoch and
+        // sign the caller straight back out on their next request.
+        sessionManager.establish(findUserByEmail(principal.getUsername()), httpRequest, httpResponse);
+
         return MessageResponse.builder()
                 .message(messageService.get("auth.password.changeSuccess"))
                 .build();
     }
 
+    /**
+     * The anonymous, emailed-code route to a new password. Ends every session on the account.
+     *
+     * Every session, with no exception for the caller, because there is no caller to except: this
+     * flow is reached without one. Somebody who has just proved control of the mailbox is about to
+     * sign in with the password they chose; anybody already signed in on this account at that
+     * moment is either the same person on another device or the reason the password is being reset.
+     * Both are shown the sign-in screen.
+     */
     @Transactional
     public MessageResponse resetPassword(ResetPasswordRequest request) {
         otpService.verify(request.getEmail(), request.getCode(), OtpType.PASSWORD_RESET);
@@ -192,6 +280,10 @@ public class AuthService {
         // the flag set here would strand the user: new password, still locked out.
         user.setRequiresPasswordReset(false);
         userRepository.save(user);
+
+        // In the same transaction as the hash above. The old password stops working and the
+        // sessions opened under it stop working at the same instant, or neither does.
+        userRepository.bumpAuthVersion(user.getId());
 
         return MessageResponse.builder()
                 .message(messageService.get("auth.password.resetSuccess"))

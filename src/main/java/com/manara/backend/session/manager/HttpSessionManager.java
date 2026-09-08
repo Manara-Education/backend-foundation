@@ -43,6 +43,28 @@ public class HttpSessionManager implements SessionManager {
         context.setAuthentication(auth);
         SecurityContextHolder.setContext(context);
         securityContextRepository.saveContext(context, request, response);
+
+        stampAuthVersion(request, auth);
+    }
+
+    /**
+     * Records the epoch this session is being opened under.
+     *
+     * <p>The number comes from the principal because the principal was read from the database
+     * moments ago, on this request — by the authentication provider on sign-in, or by the caller
+     * that re-read the row after bumping it. It is never read from a session, so it cannot inherit
+     * a stale value from the session being replaced.
+     *
+     * <p>A principal that is not one of ours leaves the session unstamped, and an unstamped session
+     * is refused on its next request. That is the safe direction: the alternative — stamping
+     * something plausible — would mint a session nobody can prove the epoch of.
+     */
+    private void stampAuthVersion(HttpServletRequest request, Authentication auth) {
+        if (auth.getPrincipal() instanceof User user) {
+            // Fetched after changeSessionId and after saveContext deliberately: this is the session
+            // the response's cookie will actually name.
+            request.getSession().setAttribute(AUTH_VERSION_ATTRIBUTE, user.getAuthVersion());
+        }
     }
 
     @Override

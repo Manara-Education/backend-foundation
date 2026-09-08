@@ -5,7 +5,6 @@ import com.manara.backend.common.security.PublicEndpoint;
 import com.manara.backend.common.security.PublicEndpointContribution;
 import com.manara.backend.common.service.MessageService;
 import com.manara.backend.user.model.User;
-import com.manara.backend.user.repository.UserRepository;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -35,10 +34,17 @@ import java.util.List;
  * This is the half that does not depend on the client behaving: without it, "you must change
  * your password" would be a suggestion that any HTTP client could decline.
  *
- * The flag is read from the database on each request, not from the session principal. That
- * principal is a snapshot taken when the session was established, so it goes stale in both
- * directions -- it would keep locking the account out after the password had been changed, and
- * would keep letting an already-open session through after an operator flagged the account.
+ * The flag still may not be read from the sign-in snapshot -- it goes stale in both directions,
+ * locking an account out after the password has been changed and letting an already-open session
+ * through after an operator flags the account. What changed is where the current value comes from.
+ * It used to be a query this filter issued itself; it is now read off the principal, because
+ * {@code SessionAuthenticationFreshnessFilter} has already replaced that principal with one built
+ * from a row read on this request, earlier in the chain. The guarantee is the same and the account
+ * is read once per request rather than twice.
+ *
+ * That makes the ordering load-bearing: this filter is correct only while it runs after the
+ * freshness filter, and the set of requests it inspects is a subset of the set that filter
+ * refreshes. Moving either one is a security change, not a tidy-up.
  */
 @Component
 public class PasswordResetRequiredFilter extends OncePerRequestFilter {
@@ -52,7 +58,6 @@ public class PasswordResetRequiredFilter extends OncePerRequestFilter {
             matcher(HttpMethod.POST, "/api/v1/auth/logout"),
             matcher(HttpMethod.GET, "/api/v1/auth/me"));
 
-    private final UserRepository userRepository;
     private final MessageService messageService;
     private final ObjectMapper objectMapper;
 
@@ -68,11 +73,9 @@ public class PasswordResetRequiredFilter extends OncePerRequestFilter {
      */
     private final RequestMatcher publicEndpoints;
 
-    public PasswordResetRequiredFilter(UserRepository userRepository,
-                                       MessageService messageService,
+    public PasswordResetRequiredFilter(MessageService messageService,
                                        ObjectMapper objectMapper,
                                        List<PublicEndpointContribution> publicEndpointContributions) {
-        this.userRepository = userRepository;
         this.messageService = messageService;
         this.objectMapper = objectMapper;
         this.publicEndpoints = new OrRequestMatcher(publicEndpointContributions.stream()
@@ -87,12 +90,12 @@ public class PasswordResetRequiredFilter extends OncePerRequestFilter {
                                     @NonNull FilterChain filterChain)
             throws ServletException, IOException {
 
-        Long userId = authenticatedUserId();
+        User user = authenticatedUser();
 
-        if (userId == null
+        if (user == null
                 || ALLOWED_WHILE_RESET_REQUIRED.matches(request)
                 || publicEndpoints.matches(request)
-                || !userRepository.existsByIdAndRequiresPasswordResetTrue(userId)) {
+                || !user.isRequiresPasswordReset()) {
             filterChain.doFilter(request, response);
             return;
         }
@@ -101,16 +104,21 @@ public class PasswordResetRequiredFilter extends OncePerRequestFilter {
     }
 
     /**
-     * The id of the signed-in user, or {@code null} when this request is anonymous or its
-     * principal is not one of ours (which is every unauthenticated and every pre-auth call --
-     * those are somebody else's concern).
+     * The signed-in user, or {@code null} when this request is anonymous or its principal is not
+     * one of ours (which is every unauthenticated and every pre-auth call -- those are somebody
+     * else's concern).
+     *
+     * <p>On every request that reaches the flag check below, this principal was built by
+     * {@code SessionAuthenticationFreshnessFilter} from a row read on this request. Its exemptions
+     * are a subset of that filter's, so there is no path on which the flag is consulted and the
+     * principal is still the sign-in snapshot.
      */
-    private Long authenticatedUserId() {
+    private User authenticatedUser() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         if (auth == null || !auth.isAuthenticated()) {
             return null;
         }
-        return auth.getPrincipal() instanceof User user ? user.getId() : null;
+        return auth.getPrincipal() instanceof User user ? user : null;
     }
 
     private void reject(HttpServletResponse response) throws IOException {
