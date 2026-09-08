@@ -156,12 +156,17 @@ class AuthServiceTest {
         given(passwordEncoder.matches(NEW_PASSWORD, CURRENT_HASH)).willReturn(false);
         given(passwordEncoder.encode(NEW_PASSWORD)).willReturn(NEW_HASH);
 
-        authService.changePassword(user(true), changeRequest(NEW_PASSWORD));
+        authService.changePassword(user(true), changeRequest(NEW_PASSWORD), httpRequest, httpResponse);
 
         verify(userRepository).save(savedUser.capture());
         assertThat(savedUser.getValue().getPassword()).isEqualTo(NEW_HASH);
         assertThat(savedUser.getValue().getPassword()).isNotEqualTo(NEW_PASSWORD);
         assertThat(savedUser.getValue().isRequiresPasswordReset()).isFalse();
+
+        // The epoch moves with the hash, so the account's other devices are refused on their
+        // next request, and the caller is re-established on a session stamped with the new value.
+        verify(userRepository).bumpAuthVersion(7L);
+        verify(sessionManager).establish(any(User.class), any(), any());
     }
 
     // ── Case 4: the change fails, the requirement stands ──────────────────────
@@ -177,7 +182,9 @@ class AuthServiceTest {
                 ChangePasswordRequest.builder()
                         .currentPassword("wrong")
                         .newPassword(NEW_PASSWORD)
-                        .build()))
+                        .build(),
+                httpRequest,
+                httpResponse))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("auth.password.currentInvalid");
 
@@ -192,7 +199,8 @@ class AuthServiceTest {
         given(userRepository.findByEmail(EMAIL)).willReturn(Optional.of(flagged));
         given(passwordEncoder.matches(CURRENT_PASSWORD, CURRENT_HASH)).willReturn(true);
 
-        assertThatThrownBy(() -> authService.changePassword(user(true), changeRequest(CURRENT_PASSWORD)))
+        assertThatThrownBy(() -> authService.changePassword(
+                user(true), changeRequest(CURRENT_PASSWORD), httpRequest, httpResponse))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("auth.password.sameAsCurrent");
 

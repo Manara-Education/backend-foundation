@@ -79,9 +79,15 @@ class AuthRequestEmailBindingTest {
         // The ordering that makes canonicalising at bind time worth doing. Surrounding spaces are
         // not legal in an address, so "  Ali@x.com  " left untrimmed would be reported to the user
         // as an invalid email — for an address that is perfectly valid.
+        //
+        // The terms fields are present only so this asserts what it claims to: without them the
+        // request is invalid for reasons that have nothing to do with the address. Whether the
+        // version is the one in force is not bean validation's question — @NotBlank only asks that
+        // one was sent — so any non-blank value serves here.
         RegisterRequest request = json.readValue(
                 """
-                {"fullName":"Ali","email":"  Ali@x.com  ","password":"password123"}
+                {"fullName":"Ali","email":"  Ali@x.com  ","password":"password123",
+                 "termsAccepted":true,"termsVersion":"1.0"}
                 """, RegisterRequest.class);
 
         assertThat(validator.validate(request))
