@@ -1,6 +1,7 @@
 package com.manara.backend.profile.integration;
 
 import com.manara.backend.db.AbstractPostgresBackedTest;
+import com.manara.backend.session.manager.SessionManager;
 import com.manara.backend.terms.service.TermsVersionRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -107,6 +108,15 @@ class StaleSessionProfileWriteTest extends AbstractPostgresBackedTest {
                 .as("precondition: recovery must actually have changed the stored hash")
                 .isNotEqualTo(hashBeforeRecovery);
 
+        // MANARA-SEC-003 now revokes this session the moment the password changes, which is
+        // exactly what it is for. Re-stamping the epoch is not a way around it: the session keeps
+        // the stale principal — the pre-recovery User, old hash and all — so the write this test
+        // is about is still driven by a snapshot that predates recovery. What the stamp removes is
+        // only the 401 that would otherwise stop the request before it reaches the profile write,
+        // which would leave field-scoping untested. Weakening revocation to keep the old session
+        // usable was the alternative, and PR #60 says explicitly not to do that.
+        refreshEpochStamp(oldSession, email);
+
         rename(oldSession, "Renamed Through Old Session");
 
         assertThat(passwordHash(email))
@@ -155,6 +165,9 @@ class StaleSessionProfileWriteTest extends AbstractPostgresBackedTest {
         assertThat(requiresPasswordReset(email))
                 .as("precondition: recovery must clear the forced-reset flag")
                 .isFalse();
+
+        // Recovery bumped the epoch, so this session is revoked too — see the note above.
+        refreshEpochStamp(flaggedSession, email);
 
         rename(flaggedSession, "Renamed After Recovery");
 
@@ -227,6 +240,20 @@ class StaleSessionProfileWriteTest extends AbstractPostgresBackedTest {
                         .content("""
                                 {"fullName":"%s"}""".formatted(newName)))
                 .andExpect(status().isOk());
+    }
+
+    /**
+     * Brings the session's authentication epoch up to the account's current one, leaving everything
+     * else about the session — above all its stale principal — untouched.
+     *
+     * <p>Reads the epoch from the row rather than incrementing a counter, so the stamp is whatever
+     * the account actually carries now. A test whose account has since had another credential
+     * change still gets the 401 it should.
+     */
+    private void refreshEpochStamp(MockHttpSession session, String email) {
+        Long current = jdbc.queryForObject(
+                "SELECT auth_version FROM users WHERE email = ?", Long.class, email);
+        session.setAttribute(SessionManager.AUTH_VERSION_ATTRIBUTE, current);
     }
 
     private ResultActions login(String email, String password) throws Exception {
