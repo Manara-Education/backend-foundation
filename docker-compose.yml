@@ -1,7 +1,17 @@
 services:
   postgres:
     container_name: manara_db
-    image: postgres:17.5
+    # Kept in step with production (infrastructure repo, docker-compose.prod.yml)
+    # and with AbstractPostgresBackedTest. 17.5 was inside the affected range of
+    # CVE-2025-8713/8714/8715, all three fixed in 17.6; 17.10 carries them.
+    #
+    # 17.10 and not 17.11, deliberately. The only CVE 17.11 adds over 17.10 is
+    # CVE-2026-14681 (GSSAPI encryption coupled with SSL, CVSS 4.2), and nothing
+    # here speaks GSSAPI. Against that, the arm64 build of 17.11 aborts with a
+    # bus error inside initdb on Docker Desktop, deterministically, so pinning it
+    # would stop the database and the whole Testcontainers suite from starting on
+    # every Apple Silicon machine. Revisit when 17.12 ships an arm64 build that runs.
+    image: postgres:17.10
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
