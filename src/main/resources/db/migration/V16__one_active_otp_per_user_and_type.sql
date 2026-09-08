@@ -1,5 +1,5 @@
 -- =============================================================================
--- V13 — at most one usable code per account and purpose
+-- V16 — at most one usable code per account and purpose
 -- =============================================================================
 --
 -- WHAT IT IS FOR
@@ -43,14 +43,18 @@
 --
 -- ON THE VERSION NUMBER
 --
---   V13 because V12 is the highest on develop and this repository's own
---   FlywayConfigurationTest requires the versions to run 1..n with no gaps — so
---   a branch cannot reserve a number further ahead and still have a green suite.
---   Two other security branches are open with their own next migration, and all
---   three necessarily claim V13. Whichever merges first keeps it; the others
---   renumber to the next free version as they rebase. The file is
---   self-contained and order-independent with respect to the other two, so
---   renaming it is the whole of that work.
+--   V16, and it is the last of the group to be numbered. This repository's own
+--   FlywayConfigurationTest requires the versions to run 1..n with no gaps, so a
+--   branch cannot reserve a number ahead of the branches that will land before
+--   it — every one of these files was written as V13 and renumbered on the way
+--   in. develop took V13 for terms acceptance (#66), V14 for the session
+--   authentication epoch (#60) and V15 for upload ownership (#64), which leaves
+--   V16 here.
+--
+--   THIS MIGRATION MUST THEREFORE MERGE AFTER #64. Landing it while V15 is still
+--   open leaves a 14 -> 16 gap, and FlywayConfigurationTest fails on it. The file
+--   is self-contained and order-independent in what it does; only its number
+--   depends on the others.
 --
 -- DEPLOYMENT COMPATIBILITY
 --
