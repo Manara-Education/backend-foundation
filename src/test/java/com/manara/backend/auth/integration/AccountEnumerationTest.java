@@ -1,6 +1,7 @@
 package com.manara.backend.auth.integration;
 
 import com.manara.backend.db.AbstractPostgresBackedTest;
+import com.manara.backend.terms.service.TermsVersionRegistry;
 import com.manara.backend.email.exception.EmailDeliveryException;
 import com.manara.backend.email.model.EmailMessage;
 import com.manara.backend.email.model.EmailSendResult;
@@ -24,6 +25,7 @@ import static org.mockito.BDDMockito.given;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
  * MANARA-SEC-006. Whether a stranger can find out who has an account here.
@@ -52,6 +54,13 @@ class AccountEnumerationTest extends AbstractPostgresBackedTest {
     @Autowired
     private JdbcTemplate jdbc;
 
+    /**
+     * Asked for the version in force rather than hardcoded: registration refuses anything else, and
+     * a bumped version should not fail a test about enumeration.
+     */
+    @Autowired
+    private TermsVersionRegistry termsVersionRegistry;
+
     @BeforeEach
     void buildMockMvcAndAccount() throws Exception {
         mockMvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
@@ -59,15 +68,23 @@ class AccountEnumerationTest extends AbstractPostgresBackedTest {
 
         given(emailService.send(any())).willReturn(new EmailSendResult("stub"));
 
+        // Asserted rather than fired and forgotten. This account IS the fixture: every case below
+        // compares the registered arm against the absent one, so a registration that silently
+        // failed would leave both arms absent and the comparisons would pass while testing nothing.
         mockMvc.perform(post("/api/v1/auth/register").with(csrf())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
-                        {"fullName":"Exists Test","email":"%s","password":"%s","role":"STUDENT"}
-                        """.formatted(REGISTERED, PASSWORD)));
+                        {"fullName":"Exists Test","email":"%s","password":"%s","role":"STUDENT",
+                         "termsAccepted":true,"termsVersion":"%s"}
+                        """.formatted(REGISTERED, PASSWORD,
+                                termsVersionRegistry.current().orElseThrow().id())))
+                .andExpect(status().isCreated());
     }
 
     @AfterEach
     void removeTestAccounts() {
+        jdbc.update("DELETE FROM terms_acceptances WHERE user_id IN (SELECT id FROM users WHERE email LIKE ?)",
+                "%" + DOMAIN);
         jdbc.update("DELETE FROM otps WHERE user_id IN (SELECT id FROM users WHERE email LIKE ?)",
                 "%" + DOMAIN);
         jdbc.update("DELETE FROM students WHERE user_id IN (SELECT id FROM users WHERE email LIKE ?)",
