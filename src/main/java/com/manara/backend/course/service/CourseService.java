@@ -4,7 +4,7 @@ import com.manara.backend.common.exception.BusinessException;
 import com.manara.backend.common.exception.ConflictException;
 import com.manara.backend.common.exception.ErrorCode;
 import com.manara.backend.common.exception.ResourceNotFoundException;
-import com.manara.backend.common.file.FileUploadService;
+import com.manara.backend.common.file.UploadRetentionService;
 import com.manara.backend.course.dto.CourseDetailsResponse;
 import com.manara.backend.course.dto.CourseRequest;
 import com.manara.backend.course.dto.CourseResponse;
@@ -110,7 +110,7 @@ public class CourseService {
     private final CourseDetailsViewRegistry courseDetailsViewRegistry;
     private final EntitlementMapper entitlementMapper;
     private final EntitlementPolicy entitlementPolicy;
-    private final FileUploadService fileUploadService;
+    private final UploadRetentionService uploadRetentionService;
     private final CourseModuleRepository courseModuleRepository;
     private final CourseViewPolicy courseViewPolicy;
     private final Clock clock;
@@ -305,14 +305,22 @@ public class CourseService {
 
         var response = saveAndRespond(course);
 
-        // Deleting the replaced upload last: the file is gone for good, so it only happens once the
-        // rest of the edit has been accepted. Only a payload that actually named a new image can
-        // retire the old one — an update that never mentioned the cover leaves the file alone.
+        // The cover this save replaced is no longer referenced by this course. That is all this
+        // says, and all it is entitled to say: whether the file is deleted is decided by
+        // UploadRetentionService, against who uploaded it and what still references it, and only
+        // once this transaction has committed.
+        //
+        // It used to call deleteFile directly, which made the URL in the course's own image column
+        // a delete capability for whatever file it named — including one uploaded by somebody else
+        // and attached here from a public /uploads/ address. The condition below is unchanged and
+        // still says exactly what it always said — a save that never mentioned the cover retires
+        // nothing. What has been removed is this method's authority to destroy a file on the
+        // strength of it.
         if (previousImage != null
                 && request.carriesImage()
                 && request.imageValue() != null
                 && !previousImage.equals(request.imageValue())) {
-            fileUploadService.deleteFile(previousImage);
+            uploadRetentionService.releaseWhenCommitted(previousImage, user.getId());
         }
         return response;
     }

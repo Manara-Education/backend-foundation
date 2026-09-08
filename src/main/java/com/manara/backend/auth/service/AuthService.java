@@ -132,20 +132,28 @@ public class AuthService {
         return authMapper.toAuthResponse(user);
     }
 
+    /**
+     * Sends another code, if there is an account to send one to.
+     *
+     * <p>Answers the same way whatever is true of the address. This endpoint used to be a three-way
+     * oracle for anyone who could reach it: 404 said no account existed, 400 "email is already
+     * verified" said one existed and was confirmed, and 200 said one existed and was not. An
+     * unauthenticated caller could sort any list of addresses into those three buckets.
+     *
+     * <p>So the work is now conditional and the answer is not. An absent account does nothing; an
+     * already-verified account asking for a verification code does nothing, because there is nothing
+     * it needs; anything else gets a code. All three return the same status, envelope and text.
+     */
     @Transactional
     public MessageResponse resendOtp(ResendOtpRequest request) {
-        var user = findUserByEmail(request.getEmail());
-
         OtpType typeToResend = request.getType() != null ? request.getType() : OtpType.EMAIL_VERIFICATION;
 
-        if (typeToResend == OtpType.EMAIL_VERIFICATION && user.isEmailVerified()) {
-            throw new BusinessException("auth.email.alreadyVerified");
-        }
-
-        otpService.generateAndSend(user, typeToResend);
+        userRepository.findByEmail(request.getEmail())
+                .filter(user -> typeToResend != OtpType.EMAIL_VERIFICATION || !user.isEmailVerified())
+                .ifPresent(user -> otpService.generateAndSendQuietly(user, typeToResend));
 
         return MessageResponse.builder()
-                .message(messageService.get("auth.otp.resent"))
+                .message(messageService.get("auth.otp.sentIfAccountExists"))
                 .build();
     }
 
@@ -167,13 +175,24 @@ public class AuthService {
         return authMapper.toAuthResponse(user);
     }
 
+    /**
+     * Starts password recovery, if there is an account to start it for.
+     *
+     * <p>An address with no account used to be answered 404, with the submitted address quoted back
+     * in the message, while an address with one was answered 200 and sent a code. That is a
+     * membership test on the platform, available to anybody, one request at a time.
+     *
+     * <p>Now both are answered identically. The code is still only generated for an account that
+     * exists, and it still only goes to that account's own address -- nothing is sent anywhere on
+     * behalf of an address that has no account.
+     */
     @Transactional
     public MessageResponse forgotPassword(ForgotPasswordRequest request) {
-        var user = findUserByEmail(request.getEmail());
-        otpService.generateAndSend(user, OtpType.PASSWORD_RESET);
+        userRepository.findByEmail(request.getEmail())
+                .ifPresent(user -> otpService.generateAndSendQuietly(user, OtpType.PASSWORD_RESET));
 
         return MessageResponse.builder()
-                .message(messageService.get("auth.otp.sentForReset"))
+                .message(messageService.get("auth.otp.sentIfAccountExists"))
                 .build();
     }
 

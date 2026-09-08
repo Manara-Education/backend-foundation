@@ -8,6 +8,7 @@ import com.manara.backend.auth.repository.OtpRepository;
 import com.manara.backend.email.exception.EmailDeliveryException;
 import com.manara.backend.email.model.EmailMessage;
 import com.manara.backend.email.model.EmailSendResult;
+import com.manara.backend.email.service.DeferredEmailDispatcher;
 import com.manara.backend.email.service.EmailService;
 import com.manara.backend.user.model.User;
 import org.junit.jupiter.api.BeforeEach;
@@ -56,6 +57,9 @@ class OtpServiceTest {
     @Mock
     private OtpAttemptRecorder attemptRecorder;
 
+    @Mock
+    private DeferredEmailDispatcher deferredEmailDispatcher;
+
     @Captor
     private ArgumentCaptor<String> codeCaptor;
 
@@ -66,7 +70,7 @@ class OtpServiceTest {
     @BeforeEach
     void setUp() {
         otpService = new OtpService(otpRepository, otpMapper, new SecureRandom(),
-                otpEmailFactory, emailService, attemptRecorder);
+                otpEmailFactory, emailService, deferredEmailDispatcher, attemptRecorder);
         ReflectionTestUtils.setField(otpService, "expirationMinutes", EXPIRATION_MINUTES);
         ReflectionTestUtils.setField(otpService, "maxAttempts", MAX_ATTEMPTS);
     }

@@ -67,4 +67,17 @@ public interface CourseRepository extends JpaRepository<Course, Long> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select c from Course c where c.id = :courseId")
     Optional<Course> findByIdForUpdate(@Param("courseId") Long courseId);
+
+    /**
+     * How many courses still show this image.
+     *
+     * <p>Read on the upload-retention path, where "nobody references it any more" is one of the
+     * four conditions that let a replaced cover actually be deleted. Every course counts, not only
+     * the caller's: a file another instructor's course is showing must survive its uploader
+     * replacing their own cover, or cleaning up your old asset breaks somebody else's page.
+     *
+     * <p>Counted rather than loaded — the answer needed is a number, and the courses behind it are
+     * none of the retention rule's business. Served by {@code idx_courses_image}.
+     */
+    long countByImage(String image);
 }
