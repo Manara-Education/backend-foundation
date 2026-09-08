@@ -3,6 +3,7 @@ package com.manara.backend.common.exception;
 import com.manara.backend.common.dto.ApiResponse;
 import com.manara.backend.common.service.MessageService;
 import com.manara.backend.email.exception.EmailDeliveryException;
+import com.manara.backend.terms.exception.TermsUnavailableException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.NonNull;
@@ -102,6 +103,27 @@ public class GlobalExceptionHandler {
         String message = messageService.get(ex.getMessageCode(), ex.getArgs());
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                 .body(ApiResponse.error(message));
+    }
+
+    /**
+     * The application cannot name the Terms and Conditions version in force, so it refuses to take
+     * consent rather than take it against nothing.
+     *
+     * <p>{@code 503}, following {@link #handleEmailDelivery} — the same shape of condition: the
+     * request was fine, a dependency of it was not, and retrying later is the caller's correct move.
+     * The alternative is what makes this worth a handler of its own: falling through to the generic
+     * 500 would tell the client the server broke, and answering anything in the 2xx range would mean
+     * an account created with no record of what its owner agreed to.
+     *
+     * <p>Logged at ERROR because it is a deployment fault, not a caller's mistake: registration is
+     * down for everyone until a build that can name a current version is running.
+     */
+    @ExceptionHandler(TermsUnavailableException.class)
+    public ResponseEntity<@NonNull ApiResponse<Void>> handleTermsUnavailable(TermsUnavailableException ex) {
+        log.error("Terms and Conditions version unavailable; registration refused", ex);
+        String message = messageService.get(ex.getMessageCode(), ex.getArgs());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(ApiResponse.error(message, ErrorCode.TERMS_UNAVAILABLE));
     }
 
     /**

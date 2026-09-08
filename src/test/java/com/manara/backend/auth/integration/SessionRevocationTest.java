@@ -1,6 +1,7 @@
 package com.manara.backend.auth.integration;
 
 import com.manara.backend.db.AbstractPostgresBackedTest;
+import com.manara.backend.terms.service.TermsVersionRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -55,6 +56,13 @@ class SessionRevocationTest extends AbstractPostgresBackedTest {
     @Autowired
     private JdbcTemplate jdbc;
 
+    /**
+     * Asked for the version in force rather than hardcoded: registration refuses anything else, and
+     * a bumped version should not fail a test about sessions.
+     */
+    @Autowired
+    private TermsVersionRegistry termsVersionRegistry;
+
     @Autowired
     @Qualifier("springSessionRepositoryFilter")
     private jakarta.servlet.Filter sessionRepositoryFilter;
@@ -74,8 +82,10 @@ class SessionRevocationTest extends AbstractPostgresBackedTest {
         mockMvc.perform(post("/api/v1/auth/register").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"fullName":"Sara Test","email":"%s","password":"%s","role":"STUDENT"}
-                                """.formatted(EMAIL, PASSWORD)))
+                                {"fullName":"Sara Test","email":"%s","password":"%s","role":"STUDENT",
+                                 "termsAccepted":true,"termsVersion":"%s"}
+                                """.formatted(EMAIL, PASSWORD,
+                                        termsVersionRegistry.current().orElseThrow().id())))
                 .andExpect(status().isCreated());
 
         mockMvc.perform(post("/api/v1/auth/verify-otp").with(csrf())
@@ -88,6 +98,8 @@ class SessionRevocationTest extends AbstractPostgresBackedTest {
 
     @AfterEach
     void removeTestAccounts() {
+        jdbc.update("DELETE FROM terms_acceptances WHERE user_id IN (SELECT id FROM users WHERE email LIKE ?)",
+                "%" + DOMAIN);
         jdbc.update("DELETE FROM otps WHERE user_id IN (SELECT id FROM users WHERE email LIKE ?)",
                 "%" + DOMAIN);
         jdbc.update("DELETE FROM students WHERE user_id IN (SELECT id FROM users WHERE email LIKE ?)",

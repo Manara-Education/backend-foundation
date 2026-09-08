@@ -13,10 +13,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * V13, against rows that were already there.
+ * V14, against rows that were already there.
  *
  * <p>{@link FlywayMigrationTest} proves the migration runs, but it runs against an empty container,
- * so it says nothing about a database with accounts in it. What V13 has to get right for an
+ * so it says nothing about a database with accounts in it. What V14 has to get right for an
  * existing database is that <em>every account keeps working</em>: {@code auth_version} decides
  * whether a session is honoured, so a row that came out of the migration with no value, or with a
  * value the application did not put there, is an account whose sessions can never match. A NULL
