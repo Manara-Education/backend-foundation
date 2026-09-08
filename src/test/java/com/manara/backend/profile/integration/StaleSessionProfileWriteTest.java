@@ -1,6 +1,7 @@
 package com.manara.backend.profile.integration;
 
 import com.manara.backend.db.AbstractPostgresBackedTest;
+import com.manara.backend.terms.service.TermsVersionRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -62,6 +63,13 @@ class StaleSessionProfileWriteTest extends AbstractPostgresBackedTest {
 
     private MockMvc mockMvc;
 
+    /**
+     * Asked for the version in force rather than hardcoded: registration refuses anything else, and
+     * a bumped version should not fail a test about profile writes.
+     */
+    @Autowired
+    private TermsVersionRegistry termsVersionRegistry;
+
     @Autowired
     private WebApplicationContext context;
 
@@ -75,6 +83,8 @@ class StaleSessionProfileWriteTest extends AbstractPostgresBackedTest {
 
     @AfterEach
     void removeTestAccounts() {
+        jdbc.update("DELETE FROM terms_acceptances WHERE user_id IN (SELECT id FROM users WHERE email LIKE ?)",
+                "%" + DOMAIN);
         jdbc.update("DELETE FROM otps WHERE user_id IN (SELECT id FROM users WHERE email LIKE ?)",
                 "%" + DOMAIN);
         jdbc.update("DELETE FROM students WHERE user_id IN (SELECT id FROM users WHERE email LIKE ?)",
@@ -177,8 +187,10 @@ class StaleSessionProfileWriteTest extends AbstractPostgresBackedTest {
         mockMvc.perform(post("/api/v1/auth/register").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"fullName":"Test Person","email":"%s","password":"%s","role":"%s"}"""
-                                .formatted(email, ORIGINAL_PASSWORD, role)))
+                                {"fullName":"Test Person","email":"%s","password":"%s","role":"%s",
+                                 "termsAccepted":true,"termsVersion":"%s"}"""
+                                .formatted(email, ORIGINAL_PASSWORD, role,
+                                        termsVersionRegistry.current().orElseThrow().id())))
                 .andExpect(status().isCreated());
 
         MvcResult verified = mockMvc.perform(post("/api/v1/auth/verify-otp").with(csrf())
