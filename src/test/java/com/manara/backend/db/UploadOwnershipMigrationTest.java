@@ -20,7 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * V13, and the rows that were already there when it ran.
+ * V15, and the rows that were already there when it ran.
  *
  * <p>The table this adds exists to answer one question — who uploaded this file — so the only way
  * it can do harm is by answering it wrongly. There is exactly one way for that to happen: inventing
@@ -43,7 +43,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class UploadOwnershipMigrationTest extends AbstractPostgresBackedTest {
 
     private static final Path MIGRATION =
-            Path.of("src", "main", "resources", "db", "migration", "V13__upload_ownership.sql");
+            Path.of("src", "main", "resources", "db", "migration", "V15__upload_ownership.sql");
 
     @Autowired JdbcTemplate jdbc;
     @Autowired TransactionTemplate transactionTemplate;
@@ -52,13 +52,13 @@ class UploadOwnershipMigrationTest extends AbstractPostgresBackedTest {
     // ── The migration ran ────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("V13 is applied, and the uploads table it creates exists")
+    @DisplayName("V15 is applied, and the uploads table it creates exists")
     void migrationIsApplied() {
         assertThat(jdbc.queryForObject("""
                 SELECT count(*) FROM flyway_schema_history
-                WHERE version = '13' AND success = true
+                WHERE version = '15' AND success = true
                 """, Integer.class))
-                .as("V13 is not recorded as applied")
+                .as("V15 is not recorded as applied")
                 .isOne();
 
         assertThat(jdbc.queryForObject("""
@@ -77,7 +77,7 @@ class UploadOwnershipMigrationTest extends AbstractPostgresBackedTest {
         for (String statement : new String[]{"insert", "update", "delete", "truncate"}) {
             assertThat(Pattern.compile("\\b" + statement + "\\b", Pattern.CASE_INSENSITIVE)
                     .matcher(sql).find())
-                    .as("V13 contains a %s statement; ownership must never be back-filled, and a "
+                    .as("V15 contains a %s statement; ownership must never be back-filled, and a "
                             + "legacy file must never be removed by a migration", statement.toUpperCase())
                     .isFalse();
         }
@@ -246,7 +246,7 @@ class UploadOwnershipMigrationTest extends AbstractPostgresBackedTest {
                                    role, created_at)
                 VALUES (?, ?, 'x', true, false, 'INSTRUCTOR', now()) RETURNING id
                 """, Long.class, label,
-                ("v13-" + label + "-" + UUID.randomUUID() + "@x.test").toLowerCase(Locale.ROOT));
+                ("v15-" + label + "-" + UUID.randomUUID() + "@x.test").toLowerCase(Locale.ROOT));
     }
 
     /** A course as it existed before this migration: an upload cover and no ownership record. */
