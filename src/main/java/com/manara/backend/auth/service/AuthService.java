@@ -8,6 +8,7 @@ import com.manara.backend.session.manager.SessionManager;
 import com.manara.backend.common.exception.BusinessException;
 import com.manara.backend.common.exception.ResourceNotFoundException;
 import com.manara.backend.common.service.MessageService;
+import com.manara.backend.terms.service.TermsService;
 import com.manara.backend.user.model.Role;
 import com.manara.backend.user.model.User;
 import com.manara.backend.user.repository.UserRepository;
@@ -39,9 +40,29 @@ public class AuthService {
     private final SessionManager sessionManager;
     private final AuthMapper authMapper;
     private final ProfileMapper profileMapper;
+    private final TermsService termsService;
 
+    /**
+     * Creates an account.
+     *
+     * <p>This method is the application's <strong>only</strong> account-creation path — there is no
+     * social sign-up, no OAuth, no invitation flow, no admin-created account and no service-account
+     * provisioning — which makes it the one place consent to the Terms and Conditions can be
+     * required, and therefore the shared consent boundary. A future way to create a user that does
+     * not come through here would be a way to create a user who never agreed to anything.
+     *
+     * <p>The terms check runs first, before the duplicate-address read and before anything at all is
+     * written. A refused registration leaves no user row, no student or instructor profile, no
+     * consent row, no OTP and no email — the account and its consent are created together in this
+     * one transaction, or neither is.
+     */
     @Transactional
     public MessageResponse register(RegisterRequest request) {
+        // Decided before any side effect. That the acceptance flag itself is an explicit `true` has
+        // already been settled by validation on the request; what is checked here is that the
+        // version accepted is the version in force.
+        var acceptedTermsVersion = termsService.requireCurrentVersionAccepted(request.getTermsVersion());
+
         if (userRepository.existsByEmail(request.getEmail())) {
             throw new BusinessException("auth.email.duplicate");
         }
@@ -49,6 +70,8 @@ public class AuthService {
         var roleToSet = request.getRole() != null ? request.getRole() : Role.STUDENT;
         var encodedPassword = passwordEncoder.encode(request.getPassword());
         var user = userRepository.save(authMapper.toUser(request, encodedPassword, roleToSet));
+
+        termsService.recordAcceptance(user, acceptedTermsVersion);
 
         if (roleToSet == Role.INSTRUCTOR) {
             instructorRepository.save(profileMapper.toInstructor(user));
