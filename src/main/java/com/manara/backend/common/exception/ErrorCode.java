@@ -42,5 +42,22 @@ public enum ErrorCode {
      * The server cannot say which Terms and Conditions version is current, so it will not take
      * consent. Answered {@code 503}: the caller did nothing wrong and retrying later is right.
      */
-    TERMS_UNAVAILABLE
+    TERMS_UNAVAILABLE,
+
+    /**
+     * The session was ended by something other than the person holding it — the account's password
+     * was changed or reset from somewhere else, or the session predates a deploy that changed how
+     * sessions are validated. It carries HTTP 401, and the session and its cookies are already gone
+     * by the time the client reads it.
+     *
+     * <p>Distinct from an ordinary unauthenticated 401 on purpose, and this is the entire reason it
+     * exists: without it a user whose session was revoked mid-action is dropped on the sign-in
+     * screen with nothing to explain why. The client is expected to say "your session was ended,
+     * please sign in again" for this code and stay silent for a plain 401, which is what a visitor
+     * who was simply never signed in gets.
+     *
+     * <p>Reserved for exactly that condition. Reusing it for any other refusal would make the
+     * message the client shows a lie.
+     */
+    SESSION_REVOKED
 }
