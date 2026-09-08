@@ -1,6 +1,7 @@
 package com.manara.backend.auth.integration;
 
 import com.manara.backend.db.AbstractPostgresBackedTest;
+import com.manara.backend.terms.service.TermsVersionRegistry;
 import com.manara.backend.user.model.Role;
 import com.manara.backend.user.repository.UserRepository;
 import org.junit.jupiter.api.AfterEach;
@@ -59,6 +60,15 @@ class PublicRegistrationRoleTest extends AbstractPostgresBackedTest {
     @Autowired
     private UserRepository userRepository;
 
+    /**
+     * Asked for the version in force rather than hardcoded, because registration now refuses
+     * anything else. Without it the two accepted cases below would be rejected by terms validation
+     * and the refused one would return 400 for a reason that has nothing to do with its role —
+     * passing while proving nothing.
+     */
+    @Autowired
+    private TermsVersionRegistry termsVersionRegistry;
+
     @BeforeEach
     void buildMockMvc() {
         mockMvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
@@ -66,6 +76,8 @@ class PublicRegistrationRoleTest extends AbstractPostgresBackedTest {
 
     @AfterEach
     void removeTestAccounts() {
+        jdbc.update("DELETE FROM terms_acceptances WHERE user_id IN (SELECT id FROM users WHERE email LIKE ?)",
+                "%" + DOMAIN);
         jdbc.update("DELETE FROM otps WHERE user_id IN (SELECT id FROM users WHERE email LIKE ?)",
                 "%" + DOMAIN);
         jdbc.update("DELETE FROM students WHERE user_id IN (SELECT id FROM users WHERE email LIKE ?)",
@@ -141,15 +153,21 @@ class PublicRegistrationRoleTest extends AbstractPostgresBackedTest {
                 Integer.class, email);
     }
 
-    private static String body(String fullName, String email, String roleLiteral) {
+    private String body(String fullName, String email, String roleLiteral) {
         return """
-                {"fullName":"%s","email":"%s","password":"%s","role":%s}"""
-                .formatted(fullName, email, PASSWORD, roleLiteral);
+                {"fullName":"%s","email":"%s","password":"%s","role":%s,
+                 "termsAccepted":true,"termsVersion":"%s"}"""
+                .formatted(fullName, email, PASSWORD, roleLiteral, currentTermsVersion());
     }
 
-    private static String bodyWithoutRole(String fullName, String email) {
+    private String bodyWithoutRole(String fullName, String email) {
         return """
-                {"fullName":"%s","email":"%s","password":"%s"}"""
-                .formatted(fullName, email, PASSWORD);
+                {"fullName":"%s","email":"%s","password":"%s",
+                 "termsAccepted":true,"termsVersion":"%s"}"""
+                .formatted(fullName, email, PASSWORD, currentTermsVersion());
+    }
+
+    private String currentTermsVersion() {
+        return termsVersionRegistry.current().orElseThrow().id();
     }
 }
