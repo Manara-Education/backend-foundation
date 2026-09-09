@@ -58,6 +58,27 @@ mk_clean() {
     "$fresh" > "$d/intel/config-trivy.trivydb.json"
 }
 
+# The reported fix must never be a downgrade. Checked directly rather than
+# through a fixture, because the failure is silent: the finding is still
+# correct, only the remediation advice is wrong, and "upgrade to 1.25.11" from
+# 1.26.3 reads plausibly enough to be followed.
+python3 - "$SHARED/evaluate.py" <<'PYEOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("ev", sys.argv[1])
+ev = importlib.util.module_from_spec(spec); spec.loader.exec_module(ev)
+cases = [("11.0.24", ["11.0.25", "10.1.58", "9.0.121"], "11.0.25"),
+         ("1.26.3",  ["1.25.11", "1.26.4"],             "1.26.4"),
+         ("1.26.3",  ["1.25.13", "1.26.6"],             "1.26.6"),
+         ("8.19.0-r0", ["8.22.0-r0"],                   "8.22.0-r0")]
+bad = [(i, c, ev.select_fixed_version(i, c), w) for i, c, w in cases
+       if ev.select_fixed_version(i, c) != w]
+for i, c, got, want in bad:
+    print(f"  FAIL  fixed-version for {i} from {c}: got {got}, want {want}")
+print("  ok    the reported fix is never a downgrade" if not bad else "")
+raise SystemExit(1 if bad else 0)
+PYEOF
+if [ $? -eq 0 ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
+
 echo "Security Gate decision logic"
 echo
 

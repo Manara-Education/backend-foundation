@@ -242,14 +242,29 @@ def select_fixed_version(installed: str, candidates: list[str]) -> str:
         return ""
     if len(clean) == 1:
         return clean[0]
-    installed_major = version_parts(installed)[0]
-    same_branch = [c for c in clean if version_parts(c)[0] == installed_major]
-    if same_branch:
-        return min(same_branch, key=version_parts)
-    # Nothing on this branch is fixed. Report the lowest fix above the installed
-    # version rather than silently claiming there is no fix at all.
-    above = [c for c in clean if version_parts(c) > version_parts(installed)]
-    return min(above, key=version_parts) if above else clean[0]
+
+    # The lowest fix at or above what is installed. Simply that.
+    #
+    # An earlier version of this compared only the FIRST version component to
+    # decide which release branch a fix belonged to. That works for Tomcat,
+    # where the branch is 11.x, and is wrong for anything whose branch is
+    # major.minor: for Go stdlib 1.26.3 with fixes "1.25.11, 1.26.4" it treated
+    # both as the same branch and reported 1.25.11 — telling the reader to
+    # DOWNGRADE, which is worse than saying nothing at all.
+    #
+    # Ordering by the numeric components and taking the smallest one that is not
+    # below the installed version needs no notion of a branch and cannot produce
+    # a downgrade.
+    here = version_parts(installed)
+    above = [c for c in clean if version_parts(c) >= here]
+    if above:
+        return min(above, key=version_parts)
+
+    # Every listed fix is older than what is installed. That means this package
+    # is on a branch upstream did not fix, so none of these is actionable; the
+    # highest is reported as the closest thing to a lead, and the full list
+    # stays on the record in all_fixed_versions.
+    return max(clean, key=version_parts)
 
 
 WORKSPACE = ""
