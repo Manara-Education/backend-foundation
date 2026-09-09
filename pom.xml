@@ -15,6 +15,32 @@
 	<description>Edu Mobile Application Backend</description>
 	<properties>
 		<java.version>25</java.version>
+		<!--
+			Overrides the embedded Tomcat that spring-boot-starter-parent 4.1.1 pins
+			(11.0.24), which is affected by three advisories published 2026-08-26:
+
+			  CVE-2026-65905 / GHSA-9xv2-5v5q-p794  DIGEST authentication bypass
+			  CVE-2026-65182 / GHSA-gcx9-497g-6cp6  improper access control
+			  CVE-2026-68525 / GHSA-h3x4-894j-xpx5  FORM authentication bypass
+
+			All three are fixed in 11.0.25. This is a property override rather than a
+			parent upgrade because there is no Spring Boot release carrying the fix:
+			4.1.1 is the newest published version. `tomcat.version` is the property
+			spring-boot-dependencies itself uses for the whole tomcat-embed-* family,
+			so setting it moves core, el and websocket together and cannot leave them
+			at mismatched versions.
+
+			Two of the three concern Tomcat's own DIGEST and FORM authenticators,
+			which this application does not configure — authentication is Spring
+			Security's filter chain with server-side sessions. That lowers the
+			practical exposure but does not remove it: the vulnerable classes still
+			ship in the deployed artifact, CVE-2026-65182 is not authenticator-
+			specific, and the fix costs one line.
+
+			REMOVE THIS once the Spring Boot parent pins 11.0.25 or later, so the
+			managed version is not silently held back by an override nobody rereads.
+		-->
+		<tomcat.version>11.0.25</tomcat.version>
 	</properties>
 	<dependencies>
 		<dependency>
