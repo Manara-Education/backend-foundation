@@ -531,12 +531,14 @@ jobs:
       # job, on purpose. A job that cannot say which data it used is a job whose
       # clean result cannot be relied on, and carving out an exception here
       # would be the first crack in that rule.
-      - name: Fetch the Trivy database and record its revision
-        run: |
-          set -euo pipefail
-          mkdir -p reports/status reports/intel
-          trivy image --download-db-only
-          trivy version --format json > reports/intel/config-trivy.trivydb.json
+      # A configuration scan is judged on the misconfiguration CHECK BUNDLE it
+      # applied, not on the vulnerability database — `trivy config` never reads
+      # the latter. The bundle is only fetched when the scan actually runs, so
+      # the revision is recorded AFTER the scan below rather than before it.
+      # Recording it here would report an empty bundle and describe rules that
+      # had not been loaded yet.
+      - name: Prepare the report directories
+        run: mkdir -p reports/status reports/intel
 
       # Scanned from the repository root, so the Dockerfile, docker-compose.yml
       # and .github/workflows are all inside the scanned tree.
@@ -556,6 +558,10 @@ jobs:
             --format json \
             --output reports/config-trivy.trivy.json
           test -s reports/config-trivy.trivy.json
+          # Recorded now, after the scan, so the digest names the bundle the
+          # rules above actually came from.
+          trivy version --format json > reports/intel/config-trivy.trivydb.json
+          cat reports/intel/config-trivy.trivydb.json
           python3 - <<'PY'
           import json
           doc = json.load(open("reports/config-trivy.trivy.json"))
