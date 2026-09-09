@@ -63,10 +63,290 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ===========================================================================
+  # 0. Nothing ships that was not assessed
+  # ===========================================================================
+  # Before this job existed, deployment depended on nothing security-related at
+  # all. `Release` validated the tag, `Publish image` built the image, and this
+  # workflow pushed it to production — three steps, none of which ever asked
+  # whether the code was known to be vulnerable. A CVE published against a
+  # dependency after the last CI run would have shipped without anything
+  # noticing.
+  #
+  # This job closes that. It requires a `Security Gate` check run, concluded
+  # `success`, ON THE EXACT COMMIT THE RELEASE TAG POINTS AT — not on develop,
+  # not on the tip of main, not on "a recent commit". A tag is a movable label;
+  # the commit is what is being shipped.
+  #
+  # It holds no environment, so no deployment secret is in scope here. What it
+  # can do is read check runs and start a workflow run; what it cannot do is
+  # reach production.
+  security-gate:
+    name: Verify the Security Gate for this release
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    permissions:
+      contents: read   # resolve the tag to a commit, read policy.yml
+      checks: read     # read the Security Gate check run on that commit
+      actions: write   # re-assess the release if the existing pass is stale
+
+    # The same guard the deploy job carries. workflow_run fires on completion
+    # whatever the outcome, so a FAILED release must not reach even this job.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+
+    outputs:
+      tag: ${{ steps.commit.outputs.tag }}
+      sha: ${{ steps.commit.outputs.sha }}
+      block-severities: ${{ steps.policy.outputs.block_severities }}
+
+    steps:
+      # Resolved here as well as in the deploy job, from the same source and with
+      # the same validation, because this job must not be able to verify one
+      # version while the deploy job ships another.
+      - name: Resolve the release tag to the exact commit
+        id: commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RAW_TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$RAW_TAG" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "::error::Resolved '$RAW_TAG', which is not a vMAJOR.MINOR.PATCH release tag."
+            exit 1
+          fi
+          # The commits endpoint dereferences a tag — annotated or lightweight —
+          # to the commit it ultimately points at, which is the thing the
+          # Security Gate reported on.
+          SHA="$(gh api "repos/${REPO}/commits/${RAW_TAG}" --jq '.sha')"
+          printf '%s' "$SHA" | grep -Eq '^[0-9a-f]{40}$' \
+            || { echo "::error::Could not resolve $RAW_TAG to a commit."; exit 1; }
+          echo "tag=$RAW_TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "$RAW_TAG -> $SHA"
+
+      # The released commit, so the policy that is applied is the policy that
+      # shipped with the release rather than whatever develop says today.
+      - name: Check out the released commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.commit.outputs.sha }}
+          persist-credentials: false
+
+      - name: Read the thresholds out of the security policy
+        id: policy
+        run: |
+          set -euo pipefail
+          if ! python3 -c 'import yaml' 2>/dev/null; then
+            python3 -m pip install --disable-pip-version-check --quiet 'PyYAML==6.0.3' \
+              || python3 -m pip install --disable-pip-version-check --quiet \
+                   --break-system-packages 'PyYAML==6.0.3'
+          fi
+          # Both values come from .github/security/policy.yml so that the
+          # deployment gate and the merge gate cannot disagree about what
+          # "fresh" or "blocking" means. Hardcoding either here would let them
+          # drift apart silently, and the drift would only ever be discovered
+          # by shipping something.
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import yaml
+          policy = yaml.safe_load(open(".github/security/policy.yml")) or {}
+          max_age = (policy.get("intelligence") or {}).get("max_age_hours", 24)
+          threshold = (policy.get("blocking") or {}).get("block_at_or_above", "HIGH")
+          scale = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
+          at_or_above = scale[scale.index(threshold.upper()):]
+          print(f"max_age_hours={float(max_age):g}")
+          print("block_severities=" + ",".join(at_or_above))
+          PY
+          cat "$GITHUB_OUTPUT"
+
+      # Poll, do not sample.
+      #
+      # `Release` and `security.yml`'s push trigger on main are independent
+      # chains started by the same tag push. When this job begins, the Security
+      # Gate run for the released commit is very often still going. Reading the
+      # check runs once and calling `in_progress` a failure would refuse every
+      # release; calling it a pass would defeat the entire gate. So this waits.
+      #
+      #   success                     -> proceed
+      #   failure/cancelled/timed_out -> refuse immediately; the answer is in,
+      #                                  and waiting out the clock only delays it
+      #   still running               -> keep waiting until the deadline
+      #   ABSENT                      -> keep waiting, then refuse. "No Security
+      #                                  Gate ever ran on this commit" is the
+      #                                  precise failure this job exists to
+      #                                  prevent and is never a pass.
+      #
+      # `app.slug == "github-actions"` is checked as well as the name: a check
+      # run's name is free text that any GitHub App holding checks:write can
+      # produce, so the name alone does not establish who said it.
+      - name: Require a successful Security Gate on the released commit
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ steps.commit.outputs.sha }}
+          TAG: ${{ steps.commit.outputs.tag }}
+          GATE: Security Gate
+        run: |
+          set -euo pipefail
+
+          read_gate() {
+            gh api --paginate "repos/${REPO}/commits/${SHA}/check-runs?per_page=100" \
+              --jq '.check_runs[]' 2>/dev/null | jq -s -c \
+              --arg n "$GATE" \
+              '[.[] | select(.name == $n and .app.slug == "github-actions")]
+               | sort_by(.id) | last // empty'
+          }
+
+          deadline=$(( SECONDS + 1200 ))
+          while :; do
+            entry="$(read_gate)"
+
+            if [ -n "$entry" ]; then
+              status="$(printf '%s' "$entry" | jq -r '.status')"
+              conclusion="$(printf '%s' "$entry" | jq -r '.conclusion // "none"')"
+              if [ "$status" = "completed" ]; then
+                if [ "$conclusion" != "success" ]; then
+                  echo "::error::'$GATE' concluded '$conclusion' on $SHA (tag $TAG)."
+                  echo "::error::$TAG is NOT deployable. Fix the finding, cut a new release, and deploy that."
+                  echo "::error::The run: $(printf '%s' "$entry" | jq -r '.html_url')"
+                  exit 1
+                fi
+                completed_at="$(printf '%s' "$entry" | jq -r '.completed_at // ""')"
+                echo "completed_at=$completed_at" >> "$GITHUB_OUTPUT"
+                echo "url=$(printf '%s' "$entry" | jq -r '.html_url')" >> "$GITHUB_OUTPUT"
+                echo "'$GATE' succeeded on $SHA at $completed_at."
+                exit 0
+              fi
+              echo "'$GATE' on $SHA is $status; waiting."
+            else
+              echo "no '$GATE' check run on $SHA yet; waiting."
+            fi
+
+            if (( SECONDS >= deadline )); then
+              if [ -z "$entry" ]; then
+                echo "::error::No '$GATE' check run exists on $SHA (tag $TAG) after 20 minutes."
+                echo "::error::This commit was never security-assessed, so it is not deployable."
+                echo "::error::Run the Security workflow against $TAG and redeploy once it passes."
+              else
+                echo "::error::'$GATE' on $SHA did not finish within 20 minutes; refusing to deploy."
+              fi
+              exit 1
+            fi
+            sleep 20
+          done
+
+      # A pass is not a pass forever.
+      #
+      # A tag can be redeployed weeks after it was cut — a rollback, or a retry
+      # of a deployment that failed on something transient. Its Security Gate
+      # would still say `success`, and would still be describing a world in
+      # which the advisories published since do not exist. GitHub has no notion
+      # of a check expiring, so the age is checked here, against the same
+      # freshness window policy.yml gives the merge gate.
+      #
+      # A stale pass is not accepted and is not overridden either: the release is
+      # re-assessed, by dispatching the Security workflow against the tag, and
+      # the FRESH result is what decides. If the re-assessment cannot be started
+      # or does not finish in time, this fails. Falling back to the stale pass
+      # would make the whole check decorative.
+      - name: Re-assess the release if the pass is older than the freshness window
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ steps.commit.outputs.sha }}
+          TAG: ${{ steps.commit.outputs.tag }}
+          COMPLETED_AT: ${{ steps.gate.outputs.completed_at }}
+          MAX_AGE_HOURS: ${{ steps.policy.outputs.max_age_hours }}
+          GATE: Security Gate
+        run: |
+          set -euo pipefail
+
+          age_h="$(python3 -c "
+          import datetime as dt, os, sys
+          raw = os.environ['COMPLETED_AT']
+          if not raw:
+              print('999999'); sys.exit(0)
+          done = dt.datetime.fromisoformat(raw.replace('Z', '+00:00'))
+          print(f\"{(dt.datetime.now(dt.timezone.utc) - done).total_seconds() / 3600:.2f}\")
+          ")"
+
+          if python3 -c "import sys; sys.exit(0 if float('$age_h') <= float('$MAX_AGE_HOURS') else 1)"; then
+            echo "'$GATE' on $SHA is ${age_h}h old; policy allows ${MAX_AGE_HOURS}h. Fresh enough."
+            exit 0
+          fi
+
+          echo "::warning::'$GATE' on $SHA is ${age_h}h old, past the ${MAX_AGE_HOURS}h window. Re-assessing $TAG before deploying."
+          dispatched_at="$(date -u +%s)"
+          gh workflow run security.yml --repo "$REPO" --ref "$TAG" \
+            || { echo "::error::Could not dispatch a fresh Security assessment for $TAG; refusing to deploy on a ${age_h}h-old pass."; exit 1; }
+
+          # Wait for a Security Gate check run that FINISHED after the dispatch.
+          # Matching on "completed after the dispatch time" rather than on a run
+          # id is what stops the stale pass from satisfying its own re-check.
+          deadline=$(( SECONDS + 2400 ))
+          while :; do
+            fresh="$(gh api --paginate "repos/${REPO}/commits/${SHA}/check-runs?per_page=100" \
+              --jq '.check_runs[]' 2>/dev/null | jq -s -c \
+              --arg n "$GATE" --argjson t "$dispatched_at" \
+              '[.[] | select(.name == $n and .app.slug == "github-actions"
+                             and .status == "completed" and .completed_at != null
+                             and ((.completed_at | fromdateiso8601) > $t))]
+               | sort_by(.id) | last // empty')"
+
+            if [ -n "$fresh" ]; then
+              conclusion="$(printf '%s' "$fresh" | jq -r '.conclusion // "none"')"
+              if [ "$conclusion" = "success" ]; then
+                echo "Fresh '$GATE' on $SHA concluded success. $TAG is deployable."
+                exit 0
+              fi
+              echo "::error::The fresh '$GATE' assessment of $TAG concluded '$conclusion'. Refusing to deploy."
+              echo "::error::$(printf '%s' "$fresh" | jq -r '.html_url')"
+              exit 1
+            fi
+
+            if (( SECONDS >= deadline )); then
+              echo "::error::The re-assessment of $TAG did not complete within 40 minutes."
+              echo "::error::Refusing to deploy on a ${age_h}h-old Security Gate result."
+              exit 1
+            fi
+            echo "waiting for the fresh '$GATE' assessment of $TAG ..."
+            sleep 30
+          done
+
+      - name: Summarise the release gate
+        if: always()
+        env:
+          TAG: ${{ steps.commit.outputs.tag }}
+          SHA: ${{ steps.commit.outputs.sha }}
+          URL: ${{ steps.gate.outputs.url }}
+          COMPLETED_AT: ${{ steps.gate.outputs.completed_at }}
+        run: |
+          {
+            echo "### Release security gate — ${{ job.status }}"
+            echo
+            echo '```'
+            echo "tag           $TAG"
+            echo "commit        $SHA"
+            echo "gate finished ${COMPLETED_AT:-—}"
+            echo "gate run      ${URL:-—}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   deploy:
     name: Deploy the backend
     runs-on: ubuntu-latest
     timeout-minutes: 30
+
+    # Nothing reaches production without a Security Gate that passed on the
+    # exact commit the tag names, inside the policy's freshness window. A
+    # `needs` rather than a step inside this job, so the failure is visible as
+    # its own red job in the graph and so the deployment secrets scoped to the
+    # Production environment below are never in scope while that is decided.
+    needs: security-gate
 
     # Scopes the deployment secrets to this job and applies whatever protection
     # rules the Production environment carries.

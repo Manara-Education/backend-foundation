@@ -1,0 +1,158 @@
+# Vulnerability intelligence source registry.
+#
+# One entry per source the Security Gate relies on, with the ingestion method
+# actually used, what it does and does not cover, and how its freshness is
+# established. Identical in both Manara repositories.
+#
+# The rule this file exists to enforce: every source is consumed through a
+# structured feed or a maintained integration. Nothing here scrapes an HTML
+# page, because a scraper that silently starts returning zero results is
+# indistinguishable from good news.
+#
+# TRUST BOUNDARY — advisory text, the pages it links to, and any code attached
+# to it are UNTRUSTED DATA. They are parsed for identifiers, versions and
+# scores; they are never executed, never eval'd, never used to construct a
+# shell command, and no proof-of-concept fetched from any of them is ever run.
+
+version: 1
+
+sources:
+  - id: osv
+    name: OSV (Open Source Vulnerabilities)
+    tier: mandatory
+    ingestion: osv-scanner offline database (`osv-scanner scan --offline-vulnerabilities`)
+    endpoint: https://osv-vulnerabilities.storage.googleapis.com/
+    covers:
+      - Maven (backend direct + transitive, via the CycloneDX SBOM)
+      - npm (frontend direct + transitive, via package-lock.json)
+    freshness_signal: mtime of the downloaded per-ecosystem zip, recorded in the manifest
+    limitations:
+      - >-
+        OSV aggregates upstream databases. A vulnerability disclosed but not yet
+        ingested by OSV is invisible here, and the delay is not bounded by anything
+        we control.
+      - >-
+        Maven transitive resolution is only as accurate as the SBOM handed to it.
+        pom.xml alone resolves 19 packages for this backend; the CycloneDX SBOM
+        resolves 142. The gate always scans the SBOM.
+
+  - id: ghsa
+    name: GitHub-reviewed Security Advisories
+    tier: mandatory
+    ingestion: >-
+      Two independent paths — the GHSA records embedded in OSV (severity words and
+      aliases), and actions/dependency-review-action, which queries the GitHub
+      Advisory Database directly for the PR's dependency difference.
+    endpoint: https://api.github.com/advisories
+    covers: [Maven, npm, GitHub Actions]
+    freshness_signal: >-
+      dependency-review runs against GitHub's live database at job time; the OSV
+      copy carries the OSV snapshot timestamp.
+    limitations:
+      - >-
+        dependency-review sees only what the PR CHANGED. It cannot see a
+        vulnerability newly disclosed in a dependency the PR did not touch. This is
+        precisely why it is an addition to full dependency scanning and never a
+        replacement for it.
+
+  - id: trivy-db
+    name: Trivy vulnerability and misconfiguration databases
+    tier: mandatory
+    ingestion: >-
+      `trivy` pinned binary downloading its OCI-distributed DB; version and
+      build timestamp read back with `trivy version --format json`.
+    endpoint: ghcr.io/aquasecurity/trivy-db
+    covers:
+      - OS packages in the built container image (Alpine/Debian layers)
+      - Application dependencies bundled into the image (the Spring Boot fat jar)
+      - Dockerfile / Compose / GitHub Actions misconfiguration rules
+      - Vendor advisories that OSV lags on, especially distro security trackers
+    freshness_signal: >-
+      `.UpdatedAt` and `.NextUpdate` from `trivy version --format json`, recorded
+      verbatim in the manifest.
+    limitations:
+      - >-
+        Distro feeds carry their own vendor lag, and a distro that marks an issue
+        will-not-fix keeps reporting it with no fixed version available.
+
+  - id: cisa-kev
+    name: CISA Known Exploited Vulnerabilities catalogue
+    tier: mandatory
+    ingestion: HTTPS GET of the published JSON catalogue
+    endpoint: https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
+    covers: >-
+      CVE IDs with confirmed in-the-wild exploitation. Used to escalate any
+      matching finding to blocking regardless of its severity label.
+    freshness_signal: the catalogue's own `catalogVersion` and `dateReleased` fields
+    limitations:
+      - >-
+        KEV is an inclusion list, not a risk score. Absence from KEV says only that
+        CISA has not catalogued confirmed exploitation — it is never treated as
+        evidence that something is not exploited.
+
+  - id: nvd
+    name: CVE / NVD records
+    tier: advisory
+    ingestion: >-
+      Not polled on the hot path. CVSS vectors and CVE aliases arrive already
+      attached to the OSV and Trivy records, which is where enrichment comes from.
+    endpoint: https://services.nvd.nist.gov/rest/json/cves/2.0
+    covers: cross-referencing and CVSS vectors for findings whose source lacks a severity word
+    limitations:
+      - >-
+        NVD analysis latency is well documented and frequently exceeds our 24h
+        window, so NVD is deliberately NOT a mandatory source. Making it mandatory
+        would fail the gate for reasons that have nothing to do with Manara.
+
+  - id: vendor
+    name: Framework, runtime and library vendor advisories
+    tier: advisory
+    ingestion: >-
+      Reached through OSV and Trivy, which both ingest the upstream vendor feeds
+      that matter to this inventory (Spring, Apache Tomcat, Node.js, npm, Alpine,
+      Caddy). No separate scraping.
+    covers: Spring Boot, Apache Tomcat, PostgreSQL driver, Redis client, Node.js, Caddy, Alpine
+    limitations:
+      - >-
+        A vendor that publishes only in prose, with no machine-readable feed and no
+        downstream database pickup, is not covered automatically. Those are handled
+        by the manual-verification path in the findings register.
+
+  - id: bugbounty-public
+    name: Officially disclosed public bug-bounty reports
+    tier: advisory
+    ingestion: >-
+      Only where the affected vendor or programme has acknowledged the report AND
+      it has been assigned a CVE/GHSA that reaches OSV or Trivy. There is no live
+      bug-bounty feed in this pipeline.
+    covers: publicly disclosed, vendor-acknowledged reports that became advisories
+    limitations:
+      - >-
+        NO coverage of private, embargoed, unpublished or otherwise inaccessible
+        reports, and no claim of covering all public disclosures. Anyone reading a
+        green Security Gate should read it as "nothing matched the sources above",
+        never as "no vulnerability exists".
+
+# ---------------------------------------------------------------------------
+# Application-security guidance (not a vulnerability feed)
+# ---------------------------------------------------------------------------
+#
+# These define what to verify. They do not publish per-package advisories and
+# are not ingested at scan time; they are the reference the repository's
+# security checks are mapped against in docs/security/SECURITY_CI.md.
+guidance:
+  - id: owasp-top-10
+    version: "2025"
+    url: https://owasp.org/Top10/2025/
+    note: Current stable edition, verified 2026-09-09.
+  - id: owasp-api-top-10
+    version: "2023"
+    url: https://owasp.org/API-Security/editions/2023/en/0x11-t10/
+    note: Current edition, verified 2026-09-09.
+  - id: owasp-asvs
+    version: "5.0"
+    url: https://owasp.org/www-project-application-security-verification-standard/
+    note: >-
+      Used for verification-requirement wording. OWASP is a source of risk
+      categories and verification guidance — it is NOT a live vulnerability or
+      bug-bounty feed, and is never counted as one.
