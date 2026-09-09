@@ -411,7 +411,11 @@ jobs:
   # the finding a single-scanner pipeline misses.
   deps-trivy:
     name: Dependencies (Trivy)
-    needs: targets
+    # `intelligence` as well as `targets`, because this job now scans the SBOM
+    # that job publishes. Without it the two race, the artifact is not there
+    # yet, and the download fails — which is exactly what happened when the
+    # scan was moved off `trivy fs`.
+    needs: [targets, intelligence]
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
