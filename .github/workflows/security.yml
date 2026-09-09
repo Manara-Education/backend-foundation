@@ -448,18 +448,37 @@ jobs:
           trivy version --format json > reports/intel/deps-trivy.trivydb.json
           cat reports/intel/deps-trivy.trivydb.json
 
+      # Trivy scans the SBOM the intelligence job already produced, not the
+      # working tree.
+      #
+      # `trivy fs` on a Maven project resolves the POM hierarchy over the
+      # network, and from a shared CI egress address Maven Central answers
+      # `429 Too Many Requests` with a 30-minute Retry-After. That is not a
+      # hypothetical: it is what failed this job on its first real run. A
+      # dependency scanner whose result depends on someone else's rate limiter
+      # is not a control, and the alternative — `--offline-scan` — silently
+      # narrows the scan to what the manifest names, which for this project is
+      # 19 packages instead of 142.
+      #
+      # Scanning the SBOM removes the network from the path entirely and gives
+      # Trivy the same complete inventory osv-scanner gets, which is what makes
+      # the two a genuine second opinion on each other rather than two tools
+      # looking at different things.
+      #
       # `--exit-code` is not set, so Trivy returns 0 whether or not it finds
-      # anything and ANY non-zero exit is a genuine scanner failure that fails
-      # this job. target/ is excluded because it is build output that is absent
-      # from a clean checkout — including it would make the result depend on
-      # whether someone had built locally. What is inside the built artefact is
-      # covered by image-trivy, against the real image.
+      # anything, and ANY non-zero exit is a genuine scanner failure that fails
+      # this job.
+      - name: Download the SBOM produced by the intelligence job
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: sbom-${{ matrix.target.slug }}
+          path: sbom
+
       - name: Scan dependencies
         run: |
           set -euo pipefail
-          trivy fs . \
-            --scanners vuln \
-            --skip-dirs target \
+          test -s sbom/sbom.cdx.json
+          trivy sbom sbom/sbom.cdx.json \
             --format json \
             --output reports/deps-trivy.trivy.json
           test -s reports/deps-trivy.trivy.json
@@ -706,8 +725,32 @@ jobs:
           # Only the security SARIF. CodeQL also emits *.quality.sarif for its
           # code-quality queries, and a maintainability warning is not a reason
           # to block a merge.
-          test -s codeql-results/java-kotlin.sarif
-          cp codeql-results/java-kotlin.sarif reports/sast-codeql.sarif
+          #
+          # The filename is DISCOVERED rather than hardcoded. CodeQL does not
+          # promise a stable name for this file — it varies with the language
+          # pack and with the SARIF-combine behaviour the action enables — and a
+          # hardcoded `java-kotlin.sarif` is exactly what failed here first time
+          # out. Globbing keeps this working across those variations; finding
+          # nothing is still a hard failure, so a silently missing analysis
+          # cannot pass as an empty one.
+          shopt -s nullglob
+          candidates=()
+          for f in codeql-results/*.sarif; do
+            case "$f" in *.quality.sarif) continue ;; esac
+            candidates+=("$f")
+          done
+          if [ "${#candidates[@]}" -eq 0 ]; then
+            echo "::error::CodeQL produced no security SARIF in codeql-results/."
+            ls -la codeql-results/ || true
+            exit 1
+          fi
+          if [ "${#candidates[@]}" -gt 1 ]; then
+            echo "::error::Expected one security SARIF, found ${#candidates[@]}: ${candidates[*]}"
+            exit 1
+          fi
+          echo "Using ${candidates[0]}"
+          test -s "${candidates[0]}"
+          cp "${candidates[0]}" reports/sast-codeql.sarif
           python3 - <<'PY'
           import json
           doc = json.load(open("reports/sast-codeql.sarif"))
