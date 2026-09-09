@@ -678,6 +678,36 @@ class Gate:
         except json.JSONDecodeError as exc:
             self.blocks.append(f"{rid}: recorded database revision is unreadable ({exc}).")
             return
+        # A configuration scan does not consult the vulnerability database at
+        # all — `trivy config` evaluates the misconfiguration CHECK BUNDLE, and
+        # `trivy version` on such a run reports a CheckBundle and no
+        # VulnerabilityDB. Demanding a vulnerability database from it was wrong,
+        # and produced the nonsensical "the scanner reported no vulnerability
+        # database" against a config job that was working correctly.
+        #
+        # So each scanner is held to the provenance of the data it actually
+        # used. Both still have to prove they used something identifiable; the
+        # difference is which artefact that is.
+        if rid.startswith("config"):
+            bundle = info.get("CheckBundle") or {}
+            digest = bundle.get("Digest")
+            fetched = parse_ts(bundle.get("DownloadedAt"))
+            if not digest or fetched is None:
+                self.blocks.append(
+                    f"{rid}: the scanner recorded no misconfiguration check bundle, so the "
+                    f"rules it applied cannot be identified."
+                )
+                return
+            # The bundle carries no upstream build timestamp, only when it was
+            # fetched, so this records provenance rather than asserting an
+            # upstream freshness it cannot know. Stated plainly here so nobody
+            # reads it as the same guarantee the vulnerability feeds give.
+            self.notes.append(
+                f"{rid}: Trivy check bundle {str(digest)[:23]} fetched {bundle.get('DownloadedAt')} "
+                f"(policy rules, not a vulnerability feed — no upstream build time is published)."
+            )
+            return
+
         vdb = info.get("VulnerabilityDB") or {}
         updated = parse_ts(vdb.get("UpdatedAt"))
         if updated is None:

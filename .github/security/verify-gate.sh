@@ -8,6 +8,9 @@
 set -uo pipefail
 
 SHARED="$(cd "$(dirname "$0")" && pwd)"
+# Resolve the checkout root rather than hardcoding anyone's home directory,
+# so this suite runs identically on a laptop and on a runner.
+REPO_ROOT="$(cd "$SHARED/../.." && pwd)"
 WORK="$(mktemp -d)"
 MANIFEST_OK="${1:?usage: verify-gate.sh <good-manifest.json> <real-osv-report.json>}"
 OSV_REAL="${2:?}"
@@ -20,7 +23,7 @@ run_case() {
       --policy "$SHARED/policy.yml" --exceptions "${EXC:-$SHARED/exceptions.yml}" \
       --event "${EVENT:-push}" --ref "${REF:-develop}" --revision "${REV:-abc1234}" \
       --repository Manara-Education/backend-foundation \
-      --workspace /Users/hamedmohamed/Desktop/Manara/backend-foundation \
+      --workspace "$REPO_ROOT" \
       --register-out "$dir/findings.json" --report-out "$dir/report.md" 2>&1)"
   local code=$?
   if [ "$code" = "$expected" ]; then
@@ -45,9 +48,14 @@ mk_clean() {
     echo success > "$d/status/$r.status"
   done
   local fresh; fresh="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  for r in deps-trivy config-trivy image-trivy; do
+  for r in deps-trivy image-trivy; do
     printf '{"Version":"0.74.0","VulnerabilityDB":{"Version":2,"UpdatedAt":"%s"}}\n' "$fresh" > "$d/intel/$r.trivydb.json"
   done
+  # config-trivy gets what `trivy config` ACTUALLY reports: a check bundle and
+  # no vulnerability database. A fixture that handed it a vulnerability DB would
+  # be testing a situation that cannot occur.
+  printf '{"Version":"0.74.0","CheckBundle":{"Digest":"sha256:1583562f8b90ed2a071b99f0e5ffff6b57e4ceb6ca3e4796577b4e6a339eb74c","DownloadedAt":"%s"}}\n' \
+    "$fresh" > "$d/intel/config-trivy.trivydb.json"
 }
 
 echo "Security Gate decision logic"
@@ -63,13 +71,13 @@ cp "$OSV_REAL" "$C2/deps-osv.osv.json"
 python3 "$SHARED/evaluate.py" --reports-dir "$C2" --manifest "$C2/manifest.json" \
   --policy "$SHARED/policy.yml" --exceptions "$SHARED/exceptions.yml" --event push \
   --ref develop --revision abc1234 --repository Manara-Education/backend-foundation \
-  --workspace /Users/hamedmohamed/Desktop/Manara/backend-foundation \
+  --workspace "$REPO_ROOT" \
   --register-out "$C2/findings.json" --report-out "$C2/r1.md" >/dev/null 2>&1
 n1=$(python3 -c "import json;print(len(json.load(open('$C2/findings.json'))['findings']))")
 python3 "$SHARED/evaluate.py" --reports-dir "$C2" --manifest "$C2/manifest.json" \
   --policy "$SHARED/policy.yml" --exceptions "$SHARED/exceptions.yml" --event push \
   --ref develop --revision abc1234 --repository Manara-Education/backend-foundation \
-  --workspace /Users/hamedmohamed/Desktop/Manara/backend-foundation \
+  --workspace "$REPO_ROOT" \
   --register-out "$C2/findings.json" --report-out "$C2/r2.md" >/dev/null 2>&1
 n2=$(python3 -c "import json;print(len(json.load(open('$C2/findings.json'))['findings']))")
 first=$(python3 -c "import json;print(json.load(open('$C2/findings.json'))['findings'][0]['first_seen'])")
@@ -131,6 +139,19 @@ run_case "scanner using a stale DB blocks" 1 "$SD"
 
 ND="$WORK/nodb"; mk_clean "$ND"; rm "$ND/intel/image-trivy.trivydb.json"
 run_case "scanner not recording its DB revision blocks" 1 "$ND"
+
+# A config scan is held to its CHECK BUNDLE, not to the vulnerability database.
+# `trivy config` never downloads the vulnerability DB, so requiring one from it
+# failed a job that was working correctly. These two cases pin that behaviour:
+# a bundle is accepted, and the absence of one still blocks.
+CB="$WORK/checkbundle"; mk_clean "$CB"
+printf '{"Version":"0.74.0","CheckBundle":{"Digest":"sha256:1583562f8b90ed2a071b99f0e5ffff6b57e4ceb6ca3e4796577b4e6a339eb74c","DownloadedAt":"%s"}}\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$CB/intel/config-trivy.trivydb.json"
+run_case "config scan accepted on its check bundle alone" 0 "$CB"
+
+NB="$WORK/nobundle"; mk_clean "$NB"
+printf '{"Version":"0.74.0"}\n' > "$NB/intel/config-trivy.trivydb.json"
+run_case "config scan with neither bundle nor database blocks" 1 "$NB"
 
 # 5 — secrets
 SEC="$WORK/secret"; mk_clean "$SEC"
