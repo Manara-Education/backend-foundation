@@ -1,0 +1,50 @@
+# Approved security exceptions.
+#
+# An entry here stops one specific finding from blocking one specific thing, for
+# a bounded time. It is not a suppression list and it is not a place to silence
+# a scanner that is being inconvenient.
+#
+# THE FILE IS INTENTIONALLY EMPTY. Nothing currently in either repository has an
+# approved exception. The known blocking findings are being FIXED, not excepted:
+# see the remediation pull requests referenced in docs/security/SECURITY_CI.md.
+#
+# Every entry must carry all of these, or the gate fails with
+# `invalid_exception` — a half-filled exception is treated as no exception:
+#
+#   id        stable identifier for the exception itself, e.g. EXC-2026-001
+#   scope     what it applies to. `finding` is required and must be a specific
+#             advisory or rule id (CVE-…, GHSA-…, DS-…, a gitleaks rule).
+#             Narrow it further with component / version / path / branch /
+#             repository. A scope with only `finding` applies repository-wide,
+#             which is almost always wider than intended.
+#   reason    why this is acceptable, in terms of evidence — which exploitation
+#             prerequisite is absent, or which compensating control applies.
+#             "Not exploitable" with no evidence is not a reason.
+#   owner     a real GitHub login who is accountable for closing it.
+#             Verified logins for these repositories: Mohamed-Hamza,
+#             Hamed-mohamed-Git. Never invent one.
+#   approval  a link to the issue, PR review or written approval. The gate does
+#             not verify the link resolves, so fabricating one is falsifying a
+#             security record.
+#   expires   ISO-8601 date. Maximum 90 days out (policy.yml: max_duration_days).
+#             Past its expiry the finding blocks again automatically — nobody has
+#             to remember to remove the entry.
+#
+# Worked example of the shape (commented out — this is NOT an active exception):
+#
+# exceptions:
+#   - id: EXC-2026-001
+#     scope:
+#       finding: CVE-0000-00000
+#       component: example-package
+#       version: "1.2.3"
+#       repository: Manara-Education/backend-foundation
+#     reason: >-
+#       The vulnerable code path is the SMTP transport, which this service does
+#       not construct: mail is sent through the Resend HTTP client. Verified by
+#       <link to the call-graph evidence>.
+#     owner: Mohamed-Hamza
+#     approval: https://github.com/Manara-Education/backend-foundation/pull/000#pullrequestreview-000
+#     expires: 2026-01-01
+
+exceptions: []

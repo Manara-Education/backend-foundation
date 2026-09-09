@@ -1,0 +1,194 @@
+# Manara shared security policy.
+#
+# This file is the contract. It is byte-for-byte identical in
+# Manara-Education/backend-foundation and Manara-Education/frontend-foundation,
+# except for the `repository` and `stack` keys at the bottom. Changing a
+# threshold here changes what blocks a merge, so this file is owned by
+# CODEOWNERS and can only move through a reviewed pull request.
+#
+# It is READ by .github/security/evaluate.py, which is the only thing that
+# decides whether the Security Gate passes. Nothing in the workflow YAML makes
+# that judgement, so the policy cannot drift away from the enforcement.
+
+version: 1
+
+# ---------------------------------------------------------------------------
+# What blocks
+# ---------------------------------------------------------------------------
+#
+# `block_at_or_above` is evaluated against the NORMALISED severity, not the raw
+# label a given scanner happened to print. The mapping that gets every tool onto
+# one scale lives under `severity_mapping` below, because "HIGH" does not mean
+# the same thing to Trivy, osv-scanner, CodeQL and gitleaks.
+blocking:
+  block_at_or_above: HIGH
+
+  # A finding on the CISA Known Exploited Vulnerabilities catalogue blocks no
+  # matter what severity anyone assigned it. Something being exploited in the
+  # wild right now outranks a CVSS base score computed in the abstract.
+  kev_always_blocks: true
+
+  # A detected secret blocks outright. There is no severity negotiation here:
+  # the remedy for a false positive is a narrowly scoped, approved entry in
+  # exceptions.yml, not a lowered threshold.
+  secrets_always_block: true
+
+  # These are the failure modes that a naive gate turns into a green check.
+  # Each one is an explicit, separate reason to fail.
+  fail_on:
+    scanner_error: true             # a scanner exited non-zero for any reason other than "found findings"
+    missing_report: true            # a required report was never written
+    unparseable_report: true        # a report exists but is not valid JSON/SARIF
+    stale_intelligence: true        # the freshness window below was exceeded
+    missing_intelligence: true      # a mandatory source could not be retrieved at all
+    unexpected_skip: true           # a required job was skipped outside the documented allowances
+    expired_exception: true         # an exceptions.yml entry is past its expiry
+    invalid_exception: true         # an exceptions.yml entry is malformed or unapproved
+
+# ---------------------------------------------------------------------------
+# Severity mapping between tools
+# ---------------------------------------------------------------------------
+#
+# Normalised scale: CRITICAL > HIGH > MEDIUM > LOW > INFO.
+#
+# The rule for anything that reports a CVSS vector rather than a word is the
+# CVSS v3.1 qualitative scale, which is what every one of these tools is itself
+# derived from: 9.0-10.0 CRITICAL, 7.0-8.9 HIGH, 4.0-6.9 MEDIUM, 0.1-3.9 LOW.
+severity_mapping:
+  # osv-scanner surfaces the GitHub Advisory severity word in
+  # database_specific.severity, and a CVSS vector in severity[]. The word is
+  # preferred; the vector is the fallback when the word is absent (OSV records
+  # that did not originate from GHSA often have no word at all).
+  osv-scanner:
+    CRITICAL: CRITICAL
+    HIGH: HIGH
+    MODERATE: MEDIUM      # GHSA says MODERATE where CVSS says MEDIUM
+    MEDIUM: MEDIUM
+    LOW: LOW
+    _fallback: cvss_vector
+
+  # Trivy uses the same five words for vulnerabilities, misconfigurations and
+  # secrets, so this is an identity mapping. It is written out rather than
+  # assumed, so that a future Trivy label change is a visible diff here.
+  trivy:
+    CRITICAL: CRITICAL
+    HIGH: HIGH
+    MEDIUM: MEDIUM
+    LOW: LOW
+    UNKNOWN: MEDIUM       # deliberately NOT "ignore" — see note below
+    _fallback: cvss_vector
+
+  # SARIF (CodeQL, and anything else that emits SARIF) has no severity word of
+  # its own. It has security-severity, a CVSS-like number, on the RULE. The
+  # SARIF spec's `level` (error/warning/note) is about how loud the finding is,
+  # not how dangerous, so security-severity wins whenever it is present.
+  sarif:
+    _primary: security_severity_number
+    error: HIGH           # used only when security-severity is absent
+    warning: MEDIUM
+    note: LOW
+    none: INFO
+
+  # gitleaks does not grade findings. Every one is treated as blocking by
+  # `secrets_always_block` above, so there is nothing to map.
+  gitleaks:
+    _all: CRITICAL
+
+# An UNKNOWN severity maps to MEDIUM rather than being dropped. That is
+# deliberate and it is the conservative direction: MEDIUM stays visible and
+# tracked without blocking, whereas dropping it would silently delete a finding
+# whose severity nobody has scored yet. It is NOT mapped to HIGH, because
+# blocking on every unscored record would make the gate unusable and would push
+# people toward suppressions, which is worse.
+
+# ---------------------------------------------------------------------------
+# Vulnerability intelligence freshness
+# ---------------------------------------------------------------------------
+intelligence:
+  # Maximum age of the data a scan is allowed to reason from. Exceeding this
+  # fails the gate — a scan against a three-day-old database that reports
+  # "no findings" is not evidence of anything.
+  max_age_hours: 24
+
+  # Retrieval is bounded. A source that hangs must fail the gate, not stall the
+  # merge queue for an hour.
+  retry_attempts: 3
+  retry_backoff_seconds: 5
+  timeout_seconds: 120
+
+  # Mandatory sources. If one of these cannot be established, the gate fails
+  # with `missing_intelligence` — it never degrades to an empty passing report.
+  mandatory:
+    - osv
+    - ghsa
+    - trivy-db
+    - cisa-kev
+
+  # Advisory sources. Their absence is recorded as a coverage limitation in the
+  # report and does not by itself fail the gate.
+  advisory:
+    - nvd
+
+# ---------------------------------------------------------------------------
+# What "fresh" cannot mean
+# ---------------------------------------------------------------------------
+#
+# Retrieval freshness is not publication completeness. Everything above proves
+# only that the data was DOWNLOADED within the window and records which
+# revision was used. It cannot prove that every vulnerability disclosed in that
+# window has been published upstream, ingested by OSV, or matched to our
+# inventory. That residual gap is real, is documented in
+# docs/security/SECURITY_CI.md, and is why the daily scheduled scan exists at
+# all: it is the mechanism that catches what the pre-merge scan could not have
+# known. It is not closed by any setting in this file.
+
+# ---------------------------------------------------------------------------
+# Coverage each repository must produce
+# ---------------------------------------------------------------------------
+#
+# evaluate.py fails with `missing_report` if a report named here is absent. This
+# is what stops "the scanner silently stopped running" from looking like "the
+# scanner found nothing".
+required_reports:
+  - id: deps-osv
+    description: Full dependency scan (direct + transitive) against OSV.
+    events: [pull_request, push, schedule, workflow_dispatch]
+  - id: deps-trivy
+    description: Second-opinion dependency scan; covers ecosystems and advisories OSV lags on.
+    events: [pull_request, push, schedule, workflow_dispatch]
+  - id: sast-codeql
+    description: CodeQL static analysis for this repository's languages.
+    events: [pull_request, push, schedule, workflow_dispatch]
+  - id: secrets-gitleaks
+    description: Secret scan of tracked files, plus the PR commit range on pull_request.
+    events: [pull_request, push, schedule, workflow_dispatch]
+  - id: config-trivy
+    description: Dockerfile, Compose and GitHub Actions workflow configuration scan.
+    events: [pull_request, push, schedule, workflow_dispatch]
+  - id: image-trivy
+    description: Container image scan — OS packages and application layers of the built image.
+    events: [pull_request, push, schedule, workflow_dispatch]
+
+  # PR-only by construction: there is no "difference" to review on a push to a
+  # branch. This is the ONE documented non-applicability, and evaluate.py
+  # encodes exactly this list rather than accepting any skip it is handed.
+  - id: deps-diff-review
+    description: GitHub dependency-review of the PR's dependency difference.
+    events: [pull_request]
+
+# ---------------------------------------------------------------------------
+# Findings register
+# ---------------------------------------------------------------------------
+register:
+  # Findings persist here across runs so that a finding seen yesterday is
+  # updated rather than duplicated, and so that first_seen survives.
+  path: .github/security/findings.json
+
+  # A finding is only cleared when the assessed revision no longer contains it.
+  # Clearing is per-branch: a fix on develop does not clear main.
+  clear_only_when_absent_from_assessed_revision: true
+
+exceptions:
+  path: .github/security/exceptions.yml
+  max_duration_days: 90
+  require_fields: [id, scope, reason, owner, approval, expires]

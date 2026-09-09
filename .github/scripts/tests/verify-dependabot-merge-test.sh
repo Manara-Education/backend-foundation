@@ -427,6 +427,33 @@ for job_id, job in (wf.get("jobs") or {}).items():
               not EXECUTES.search(uses) and not EXECUTES.search(run),
               "a privileged job must not execute project code")
 
+# The Security Gate has to be one of the required checks, by its exact name.
+# Asserted here rather than trusted to review because the failure is silent: drop
+# the argument and every Dependabot pull request still merges, just without
+# anything having scanned it. A dependency bump is the change most likely to
+# introduce a known vulnerability and the one this repository merges without a
+# human reading it, so this is the check that matters most on exactly these PRs.
+#
+# The name string is a cross-file contract with the `Security Gate` job in
+# .github/workflows/security.yml. If that job is ever renamed, this test fails
+# and points at both ends of the contract.
+verifier_runs = [
+    str(step.get("run", ""))
+    for job in wf["jobs"].values()
+    for step in job.get("steps", [])
+    if "verify-dependabot-merge.sh" in str(step.get("run", ""))
+]
+check("the merge gate is actually invoked", len(verifier_runs) == 1,
+      f"steps calling verify-dependabot-merge.sh: {len(verifier_runs)}")
+if verifier_runs:
+    invocation = verifier_runs[0]
+    for required in ('Build and test',
+                     'Build the container image',
+                     'Security Gate'):
+        check(f"'{required}' is required before auto-merge",
+              f'--check "{required}"' in invocation,
+              "the argument is missing, so this check would not be waited on at all")
+
 for status, name, detail in results:
     print(f"{status} {name}" + (f" :: {detail}" if status == "FAIL" and detail else ""))
 PY

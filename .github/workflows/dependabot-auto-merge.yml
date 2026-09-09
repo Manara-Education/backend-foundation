@@ -34,9 +34,24 @@
 #   if the head has moved, so a commit pushed after verification cannot merge on
 #   the strength of an earlier commit's green ticks.
 #
-#   The check names below are a contract with ci.yml. Renaming a CI job means
-#   renaming it here in the same pull request, or every dependency update will
-#   be held until someone notices — which is the intended failure direction.
+#   The check names below are a contract with ci.yml and security.yml. Renaming
+#   one of those jobs means renaming it here in the same pull request, or every
+#   dependency update will be held until someone notices — which is the intended
+#   failure direction.
+#
+#   `Security Gate` is in that list for a reason worth spelling out. A
+#   dependency bump is the single most likely pull request to introduce a known
+#   vulnerability, and it is also the one nobody reads: it merges itself. CI
+#   proves the new version still compiles and passes the tests, which says
+#   nothing at all about whether an advisory was published against it. Without
+#   the gate in this list, `./mvnw verify` going green would be the entire
+#   safety argument for shipping a dependency change unread.
+#
+#   The verifier refuses on absent, skipped, neutral and every non-success
+#   conclusion alike, so a Security Gate that never ran holds the pull request
+#   instead of waving it through — which was the specific hole here before the
+#   named-check verifier replaced the "nothing is pending, therefore green"
+#   sweep.
 #
 # This workflow never runs code from the pull request, and that claim needs
 # stating carefully, because the trigger is `pull_request_target`.
@@ -85,7 +100,11 @@ jobs:
   dependabot:
     name: Dependabot auto-merge
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Raised from 45 with the Security Gate. The gate runs CodeQL and builds the
+    # container image, so it reports materially later than CI does, and a job
+    # timeout shorter than the thing it is waiting for turns "the gate is still
+    # running" into "refused" on every single dependency update.
+    timeout-minutes: 60
 
     # Least privilege, and every scope is used:
     #   contents: write       -> completing the merge, reading the base commit
@@ -170,14 +189,23 @@ jobs:
         # repository's CI job is called "Install, type-check and build", and a
         # comma-separated list would split that name in half and then refuse
         # every update for want of a check called "Install".
+        #
+        # --timeout-seconds is raised from the script's 1800s default because
+        # `Security Gate` fans out over seven scanners, one of which runs CodeQL
+        # and another of which builds the container image. 45 minutes sits
+        # inside this job's 60-minute limit, so the script refuses on its own
+        # terms — with a message naming the check it was still waiting on —
+        # rather than being killed mid-poll with no explanation.
         run: |
           .github/scripts/verify-dependabot-merge.sh \
             --repo "$REPO" \
             --pr "$PR_NUMBER" \
             --expected-head "$HEAD_SHA" \
             --producer github-actions \
+            --timeout-seconds 2700 \
             --check "Build and test" \
-            --check "Build the container image"
+            --check "Build the container image" \
+            --check "Security Gate"
 
       # ---------------------------------------------------------------------
       # Everything else: route to a human. Never merged by this workflow.
