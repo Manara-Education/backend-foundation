@@ -58,6 +58,40 @@ mk_clean() {
     "$fresh" > "$d/intel/config-trivy.trivydb.json"
 }
 
+# The reported fix must never be a downgrade. Checked directly rather than
+# through a fixture, because the failure is silent: the finding is still
+# correct, only the remediation advice is wrong, and "upgrade to 1.25.11" from
+# 1.26.3 reads plausibly enough to be followed.
+python3 - "$SHARED/evaluate.py" <<'PYEOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("ev", sys.argv[1])
+ev = importlib.util.module_from_spec(spec); spec.loader.exec_module(ev)
+cases = [("11.0.24", ["11.0.25", "10.1.58", "9.0.121"], "11.0.25"),
+         ("1.26.3",  ["1.25.11", "1.26.4"],             "1.26.4"),
+         ("1.26.3",  ["1.25.13", "1.26.6"],             "1.26.6"),
+         ("8.19.0-r0", ["8.22.0-r0"],                   "8.22.0-r0"),
+         # A SINGLE candidate below the installed version. This is the case a
+         # `len(candidates) == 1` shortcut used to wave through, and it is not
+         # hypothetical: grpc v1.83.1 against GHSA-2v4p-qf9q-27wj, whose fix
+         # for that branch is 1.83.2, was reported by the scanner with the sole
+         # fixed version "1.82.2" and printed by the gate as the remediation.
+         ("1.83.1",  ["1.82.2"],                        ""),
+         # ...and the same advisory with both branch fixes present must pick
+         # the one on the branch actually in use.
+         ("1.83.1",  ["1.82.2", "1.83.2"],              "1.83.2"),
+         # One candidate ABOVE the installed version is still a real upgrade;
+         # removing the shortcut must not have broken the ordinary case.
+         ("1.81.0",  ["1.82.2"],                        "1.82.2"),
+         ("0.55.0",  ["0.56.0"],                        "0.56.0")]
+bad = [(i, c, ev.select_fixed_version(i, c), w) for i, c, w in cases
+       if ev.select_fixed_version(i, c) != w]
+for i, c, got, want in bad:
+    print(f"  FAIL  fixed-version for {i} from {c}: got {got}, want {want}")
+print("  ok    the reported fix is never a downgrade" if not bad else "")
+raise SystemExit(1 if bad else 0)
+PYEOF
+if [ $? -eq 0 ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
+
 echo "Security Gate decision logic"
 echo
 
@@ -250,6 +284,96 @@ if [ "$still_main" = "3" ] && [ "$gone_dev" = "0" ]; then
   printf '  \033[32mPASS\033[0m  %-56s main=%s develop=%s\n' "fix on develop does not clear main" "$still_main" "$gone_dev"; PASS=$((PASS+1))
 else
   printf '  \033[31mFAIL\033[0m  %-56s main=%s develop=%s\n' "fix on develop does not clear main" "$still_main" "$gone_dev"; FAIL=$((FAIL+1))
+fi
+
+# 10 — the verdict describes the decision and is never absent
+#
+# The notifier's entire job hangs on this file existing. A run that could not be
+# evaluated is exactly when a verdict matters most and exactly when it is
+# easiest to forget to write one, so the "could not be evaluated" cases are
+# checked here rather than assumed.
+verdict_case() {
+  local name="$1" expected_exit="$2" expected_status="$3" dir="$4"; shift 4
+  rm -f "$dir/verdict.json"
+  GITHUB_RUN_ID=4242 GITHUB_RUN_ATTEMPT=3 GITHUB_REPOSITORY=Manara-Education/backend-foundation \
+  python3 "$SHARED/evaluate.py" \
+    --reports-dir "$dir" --manifest "$dir/manifest.json" \
+    --policy "${POL:-$SHARED/policy.yml}" --exceptions "$SHARED/exceptions.yml" \
+    --event "${EVENT:-push}" --ref develop --revision abc1234 \
+    --repository Manara-Education/backend-foundation --workspace "$REPO_ROOT" \
+    --register-out "$dir/findings.json" --report-out "$dir/report.md" \
+    --verdict-out "$dir/verdict.json" --target-slug t0 --target-name develop >/dev/null 2>&1
+  local code=$?
+  local got
+  got="$(python3 - "$dir/verdict.json" "$code" <<'PY' 2>/dev/null
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["schema_version"] == 1, "schema_version"
+assert d["exit_code"] == int(sys.argv[2]), "exit_code does not match the process exit code"
+assert d["run_id"] == "4242" and d["run_attempt"] == 3, "run identity"
+assert isinstance(d["counts"]["by_severity"], dict), "counts"
+assert d["policy_revision"].startswith("sha256:") or d["policy_revision"] == "unavailable"
+print(d["status"])
+PY
+)"
+  if [ "$code" = "$expected_exit" ] && [ "$got" = "$expected_status" ]; then
+    printf '  \033[32mPASS\033[0m  %-56s %s/exit=%s\n' "$name" "$got" "$code"; PASS=$((PASS+1))
+  else
+    printf '  \033[31mFAIL\033[0m  %-56s status=%s exit=%s (wanted %s/%s)\n' \
+      "$name" "${got:-<no verdict>}" "$code" "$expected_status" "$expected_exit"; FAIL=$((FAIL+1))
+  fi
+}
+
+VP="$WORK/vpass"; mk_clean "$VP"
+verdict_case "a passing gate writes a PASS verdict" 0 PASS "$VP"
+
+VB="$WORK/vblock"; mk_clean "$VB"; cp "$OSV_REAL" "$VB/deps-osv.osv.json"
+verdict_case "a blocked gate writes a BLOCKED verdict" 1 BLOCKED "$VB"
+
+VE="$WORK/verror"; mk_clean "$VE"; rm "$VE/manifest.json"
+verdict_case "a gate that could not be evaluated still writes ERROR" 2 ERROR "$VE"
+
+VNP="$WORK/vnopolicy"; mk_clean "$VNP"
+POL="$WORK/policy-does-not-exist.yml" \
+  verdict_case "an unreadable policy still writes an ERROR verdict" 2 ERROR "$VNP"
+
+# The verdict must not be able to change the decision. Same fixture, run with
+# and without --verdict-out: identical exit code, identical register.
+VN="$WORK/vnoop"; mk_clean "$VN"; cp "$OSV_REAL" "$VN/deps-osv.osv.json"
+python3 "$SHARED/evaluate.py" --reports-dir "$VN" --manifest "$VN/manifest.json" \
+  --policy "$SHARED/policy.yml" --exceptions "$SHARED/exceptions.yml" --event push \
+  --ref develop --revision abc1234 --repository Manara-Education/backend-foundation \
+  --workspace "$REPO_ROOT" --register-out "$VN/a.json" --report-out "$VN/a.md" >/dev/null 2>&1
+rc_without=$?
+python3 "$SHARED/evaluate.py" --reports-dir "$VN" --manifest "$VN/manifest.json" \
+  --policy "$SHARED/policy.yml" --exceptions "$SHARED/exceptions.yml" --event push \
+  --ref develop --revision abc1234 --repository Manara-Education/backend-foundation \
+  --workspace "$REPO_ROOT" --register-out "$VN/b.json" --report-out "$VN/b.md" \
+  --verdict-out "$VN/b-verdict.json" >/dev/null 2>&1
+rc_with=$?
+# Timestamps are stripped from BOTH documents before comparing, because the two
+# runs happen a moment apart and every one of these fields would differ for that
+# reason alone. Written as an explicit set rather than as a chain of pops: the
+# first version of this check used
+#     f.pop('last_assessed', None) or f.pop('first_seen', None)
+# which short-circuits — when last_assessed is truthy, and in a real register it
+# always is, first_seen was never popped and the comparison failed on the clock
+# rather than on the register. That reported a regression in evaluate.py which
+# did not exist.
+same_reg=$(python3 -c "
+import json
+VOLATILE = {'updated_at', 'generated_at', 'last_assessed', 'first_seen'}
+def strip(d):
+    out = {k: v for k, v in d.items() if k not in VOLATILE}
+    out['findings'] = [{k: v for k, v in f.items() if k not in VOLATILE}
+                       for f in d.get('findings', [])]
+    return out
+a=strip(json.load(open('$VN/a.json'))); b=strip(json.load(open('$VN/b.json')))
+print('same' if json.dumps(a,sort_keys=True)==json.dumps(b,sort_keys=True) else 'different')")
+if [ "$rc_without" = "$rc_with" ] && [ "$same_reg" = "same" ]; then
+  printf '  \033[32mPASS\033[0m  %-56s exit=%s both ways\n' "asking for a verdict changes no outcome" "$rc_with"; PASS=$((PASS+1))
+else
+  printf '  \033[31mFAIL\033[0m  %-56s %s vs %s, register %s\n' "asking for a verdict changes no outcome" "$rc_without" "$rc_with" "$same_reg"; FAIL=$((FAIL+1))
 fi
 
 echo

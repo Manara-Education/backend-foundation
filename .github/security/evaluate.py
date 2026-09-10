@@ -23,10 +23,26 @@ Outputs:
                         updated in place, first_seen preserved, resolved findings
                         cleared ONLY for the revision that no longer contains them.
   report.md             human-readable summary for the job summary and the PR.
+  verdict.json          the same decision, machine-readable and versioned, for
+                        consumers that must not scrape Markdown — today that is
+                        .github/security/notify.py. See "The verdict" below.
   exit code             0 = pass, 1 = blocked, 2 = the gate could not be evaluated.
 
 Exit 2 matters: "I could not assess this" is not "this is fine". Both are
 non-zero, so both block, but they read differently in the log and in the report.
+
+THE VERDICT IS A DESCRIPTION OF THE DECISION, NEVER AN INPUT TO IT.
+
+verdict.json records what was decided and on what evidence. Nothing reads it
+back into this program, and adding it changed no exit code and no pass/fail
+rule. Its `status` field is derived from the exit code, not the other way round:
+
+    exit 0 -> "PASS"      exit 1 -> "BLOCKED"      exit 2 -> "ERROR"
+
+It is written on EVERY path, including the paths that fail before a policy has
+even been read. A run that could not be evaluated still produces a verdict
+saying so, because a notifier that receives nothing cannot tell "clean" from
+"the evaluator died", and those are the two cases it most needs to separate.
 """
 
 from __future__ import annotations
@@ -49,6 +65,14 @@ except ImportError:  # pragma: no cover - the workflow pins and installs PyYAML
 
 
 SEVERITY_ORDER = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
+
+# Bumped only when a field is removed or its meaning changes. Consumers refuse a
+# document whose schema_version they do not know, so adding a field is safe and
+# taking one away is not.
+VERDICT_SCHEMA_VERSION = 1
+
+# Exit code -> verdict word. One table, so the two can never drift.
+STATUS_BY_EXIT = {0: "PASS", 1: "BLOCKED", 2: "ERROR"}
 
 
 def sev_rank(sev: str) -> int:
@@ -240,16 +264,53 @@ def select_fixed_version(installed: str, candidates: list[str]) -> str:
     clean = [c.strip() for c in candidates if c and c.strip()]
     if not clean:
         return ""
-    if len(clean) == 1:
-        return clean[0]
-    installed_major = version_parts(installed)[0]
-    same_branch = [c for c in clean if version_parts(c)[0] == installed_major]
-    if same_branch:
-        return min(same_branch, key=version_parts)
-    # Nothing on this branch is fixed. Report the lowest fix above the installed
-    # version rather than silently claiming there is no fix at all.
-    above = [c for c in clean if version_parts(c) > version_parts(installed)]
-    return min(above, key=version_parts) if above else clean[0]
+
+    # NO SINGLE-CANDIDATE SHORTCUT.
+    #
+    # There used to be one — `if len(clean) == 1: return clean[0]` — on the
+    # reasoning that one candidate needs no choosing. It does, and this is
+    # exactly how a downgrade got printed after the multi-candidate case had
+    # already been fixed:
+    #
+    #   grpc v1.83.1, advisory GHSA-2v4p-qf9q-27wj, scanner reported the single
+    #   fix "1.82.2" -> the gate printed "fixed in 1.82.2", a DOWNGRADE.
+    #
+    # The advisory does fix that branch in 1.83.2; the scanner simply reported
+    # one of the three fixed versions. One candidate that is older than what is
+    # installed is not an upgrade, however few candidates there are.
+
+    # The lowest fix at or above what is installed. Simply that.
+    #
+    # An earlier version of this compared only the FIRST version component to
+    # decide which release branch a fix belonged to. That works for Tomcat,
+    # where the branch is 11.x, and is wrong for anything whose branch is
+    # major.minor: for Go stdlib 1.26.3 with fixes "1.25.11, 1.26.4" it treated
+    # both as the same branch and reported 1.25.11 — telling the reader to
+    # DOWNGRADE, which is worse than saying nothing at all.
+    #
+    # Ordering by the numeric components and taking the smallest one that is not
+    # below the installed version needs no notion of a branch and cannot produce
+    # a downgrade.
+    here = version_parts(installed)
+    above = [c for c in clean if version_parts(c) >= here]
+    if above:
+        return min(above, key=version_parts)
+
+    # Every listed fix is older than what is installed, so NONE of them is an
+    # upgrade and there is nothing here to recommend.
+    #
+    # Empty is returned rather than the highest candidate, and that is a
+    # deliberate reversal of what this used to do. Naming a lower version reads
+    # as advice — "fixed in 1.82.2" next to an installed 1.83.1 invites someone
+    # to go and install 1.82.2, which would take the service backwards and still
+    # leave it vulnerable. The report renders empty as "no verified upgrade
+    # available", which is both true and actionable, and the candidates remain
+    # on the record in all_fixed_versions for whoever is on the branch they fix.
+    #
+    # This does NOT change whether the finding blocks. It is still a blocking
+    # finding with no available fix, which is the policy's decision to make, not
+    # this function's.
+    return ""
 
 
 WORKSPACE = ""
@@ -541,6 +602,25 @@ class Gate:
         self.findings: list[Finding] = []
         self.kev_ids: set[str] = set()
         self.manifest: dict = {}
+        # Bookkeeping for verdict.json only. None of it participates in the
+        # decision; it exists so the verdict can say WHY, and so a notifier can
+        # state a coverage gap instead of implying full coverage.
+        self.report_status: dict[str, dict] = {}
+        self.coverage_gaps: list[dict] = []
+        self.image_digests: set[str] = set()
+
+    def gap(self, kind: str, detail: str, hard: bool = True) -> None:
+        """Record a limit on what this run actually covered.
+
+        `hard` distinguishes "a required assessment did not happen" from "an
+        advisory enrichment source was absent". Only the former clears
+        coverage_complete; both are reported.
+        """
+        self.coverage_gaps.append({"kind": kind, "detail": detail, "hard": hard})
+
+    @property
+    def coverage_complete(self) -> bool:
+        return not any(g["hard"] for g in self.coverage_gaps)
 
     # -- intelligence -------------------------------------------------------
     def check_intelligence(self) -> None:
@@ -551,11 +631,13 @@ class Gate:
                 "Intelligence manifest is missing. No scan result can be trusted without "
                 "a record of which data it used."
             )
+            self.gap("intelligence", "No intelligence manifest was produced for this target.")
             return
         try:
             self.manifest = json.loads(path.read_text())
         except json.JSONDecodeError as exc:
             self.errors.append(f"Intelligence manifest is not valid JSON: {exc}")
+            self.gap("intelligence", f"The intelligence manifest is unreadable: {exc}")
             return
 
         max_age = float(cfg.get("max_age_hours", 24))
@@ -568,16 +650,23 @@ class Gate:
                     f"Mandatory intelligence source '{src_id}' unavailable ({reason}). "
                     f"Refusing to report an empty result as success."
                 )
+                self.gap("intelligence",
+                         f"Mandatory source '{src_id}' was not retrieved ({reason}).")
                 continue
             retrieved = parse_ts(entry.get("retrieved_at"))
             if retrieved is None:
                 self.errors.append(f"Source '{src_id}' recorded no retrieval time.")
+                self.gap("intelligence",
+                         f"Mandatory source '{src_id}' recorded no retrieval time.")
                 continue
             age_h = (now - retrieved).total_seconds() / 3600.0
             if age_h > max_age:
                 self.errors.append(
                     f"Source '{src_id}' is {age_h:.1f}h old; policy allows {max_age:.0f}h."
                 )
+                self.gap("intelligence",
+                         f"Mandatory source '{src_id}' is {age_h:.1f}h old; policy allows "
+                         f"{max_age:.0f}h.")
             else:
                 self.notes.append(
                     f"{src_id}: retrieved {age_h:.1f}h ago"
@@ -592,6 +681,11 @@ class Gate:
                     f"COVERAGE LIMITATION — advisory source '{src_id}' was not retrieved; "
                     f"enrichment from it is absent from this run."
                 )
+                # Soft: policy does not block on it, so it must not be reported
+                # as an incomplete assessment — only as a narrower one.
+                self.gap("advisory-source",
+                         f"Advisory source '{src_id}' was not retrieved; its enrichment is "
+                         f"absent from this run.", hard=False)
 
         kev = (self.manifest.get("sources") or {}).get("cisa-kev") or {}
         self.kev_ids = {c.upper() for c in (kev.get("kev_cve_ids") or [])}
@@ -610,6 +704,18 @@ class Gate:
             status_file = status_dir / f"{rid}.status"
             status = status_file.read_text().strip() if status_file.is_file() else "missing"
 
+            # Recorded for verdict.json before any branch below returns, so a
+            # scanner is never silently absent from the verdict's scanner list.
+            record = self.report_status[rid] = {
+                "report_id": rid,
+                "description": spec.get("description", ""),
+                "applicable": applicable,
+                "applicable_events": applicable_events,
+                "job_result": status,
+                "status": "unknown",
+                "reports": [],
+            }
+
             if not applicable:
                 # The single documented non-applicability. It is allowed only
                 # because policy.yml lists the events this report applies to —
@@ -618,6 +724,7 @@ class Gate:
                     f"{rid}: not applicable to event '{event}' (policy declares "
                     f"events {applicable_events})."
                 )
+                record["status"] = "not-applicable"
                 continue
 
             if status in ("failure", "cancelled", "timed_out"):
@@ -626,18 +733,27 @@ class Gate:
                         f"{rid}: the scanner job ended '{status}'. A scanner that did not "
                         f"finish has not cleared anything."
                     )
+                record["status"] = "did-not-finish"
+                self.gap("scanner", f"{rid}: the scanner job ended '{status}', so this run "
+                                    f"carries no result from it.")
                 continue
             if status == "skipped":
                 if self.fail_on.get("unexpected_skip", True):
                     self.blocks.append(
                         f"{rid}: required for event '{event}' but the job was skipped."
                     )
+                record["status"] = "skipped"
+                self.gap("scanner", f"{rid}: required for event '{event}' but the job was "
+                                    f"skipped, so it scanned nothing.")
                 continue
             if status == "missing":
                 if self.fail_on.get("missing_report", True):
                     self.blocks.append(
                         f"{rid}: no job status was recorded. The gate will not assume success."
                     )
+                record["status"] = "no-status"
+                self.gap("scanner", f"{rid}: no job status was recorded, so it cannot be shown "
+                                    f"to have run.")
                 continue
 
             self._check_scanner_database(rid, reports_dir)
@@ -649,8 +765,12 @@ class Gate:
                         f"{rid}: the job reported '{status}' but wrote no report. "
                         f"A missing report is a failure, not an empty result."
                     )
+                record["status"] = "no-report"
+                self.gap("scanner", f"{rid}: the job reported '{status}' but wrote no report.")
                 continue
 
+            record["status"] = "reported"
+            record["reports"] = [p.name for p in matches]
             for path in matches:
                 self._ingest(rid, path)
 
@@ -664,6 +784,7 @@ class Gate:
         actually used. Without this, a Trivy job could quietly scan against a
         week-old database and still report a clean result.
         """
+        record = self.report_status.setdefault(rid, {"report_id": rid})
         frag = reports_dir / "intel" / f"{rid}.trivydb.json"
         if not frag.is_file():
             # Only Trivy-backed reports are expected to produce one.
@@ -672,11 +793,16 @@ class Gate:
                     f"{rid}: no database revision was recorded for this scanner job, so "
                     f"the data it used cannot be shown to be fresh."
                 )
+                self.gap("scanner-database",
+                         f"{rid}: recorded no database revision, so the data it used cannot "
+                         f"be shown to be fresh.")
             return
         try:
             info = json.loads(frag.read_text())
         except json.JSONDecodeError as exc:
             self.blocks.append(f"{rid}: recorded database revision is unreadable ({exc}).")
+            self.gap("scanner-database",
+                     f"{rid}: the recorded database revision is unreadable ({exc}).")
             return
         # A configuration scan does not consult the vulnerability database at
         # all — `trivy config` evaluates the misconfiguration CHECK BUNDLE, and
@@ -697,7 +823,12 @@ class Gate:
                     f"{rid}: the scanner recorded no misconfiguration check bundle, so the "
                     f"rules it applied cannot be identified."
                 )
+                self.gap("scanner-database",
+                         f"{rid}: recorded no misconfiguration check bundle, so the rules it "
+                         f"applied cannot be identified.")
                 return
+            record["database"] = {"kind": "trivy-check-bundle", "digest": str(digest),
+                                  "downloaded_at": bundle.get("DownloadedAt")}
             # The bundle carries no upstream build timestamp, only when it was
             # fetched, so this records provenance rather than asserting an
             # upstream freshness it cannot know. Stated plainly here so nobody
@@ -712,14 +843,22 @@ class Gate:
         updated = parse_ts(vdb.get("UpdatedAt"))
         if updated is None:
             self.blocks.append(f"{rid}: the scanner reported no vulnerability database.")
+            self.gap("scanner-database",
+                     f"{rid}: reported no vulnerability database, so what it compared against "
+                     f"is unknown.")
             return
         max_age = float((self.policy.get("intelligence", {}) or {}).get("max_age_hours", 24))
         age_h = (utcnow() - updated).total_seconds() / 3600.0
+        record["database"] = {"kind": "trivy-vulnerability-db", "version": vdb.get("Version"),
+                              "built_at": vdb.get("UpdatedAt"), "age_hours": round(age_h, 2)}
         if age_h > max_age:
             self.blocks.append(
                 f"{rid}: scanned against a Trivy database built {age_h:.1f}h ago; "
                 f"policy allows {max_age:.0f}h."
             )
+            self.gap("scanner-database",
+                     f"{rid}: scanned against a Trivy database built {age_h:.1f}h ago; policy "
+                     f"allows {max_age:.0f}h.")
         else:
             self.notes.append(
                 f"{rid}: Trivy DB v{vdb.get('Version')} built {vdb.get('UpdatedAt')} "
@@ -732,11 +871,18 @@ class Gate:
         except json.JSONDecodeError as exc:
             if self.fail_on.get("unparseable_report", True):
                 self.blocks.append(f"{rid}: {path.name} is not valid JSON ({exc}).")
+            self.report_status.setdefault(rid, {"report_id": rid})["status"] = "unreadable"
+            self.gap("scanner", f"{rid}: {path.name} is not valid JSON, so its result could "
+                                f"not be read.")
             return
         if doc is None:
             if self.fail_on.get("unparseable_report", True):
                 self.blocks.append(f"{rid}: {path.name} is empty.")
+            self.report_status.setdefault(rid, {"report_id": rid})["status"] = "unreadable"
+            self.gap("scanner", f"{rid}: {path.name} is empty, so its result could not be read.")
             return
+
+        self._record_image_digests(rid, doc)
 
         name = path.name
         try:
@@ -756,6 +902,28 @@ class Gate:
                 self.errors.append(f"{rid}: {name} has no recognised report format.")
         except (KeyError, TypeError, AttributeError) as exc:
             self.errors.append(f"{rid}: {name} could not be parsed ({exc!r}).")
+            self.gap("scanner", f"{rid}: {name} could not be parsed ({exc!r}).")
+
+    def _record_image_digests(self, rid: str, doc: Any) -> None:
+        """Note which image the container scan actually looked at.
+
+        A verdict that says "the image is clean" is worthless without saying
+        WHICH image. Trivy records that in Metadata; anything absent is simply
+        left out rather than guessed at.
+        """
+        if not rid.startswith("image") or not isinstance(doc, dict):
+            return
+        meta = doc.get("Metadata")
+        if not isinstance(meta, dict):
+            return
+        for value in (meta.get("ImageID"),
+                      ((meta.get("ImageConfig") or {}) if isinstance(
+                          meta.get("ImageConfig"), dict) else {}).get("digest")):
+            if isinstance(value, str) and value.strip():
+                self.image_digests.add(value.strip())
+        for value in meta.get("RepoDigests") or []:
+            if isinstance(value, str) and value.strip():
+                self.image_digests.add(value.strip())
 
     # -- exceptions ---------------------------------------------------------
     def validate_exceptions(self) -> list[dict]:
@@ -1004,7 +1172,8 @@ def write_report(path: Path, gate: Gate, findings: list[Finding], verdict: str, 
         for f in sorted(rows, key=lambda x: -sev_rank(x.severity)):
             out.append(
                 f"| {f.severity} | `{f.canonical_id}` | {f.component or '—'} | "
-                f"{f.version or '—'} | {f.fixed_version or '—'} | "
+                f"{f.version or '—'} | "
+                f"{f.fixed_version or ('no verified upgrade available' if f.all_fixed_versions else '—')} | "
                 f"{'yes' if f.kev else 'no'} | `{f.location or '—'}` | {f.detector} |"
             )
         return out + [""]
@@ -1036,6 +1205,214 @@ def write_report(path: Path, gate: Gate, findings: list[Finding], verdict: str, 
     path.write_text("\n".join(lines))
 
 
+# ---------------------------------------------------------------------------
+# The verdict — machine-readable, versioned, and never an input to the decision
+# ---------------------------------------------------------------------------
+
+def _sha256_of(path: str) -> str:
+    """Content digest of a file, or a marker saying why there isn't one.
+
+    Used for policy_revision, which is how a reader of an old verdict can tell
+    whether it was judged by today's policy. A missing or unreadable file gets a
+    marker rather than an empty string, because "" reads as "nobody looked".
+    """
+    try:
+        return "sha256:" + hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return "unavailable"
+
+
+def _none_if_blank(value: Any) -> Any:
+    return value if (value is not None and str(value).strip() != "") else None
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _run_context() -> dict:
+    """Where this ran, taken from the runner's own environment.
+
+    Every one of these is set by GitHub Actions itself, not by anything under a
+    pull request's control.
+    """
+    server = os.environ.get("GITHUB_SERVER_URL", "https://github.com").rstrip("/")
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    run_id = _none_if_blank(os.environ.get("GITHUB_RUN_ID"))
+    attempt_raw = os.environ.get("GITHUB_RUN_ATTEMPT")
+    try:
+        attempt = int(attempt_raw) if attempt_raw else None
+    except ValueError:
+        attempt = None
+    url = None
+    if run_id and repo:
+        url = f"{server}/{repo}/actions/runs/{run_id}"
+        if attempt:
+            url += f"/attempts/{attempt}"
+    return {"run_id": str(run_id) if run_id else None,
+            "run_attempt": attempt,
+            "run_url": url,
+            "workflow": _none_if_blank(os.environ.get("GITHUB_WORKFLOW"))}
+
+
+def _intelligence_block(manifest: dict) -> dict:
+    """Restate the manifest's sources under stable keys.
+
+    The manifest names its sources with the ids policy.yml uses (`trivy-db`,
+    `cisa-kev`). The verdict is a published contract, so it uses fixed keys and
+    keeps the manifest's own id inside each entry.
+    """
+    sources = (manifest.get("sources") or {}) if isinstance(manifest, dict) else {}
+
+    def entry(src_id: str, extra_keys: tuple[str, ...] = ()) -> dict:
+        raw = sources.get(src_id)
+        if not isinstance(raw, dict):
+            return {"source": src_id, "status": "absent", "retrieved_at": None,
+                    "upstream_revision": None}
+        out = {"source": src_id,
+               "status": raw.get("status", "unknown"),
+               "retrieved_at": _none_if_blank(raw.get("retrieved_at")),
+               "upstream_revision": _none_if_blank(raw.get("upstream_revision")),
+               "error": _none_if_blank(raw.get("error"))}
+        for key in extra_keys:
+            out[key] = raw.get(key)
+        return out
+
+    kev = entry("cisa-kev", ("entry_count", "upstream_published_at", "provider"))
+    # The catalogue itself is thousands of ids; the count is the useful part and
+    # the list is already in the manifest for anyone who needs it.
+    return {
+        "osv": entry("osv"),
+        "ghsa": entry("ghsa"),
+        "trivy_db": entry("trivy-db"),
+        "kev": kev,
+        "advisory": {sid: entry(sid) for sid in sources
+                     if sid not in ("osv", "ghsa", "trivy-db", "cisa-kev")},
+        "manifest_generated_at": _none_if_blank(
+            manifest.get("generated_at") if isinstance(manifest, dict) else None),
+        "caveat": ("Retrieval freshness is not publication completeness. These timestamps "
+                   "record when data was fetched and which revision was used; they cannot "
+                   "show that every disclosure in that window was published upstream."),
+    }
+
+
+def build_verdict(args, gate: Gate | None, findings: list[Finding], code: int,
+                  extra_errors: list[str] | None = None) -> dict:
+    """Describe the decision that was just made. Never influence it.
+
+    `gate` is None on the paths that failed before a Gate could be constructed —
+    an unreadable policy, an unparseable exceptions file, an unhandled crash.
+    Those still produce a verdict, because a notifier receiving nothing cannot
+    distinguish "clean" from "the evaluator died".
+    """
+    errors = list(extra_errors or [])
+    blocks: list[str] = []
+    notes: list[str] = []
+    scanners: list[dict] = []
+    gaps: list[dict] = []
+    manifest: dict = {}
+    image_digests: list[str] = []
+    coverage_complete = False
+    if gate is not None:
+        errors = list(gate.errors) + errors
+        blocks = list(gate.blocks)
+        notes = list(gate.notes)
+        scanners = [gate.report_status[k] for k in sorted(gate.report_status)]
+        gaps = list(gate.coverage_gaps)
+        manifest = gate.manifest
+        image_digests = sorted(gate.image_digests)
+        coverage_complete = gate.coverage_complete
+
+    by_severity = {sev: 0 for sev in SEVERITY_ORDER}
+    blocking = tracked = excepted = kev_count = 0
+    payload: list[dict] = []
+    for f in findings:
+        by_severity[f.severity if f.severity in by_severity else "MEDIUM"] += 1
+        if f.status == "blocking":
+            blocking += 1
+        elif f.status == "tracked":
+            tracked += 1
+        elif f.status == "excepted":
+            excepted += 1
+        if f.kev:
+            kev_count += 1
+        item = f.to_dict()
+        item["blocking"] = f.status == "blocking"
+        payload.append(item)
+    payload.sort(key=lambda d: (not d["blocking"], -sev_rank(d.get("severity", "MEDIUM")),
+                                d.get("id", "")))
+
+    ctx = _run_context()
+    return {
+        "schema_version": VERDICT_SCHEMA_VERSION,
+        "generated_at": utcnow().isoformat(),
+
+        "repository": args.repository,
+        "event": args.event,
+        "ref": args.ref,
+        "revision": args.revision,
+        "target_slug": _none_if_blank(getattr(args, "target_slug", "")),
+        "target_name": _none_if_blank(getattr(args, "target_name", "")) or args.ref,
+
+        "run_id": ctx["run_id"],
+        "run_attempt": ctx["run_attempt"],
+        "run_url": ctx["run_url"],
+        "workflow": ctx["workflow"],
+
+        "pr_number": _int_or_none(getattr(args, "pr_number", "")),
+        "base_ref": _none_if_blank(getattr(args, "base_ref", "")),
+
+        "image_digests": image_digests,
+
+        "policy_revision": _sha256_of(args.policy),
+        "exceptions_revision": _sha256_of(args.exceptions),
+        "evaluator_revision": _sha256_of(__file__),
+
+        "intelligence": _intelligence_block(manifest),
+        "scanners": scanners,
+
+        "coverage_complete": coverage_complete,
+        "coverage_gaps": gaps,
+
+        # Derived from the exit code, never the reverse. See the module docstring.
+        "status": STATUS_BY_EXIT.get(code, "ERROR"),
+        "exit_code": code,
+
+        "counts": {
+            "blocking": blocking,
+            "tracked": tracked,
+            "excepted": excepted,
+            "by_severity": by_severity,
+            "kev": kev_count,
+        },
+        "findings": payload,
+        "blocking_reasons": blocks,
+        "error_reasons": errors,
+        "notes": notes,
+    }
+
+
+def write_verdict(path: Path | None, verdict: dict) -> None:
+    """Write it, and never let writing it change the outcome.
+
+    If this raises, the gate's exit code is already decided and must not move,
+    so the failure is announced and swallowed. A missing verdict is a problem
+    for the notifier — which treats it as ERROR — not a reason to reverse a
+    security decision that has already been correctly made.
+    """
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(verdict, indent=2, sort_keys=False, default=str) + "\n")
+    except (OSError, TypeError, ValueError) as exc:  # pragma: no cover - defensive
+        print(f"::warning title=Security Gate::The verdict could not be written ({exc}). "
+              f"The gate's own result is unaffected.", file=sys.stderr)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--reports-dir", required=True)
@@ -1051,15 +1428,30 @@ def main() -> int:
                     help="checkout root, stripped from reported paths")
     ap.add_argument("--register-out", default="findings.json")
     ap.add_argument("--report-out", default="report.md")
+    # Additive, and optional so that every existing invocation keeps working
+    # unchanged. See "THE VERDICT" in the module docstring.
+    ap.add_argument("--verdict-out", default="",
+                    help="write the machine-readable verdict.json here")
+    ap.add_argument("--target-slug", default="",
+                    help="the workflow's slug for this assessment target")
+    ap.add_argument("--target-name", default="",
+                    help="human label for this target, e.g. 'PR #12 (feat/x)' or 'main'")
+    ap.add_argument("--pr-number", default="",
+                    help="pull request number when this target is one; blank otherwise")
+    ap.add_argument("--base-ref", default="",
+                    help="the branch the pull request targets; blank when not a PR")
     args = ap.parse_args()
 
     global WORKSPACE
     WORKSPACE = args.workspace
+    verdict_path = Path(args.verdict_out) if args.verdict_out else None
 
     try:
         policy = yaml.safe_load(Path(args.policy).read_text()) or {}
     except (OSError, yaml.YAMLError) as exc:
         print(f"::error::Cannot read the security policy: {exc}", file=sys.stderr)
+        write_verdict(verdict_path, build_verdict(
+            args, None, [], 2, [f"Cannot read the security policy: {exc}"]))
         return 2
 
     exceptions: dict = {}
@@ -1069,12 +1461,26 @@ def main() -> int:
             exceptions = yaml.safe_load(exc_path.read_text()) or {}
         except yaml.YAMLError as exc:
             print(f"::error::exceptions.yml is not valid YAML: {exc}", file=sys.stderr)
+            write_verdict(verdict_path, build_verdict(
+                args, None, [], 2, [f"exceptions.yml is not valid YAML: {exc}"]))
             return 2
 
     gate = Gate(policy, exceptions, args)
-    gate.check_intelligence()
-    gate.load_reports()
-    findings = gate.evaluate()
+    try:
+        gate.check_intelligence()
+        gate.load_reports()
+        findings = gate.evaluate()
+    except BaseException as exc:
+        # An evaluator that crashed has assessed nothing. The exit code is left
+        # exactly as it was before this handler existed — the exception
+        # propagates and Python exits non-zero — so no pass/fail behaviour
+        # changes here. All that is added is a verdict saying what happened,
+        # so the notifier reports an incomplete assessment rather than silence.
+        write_verdict(verdict_path, build_verdict(
+            args, gate, [], 1,
+            [f"The evaluator raised an unhandled {type(exc).__name__}: {exc}. Nothing was "
+             f"assessed. The process exit code is 1, which blocks."]))
+        raise
 
     if gate.errors:
         verdict = "COULD NOT BE EVALUATED"
@@ -1100,6 +1506,11 @@ def main() -> int:
         register_path.write_text(json.dumps(merge_register(previous, findings, args), indent=2) + "\n")
 
     write_report(Path(args.report_out), gate, findings, verdict, args)
+    # Written for every code, including 2. The register is not, and that
+    # asymmetry is deliberate: the register is a claim about the code, and a run
+    # that could not be evaluated has no claim to make. The verdict is a claim
+    # about the RUN, and "this run could not be evaluated" is exactly the claim.
+    write_verdict(verdict_path, build_verdict(args, gate, findings, code))
 
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:

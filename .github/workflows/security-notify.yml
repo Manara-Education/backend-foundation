@@ -1,0 +1,225 @@
+# Emails the security report whenever an assessment is blocked, or could not be
+# completed.
+#
+# WHY THIS IS A SEPARATE WORKFLOW AND NOT A JOB IN security.yml
+#
+# security.yml runs pull-request code. It builds the image, resolves npm and
+# Maven dependencies, and runs scanners over a tree the pull request controls —
+# on a fork PR, a tree anyone can write. A job in that workflow that also held
+# the mail API key would put a credential one `npm install` script away from
+# whoever opened the pull request.
+#
+# `workflow_run` is the boundary. This workflow starts only after that one has
+# finished, runs from the DEFAULT BRANCH revision no matter which branch was
+# assessed, and never checks out, sources or executes a single byte of the
+# assessed code. It reads one artifact and treats it as hostile input.
+#
+# Two consequences of `workflow_run` worth stating, because both surprise people:
+#
+#   * It only exists once this file is on the default branch. Merging it to
+#     develop alone activates nothing.
+#   * It is NOT filtered by branch here, deliberately. Filtering to
+#     develop/main is the common recipe and it would silently drop every
+#     feature-branch pull request assessment — which is most of them.
+#
+# THIS WORKFLOW CANNOT CHANGE THE SECURITY VERDICT. The required check is
+# `Security Gate`, decided in the other workflow and already reported by the
+# time this starts. If this job fails, mail did not go out; the gate's answer is
+# untouched. That direction is deliberate and it is the only safe one — a
+# notifier that could turn a blocked gate green would be worse than no notifier.
+name: Security notification
+
+on:
+  workflow_run:
+    workflows: ["Security"]
+    types: [completed]
+  # The manual test path. Sends a synthetic report to the configured recipient
+  # with TEST in the subject; it writes no findings register and touches no
+  # required check.
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "test = send a synthetic TEST email; dry-run = render it and send nothing"
+        type: choice
+        options: [dry-run, test]
+        default: dry-run
+
+# Least privilege. `actions: read` is what downloads the artifact from the
+# source run; `pull-requests: read` resolves the PR the assessment belongs to
+# through the API rather than trusting what the artifact claims. Nothing here
+# can write to the repository, and nothing needs to.
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+concurrency:
+  # Per source run AND attempt: a re-run is a distinct assessment and must not
+  # be cancelled by, or cancel, the notification for the original.
+  group: security-notify-${{ github.event.workflow_run.id || github.run_id }}-${{ github.event.workflow_run.run_attempt || 1 }}
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    name: Email the blocking report
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # The default-branch checkout. `workflow_run` always resolves this file
+      # and this checkout from the default branch, so the notifier's own code is
+      # trusted code — that is the entire security property this workflow rests
+      # on. Nothing below ever fetches the assessed revision.
+      - name: Check out the trusted notifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Refuse anything that did not come from this repository's own Security
+      # workflow before doing any work at all. notify.py checks this again
+      # against the metadata it is handed; this is the cheap outer check.
+      - name: Verify the source run belongs to this repository
+        if: github.event_name == 'workflow_run'
+        env:
+          SOURCE_REPO: ${{ github.event.workflow_run.repository.full_name }}
+          THIS_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ "$SOURCE_REPO" != "$THIS_REPO" ]; then
+            echo "::error title=Security notification::Refusing a workflow_run from '${SOURCE_REPO}', which is not '${THIS_REPO}'."
+            exit 1
+          fi
+          echo "Source run belongs to ${THIS_REPO}."
+
+      # Everything the notifier is allowed to believe about the run is resolved
+      # HERE, from the API, and written to a file. The artifact is data; this is
+      # evidence. notify.py reconciles the two and records a discrepancy rather
+      # than trusting the artifact when they disagree.
+      #
+      # The PR lookup matters most for forks, where the artifact's claimed
+      # number is attacker-controlled and the API's answer is not.
+      - name: Resolve the source run from the API
+        if: github.event_name == 'workflow_run'
+        id: meta
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          run_json="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}")"
+
+          # The artifact is looked up on the SOURCE RUN, never on "the latest
+          # run for this branch" — which is the classic way this pattern is got
+          # wrong, and which would let a later green run's artifact stand in for
+          # the blocked one being reported.
+          arts="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/artifacts" --paginate)"
+
+          python3 - "$run_json" "$arts" > run-metadata.json <<'PY'
+          import json, sys
+          run = json.loads(sys.argv[1])
+          arts = json.loads(sys.argv[2]).get("artifacts", [])
+
+          wanted = [a for a in arts
+                    if a.get("name") == "security-gate-verdict" and not a.get("expired")]
+          art = wanted[0] if wanted else None
+
+          prs = run.get("pull_requests") or []
+          pr = None
+          if prs:
+              p = prs[0]
+              pr = {"number": p.get("number"),
+                    "base_ref": (p.get("base") or {}).get("ref"),
+                    "head_sha": (p.get("head") or {}).get("sha")}
+
+          json.dump({
+              "repository":       run.get("repository", {}).get("full_name", ""),
+              "event_repository": run.get("repository", {}).get("full_name", ""),
+              "server_url":       "https://github.com",
+              "run_id":           run.get("id"),
+              "run_attempt":      run.get("run_attempt"),
+              "workflow_name":    run.get("name"),
+              "event":            run.get("event"),
+              "status":           run.get("status"),
+              "conclusion":       run.get("conclusion"),
+              "head_sha":         run.get("head_sha"),
+              "head_branch":      run.get("head_branch"),
+              "run_started_at":   run.get("run_started_at"),
+              "html_url":         run.get("html_url"),
+              "pull_request":     pr,
+              "artifact":         {"id": art["id"], "name": art["name"]} if art else None,
+          }, sys.stdout, indent=2)
+          PY
+
+          echo "artifact_id=$(python3 -c "import json;a=json.load(open('run-metadata.json'))['artifact'];print(a['id'] if a else '')")" >> "$GITHUB_OUTPUT"
+          echo "Resolved run metadata:"; cat run-metadata.json
+
+      # Fetched by artifact id from the source run. `gh api` streams the zip; it
+      # is never unzipped by the shell — notify.py opens it with a size cap, an
+      # entry cap and path-traversal rejection, because a zip from a fork PR run
+      # is untrusted input like any other.
+      - name: Download the verdict artifact from that exact run
+        if: github.event_name == 'workflow_run' && steps.meta.outputs.artifact_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ART: ${{ steps.meta.outputs.artifact_id }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${REPO}/actions/artifacts/${ART}/zip" > verdict.zip
+          echo "Downloaded $(wc -c < verdict.zip) bytes."
+
+      # No `continue-on-error` and no `|| true`. If the notifier cannot decide,
+      # this job fails visibly rather than passing quietly — a silent notifier
+      # is indistinguishable from a clean assessment, which is the one thing it
+      # must never look like.
+      - name: Send the report
+        if: github.event_name == 'workflow_run'
+        env:
+          SECURITY_ALERT_RESEND_API_KEY: ${{ secrets.SECURITY_ALERT_RESEND_API_KEY }}
+          TO:   ${{ vars.SECURITY_ALERT_EMAIL_TO }}
+          FROM: ${{ vars.SECURITY_ALERT_EMAIL_FROM }}
+        run: |
+          set -euo pipefail
+          python3 .github/security/notify.py \
+            --run-metadata run-metadata.json \
+            $([ -f verdict.zip ] && echo "--artifact-zip verdict.zip") \
+            --out-dir notification \
+            --mode report \
+            --provider resend \
+            --to "${TO:?SECURITY_ALERT_EMAIL_TO is not set}" \
+            --from "${FROM:?SECURITY_ALERT_EMAIL_FROM is not set}"
+
+      # --- Manual test path ----------------------------------------------
+      - name: Send a synthetic TEST report
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          SECURITY_ALERT_RESEND_API_KEY: ${{ secrets.SECURITY_ALERT_RESEND_API_KEY }}
+          TO:   ${{ vars.SECURITY_ALERT_EMAIL_TO }}
+          FROM: ${{ vars.SECURITY_ALERT_EMAIL_FROM }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          # dry-run renders the message and sends nothing; test actually sends.
+          provider=dry-run
+          [ "$MODE" = "test" ] && provider=resend
+          python3 .github/security/notify.py \
+            --run-metadata .github/security/fixtures/test-run-metadata.json \
+            --out-dir notification \
+            --mode test \
+            --provider "$provider" \
+            --to "${TO:?SECURITY_ALERT_EMAIL_TO is not set}" \
+            --from "${FROM:?SECURITY_ALERT_EMAIL_FROM is not set}"
+
+      # The rendered message, minus the API key, so a delivery question can be
+      # answered from the run rather than from someone's inbox.
+      - name: Upload what was rendered
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: security-notification
+          path: |
+            notification/
+            run-metadata.json
+          retention-days: 30
+          if-no-files-found: warn

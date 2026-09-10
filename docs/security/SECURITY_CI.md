@@ -328,3 +328,173 @@ reason.
 
 **The check is not appearing on a PR** — the PR branch must contain
 `security.yml`. A branch that forked before the gate landed needs a rebase.
+
+## 12. Blocking-report email alerts
+
+Every assessment that ends **BLOCKED**, and every assessment that could not be
+completed, emails a report. A clean pass sends nothing.
+
+### Who receives it, and how that is configured
+
+Three settings, none of which live in this repository:
+
+| Setting | Kind | Value |
+|---|---|---|
+| `SECURITY_ALERT_EMAIL_TO` | repository **variable** | `hamedarfat9@gmail.com` |
+| `SECURITY_ALERT_EMAIL_FROM` | repository **variable** | a verified sender on `manara-edu.com` |
+| `SECURITY_ALERT_RESEND_API_KEY` | repository **secret** | a Resend key restricted to sending |
+
+The recipient is a variable rather than a literal in the workflow so that
+changing it is an audited settings change rather than a pull request, and it is
+never derived from anything a pull request can write.
+
+```bash
+gh variable set SECURITY_ALERT_EMAIL_TO   --body 'hamedarfat9@gmail.com'      -R <owner>/<repo>
+gh variable set SECURITY_ALERT_EMAIL_FROM --body 'security@manara-edu.com'    -R <owner>/<repo>
+gh secret   set SECURITY_ALERT_RESEND_API_KEY                                 -R <owner>/<repo>
+```
+
+`SECURITY_ALERT_RESEND_API_KEY` is deliberately **not** the application's
+existing `RESEND_API_KEY`. That one lives in the `Production` environment and
+belongs to the running application; a notifier gated behind a deployment
+environment would not fire for a pull request, which is most of what it needs to
+report on. Use a separate, send-only key.
+
+The sender must be on a domain verified with Resend. An unverified sender is
+rejected at the API, which fails the notify job — visibly, and without touching
+the security verdict.
+
+### The trust boundary
+
+`security.yml` runs pull-request code: it builds the image, resolves npm and
+Maven dependencies, and runs scanners over a tree the pull request controls. On
+a fork pull request that is a tree anyone can write. A mail credential in that
+workflow would sit one install script away from whoever opened the PR.
+
+So the notifier is a **separate workflow**, `security-notify.yml`, triggered by
+`workflow_run`. What that buys, precisely:
+
+* It runs from the **default branch** revision, whichever branch was assessed.
+* It never checks out, sources, or executes any part of the assessed code.
+* It reads exactly one artifact and treats every byte of it as hostile input:
+  schema version enforced, size and entry counts capped, path traversal
+  rejected on extraction, everything HTML-escaped, nothing passed through a
+  shell.
+* Run identity, the pull request number, the base branch and the head SHA are
+  resolved **from the GitHub API**, never from the artifact. When the artifact
+  disagrees, the API wins and the disagreement is reported in the email as a
+  discrepancy rather than silently resolved.
+* The artifact is fetched by id from that exact run and attempt — not from "the
+  latest run on this branch", which would let a later green run stand in for the
+  blocked one being reported.
+* Permissions are `contents: read`, `actions: read`, `pull-requests: read`.
+  Nothing can write.
+
+**The notifier cannot change the security verdict.** The required check is
+`Security Gate`, decided in the other workflow and already reported before this
+one starts. If mail fails, mail did not go out and the gate's answer is
+untouched. That direction is the only safe one.
+
+### What is sent, and when
+
+| Situation | Result |
+|---|---|
+| Complete clean assessment | no email |
+| One or more blocking findings | one email, every blocker in it, subject `[SECURITY BLOCKED]` |
+| MEDIUM/LOW only, not blocking under policy | no email; they stay in the report |
+| A scanner failed but another found blockers | the blocking email, **plus** an explicit coverage gap |
+| Failed, timed out, or cancelled with no usable verdict | one email, subject `[SECURITY SCAN ERROR / INCOMPLETE]` |
+
+One consolidated email per source run and attempt, covering every matrix leg,
+each labelled with its scope — PR candidate, `develop`, `main`, or an image
+digest. It is never one email per CVE, and a second leg's blockers are never
+dropped because the first leg failed. Pre-existing blockers are included, not
+only newly introduced ones.
+
+Subject format:
+
+```
+[Manara][SECURITY BLOCKED][<repository>][<scope>] <N> blocking findings
+```
+
+### Delivery, retries and duplicates
+
+Transient failures — timeout, 429, 5xx — are retried with bounded exponential
+backoff, honouring `Retry-After`. Each retry reuses the same idempotency key and
+an identical payload, so a retry cannot become a second email.
+
+A permanent failure (missing key, unverified sender, 401) **fails the notify
+job** with an actionable summary. It does not fail quietly, because a silent
+notifier is indistinguishable from a clean assessment.
+
+The idempotency key is derived from repository, source run id, source attempt
+and the consolidated scope. Two limits worth knowing:
+
+* Resend retains idempotency keys for **24 hours**. Beyond that window the
+  provider will not deduplicate, and neither will this — a re-run of the same
+  attempt a day later can produce a second email.
+* Deduplication is deliberately scoped so that a **new attempt**, a different
+  branch, or the next day's scheduled assessment is **not** suppressed, even
+  when the findings are identical. Unchanged findings are still news the second
+  day.
+
+What is recorded in the job summary: the provider's message id and the outcome.
+The wording distinguishes *accepted by the provider* from *delivered* — the
+first is all an API response can prove.
+
+### Redaction
+
+Secret **values** never leave the runner. A secret-scanning finding is reported
+by rule, file and line — the actionable half — with the matched value replaced
+by a redaction marker that says a value was removed. The same rules are applied
+to the Markdown attachment as to the body. `.env` contents, tokens and personal
+data are excluded.
+
+If the full report exceeds the provider's attachment limit, the email says so,
+carries the summary, and links the complete artifact. Findings are never
+silently truncated.
+
+### Trying it without waiting for a red build
+
+`security-notify.yml` has a `workflow_dispatch` path:
+
+* **dry-run** (default) renders the whole message and sends nothing.
+* **test** actually sends, with `TEST` in the subject and "Synthetic data" in
+  the body. It writes no findings register and touches no required check.
+
+Locally, against the mock provider — no network, no mail:
+
+```bash
+bash .github/security/verify-notify.sh     # 65 checks
+bash .github/security/verify-gate.sh <manifest.json> <osv-report.json>   # 31 checks
+```
+
+### Activation, and what is not yet proved
+
+These are three different things and are worth keeping apart:
+
+| Stage | State |
+|---|---|
+| **Implemented** | yes — workflow, notifier and 65 fixture checks are in this repository |
+| **Activated** | yes, as of 2026-09-10. `security-notify.yml` is on `main`, which is what `workflow_run` and `schedule` dispatch from, and both repository variables are set: `SECURITY_ALERT_EMAIL_TO` = `hamedarfat9@gmail.com`, `SECURITY_ALERT_EMAIL_FROM` = `no-reply@manara-edu.com` |
+| **Delivery verified** | **no.** `SECURITY_ALERT_RESEND_API_KEY` is still unset, so no real message has been sent to `hamedarfat9@gmail.com` |
+
+What that combination does TODAY, exactly: a completed assessment triggers the
+notifier, the notifier resolves the run, downloads the verdict and renders the
+report — and then exits 1 with
+
+```
+::error title=Security notification::the mail credential is not configured:
+environment variable SECURITY_ALERT_RESEND_API_KEY is empty. The report was
+built but could not be sent. ... The security verdict is unaffected.
+```
+
+So the alert is a red job with the report attached as an artifact rather than
+an email. That is the intended failure mode and not a workaround: a notifier
+that cannot send must not look like a clean assessment. Blocking findings keep
+blocking either way — the gate never consults the notifier.
+
+The one remaining step is the secret. It should be a **send-only** Resend key,
+not the application's `RESEND_API_KEY`: that one lives in the `Production`
+environment, is scoped to a deployment job, and would give a workflow that
+processes untrusted PR output a production credential for no benefit.
