@@ -26,15 +26,20 @@ accounted for individually in §5.
 
 ### Assessed revisions
 
-| Repository | Baseline | Baseline run | Post-fix branch |
+| Repository | Baseline | Baseline run | Post-fix run on `develop` |
 |---|---|---|---|
-| backend-foundation | `d0c1465d` (`develop`) | [34338239340](https://github.com/Manara-Education/backend-foundation/actions/runs/34338239340) | `feature/security-backend-runtime` |
-| frontend-foundation | `abd7f23f` (`develop`) | [34338198206](https://github.com/Manara-Education/frontend-foundation/actions/runs/34338198206) | `feature/security-caddy-runtime` |
-| manara-infrastructure | `ffe5175` (`develop`) | — (no scanned artefact) | `feature/security-ingress-nonroot` |
+| backend-foundation | `d0c1465d` (`develop`) | [34338239340](https://github.com/Manara-Education/backend-foundation/actions/runs/34338239340) | [34447109736](https://github.com/Manara-Education/backend-foundation/actions/runs/34447109736) — PASS |
+| frontend-foundation | `abd7f23f` (`develop`) | [34338198206](https://github.com/Manara-Education/frontend-foundation/actions/runs/34338198206) | [34447616538](https://github.com/Manara-Education/frontend-foundation/actions/runs/34447616538) — PASS |
+| manara-infrastructure | `ffe5175` (`develop`) | — (no scanned artefact) | merged; no scanner target |
 
-**A branch fix is not a deployed fix.** Everything below is verified on
-implementation branches. `develop`, `main` and the running production images
-are unchanged until these merge and a release is cut.
+The post-fix column is deliberately a `push` run on `develop` and not the
+pull-request head that produced it. A green pull request says the branch would
+be clean if merged; only the branch's own run says it is. This repository has
+had that difference bite before.
+
+**A merged fix is still not a deployed fix.** `develop` is green in both
+repositories, but `main` and the running production images are unchanged: a
+Manara release needs a tag push, and none was made.
 
 ---
 
@@ -261,17 +266,33 @@ inherits the same container base images. So making the check required while
 including the pull requests that fix the problem. The gate would be enforcing a
 state nobody could merge their way out of.
 
-### The order that works
+### The order that works — steps 1 and 2 are now done
 
-1. Merge the runtime PRs — backend-foundation#71, frontend-foundation#102,
-   manara-infrastructure#11.
-2. Confirm the scheduled or push assessment of `develop` is **green** in both
-   repositories. Not "the gate reported" — green.
-3. **Then** add `Security Gate` to the required checks of `develop_branch_rule`
-   and `main_release_rule` in both repositories.
+1. ~~Merge the runtime PRs~~ — **done 2026-09-10.** backend-foundation#71
+   (06:51 UTC), frontend-foundation#102 (06:57 UTC), manara-infrastructure#11.
+2. ~~Confirm the push assessment of `develop` is green in both
+   repositories~~ — **done**, read from the merge result rather than from the
+   pull-request heads, which is the distinction that matters:
 
-Step 3 is a repository-settings change, is outward-facing, and is left for a
-human to make deliberately. It is not something this work performed on its own.
+   | Repository | `develop` run | Security Gate |
+   |---|---|---|
+   | backend-foundation | [34447109736](https://github.com/Manara-Education/backend-foundation/actions/runs/34447109736) | **PASSED** — 0 blocking, 0 tracked, 0 excepted |
+   | frontend-foundation | [34447616538](https://github.com/Manara-Education/frontend-foundation/actions/runs/34447616538) | **PASSED** — 0 blocking, 2 tracked, 0 excepted |
+
+   Both were push events on `develop` after the merges, so this is the state of
+   the branch itself, not of a pull-request head that had not yet met it.
+3. **Still open, and deliberately so.** Add `Security Gate` to the required
+   checks of `develop_branch_rule` and `main_release_rule` in both
+   repositories.
+
+The blocker for step 3 is gone: the reason it would have been harmful was that
+`develop` was red and every pull request would have been unmergeable, including
+the fixes. `develop` is green in both repositories now, so making the check
+required would block only genuinely-failing work.
+
+It is still a repository-settings change, it is outward-facing, and it is left
+for a human to make deliberately. It is not something this work performed on
+its own.
 
 `bypass_actors` is already **0** in both rulesets, so once the check is
 required there is no admin override — which is why step 2 matters rather than
@@ -322,31 +343,67 @@ Configuration status **by name only**:
 
 | Setting | Kind | Exists today |
 |---|---|---|
-| `SECURITY_ALERT_EMAIL_TO` | repo variable | ✗ |
-| `SECURITY_ALERT_EMAIL_FROM` | repo variable | ✗ |
-| `SECURITY_ALERT_RESEND_API_KEY` | repo secret | ✗ |
+| `SECURITY_ALERT_EMAIL_TO` | repo variable | ✓ set 2026-09-10 — `hamedarfat9@gmail.com` |
+| `SECURITY_ALERT_EMAIL_FROM` | repo variable | ✓ set 2026-09-10 — `no-reply@manara-edu.com` |
+| `SECURITY_ALERT_RESEND_API_KEY` | repo secret | ✗ **still missing** |
 
-Neither repository has any Actions variable today; the backend's `Production`
-environment holds the application's own `RESEND_API_KEY`, which is deliberately
-**not** reused — it is gated behind a deployment environment and so would not
-be available to a pull-request assessment.
+The backend's `Production` environment holds the application's own
+`RESEND_API_KEY`, which is deliberately **not** reused — it is gated behind a
+deployment environment, and handing a production credential to a workflow that
+processes untrusted pull-request output buys nothing. The alert key should be a
+separate send-only Resend key.
 
-Until all three are set **and** the activation PR merges, blocking assessments
-still block exactly as they do now, and nobody is emailed. The notifier cannot
-affect the required check in either direction.
+### What is proved, and what is not
+
+Proved on 2026-09-10, from CI rather than by assertion:
+
+| | Evidence |
+|---|---|
+| `workflow_run` fires from the default branch | backend run [34448421662](https://github.com/Manara-Education/backend-foundation/actions/runs/34448421662), triggered by the `develop` Security run completing |
+| The trust boundary holds | that run validated the source repository, resolved metadata through the API, and downloaded the verdict artifact by id — it checked out nothing |
+| A clean assessment sends nothing | its decision: *"every target passed and the run succeeded; no mail sent"* |
+| A blocking assessment renders a real message | dispatch run [34448501847](https://github.com/Manara-Education/backend-foundation/actions/runs/34448501847), `mode=dry-run`: subject `[Manara][TEST][SECURITY BLOCKED]…2 blocking findings`, to `hamedarfat9@gmail.com`, from `no-reply@manara-edu.com`, idempotency key issued |
+| A missing key fails loudly | `notify.py --provider resend` with an empty key exits **1** with `::error title=Security notification::the mail credential is not configured…` |
+
+**Not proved: that any real email has ever arrived.** No message has been sent
+to `hamedarfat9@gmail.com`. The dry-run provider accepts and delivers nothing,
+and the notifier's own wording is deliberate — *"Acceptance is not delivery."*
+That stays false until the secret is set and a `mode=test` dispatch is run.
+
+Until then blocking assessments still block exactly as they do now, and the
+notifier job goes red with the report attached as an artifact rather than
+sending it. The notifier cannot affect the required check in either direction.
 
 ---
 
 ## 9. Pull requests
 
-| PR | Repository | → | Contents |
-|---|---|---|---|
-| #71 | backend-foundation | `develop` | Alpine upgrade, digest pins, Dependabot docker |
-| #102 | frontend-foundation | `develop` | Caddy from source, non-root, runtime verification |
-| #11 | manara-infrastructure | `develop` | sysctl, volume migration + rollback |
-| #72 | backend-foundation | `develop` | notifier, verdict, fixed-version fixes |
-| #103 | frontend-foundation | `develop` | same, frontend |
-| #73 | backend-foundation | `main` | **activation** |
-| #104 | frontend-foundation | `main` | **activation** |
+All merged on 2026-09-10, in dependency order, each verified against the merge
+result rather than the pull-request head.
 
-None have been merged, and no production deployment was performed.
+| PR | Repository | → | Contents | Merged |
+|---|---|---|---|---|
+| #71 | backend-foundation | `develop` | Alpine upgrade, digest pins, Dependabot docker | 06:51 |
+| #102 | frontend-foundation | `develop` | Caddy from source, non-root, runtime verification (28/28) | 06:57 |
+| #11 | manara-infrastructure | `develop` | sysctl, volume migration + rollback | ✓ |
+| #72 | backend-foundation | `develop` | notifier, verdict, fixed-version fixes | 07:03 |
+| #103 | frontend-foundation | `develop` | same, frontend | 07:10 |
+| #73 | backend-foundation | `main` | activation (see below) | 06:49 |
+| #104 | frontend-foundation | `main` | activation (see below) | 06:38 |
+
+The order was not cosmetic. #72 and #103 both had a **failing** `Security Gate`
+while they sat on a `develop` that still carried the vulnerable base images —
+the gate was correctly blocking them on findings their own branch did not
+introduce. Merging #71 and #102 first, then updating the branches, turned both
+green without touching policy.
+
+**#73 and #104 activated nothing.** They put the notifier on `main`, and the
+default branch of both repositories is `develop` — `main` is the release
+branch. `workflow_run` never dispatched from it, and the workflow did not even
+appear in `gh api …/actions/workflows`. Merging #72 and #103 to `develop` is
+what registered it and made it fire. Those two pull requests are left in place
+anyway, so a future change of default branch does not silently switch the
+alerts back off.
+
+No production deployment was performed: a Manara release needs a tag push, and
+none was made.
