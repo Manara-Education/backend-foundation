@@ -1,0 +1,31 @@
+{
+  "_comment": [
+    "Synthetic run metadata for the manual test path in security-notify.yml.",
+    "It exists so that `Send a synthetic TEST report` can prove the whole",
+    "delivery path — rendering, redaction, the provider call, the recipient —",
+    "without waiting for a real assessment to go red.",
+    "",
+    "Everything here is invented. The repository and run id are deliberately",
+    "recognisable as fake so that a TEST message can never be mistaken for a",
+    "real finding, and notify.py additionally stamps TEST into the subject and",
+    "says 'Synthetic data' in the body when --mode test is used.",
+    "",
+    "This file carries no findings of its own: --mode test builds the synthetic",
+    "finding set inside notify.py, where it is covered by verify-notify.sh."
+  ],
+  "repository": "Manara-Education/backend-foundation",
+  "event_repository": "Manara-Education/backend-foundation",
+  "server_url": "https://github.com",
+  "run_id": 0,
+  "run_attempt": 1,
+  "workflow_name": "Security",
+  "event": "workflow_dispatch",
+  "status": "completed",
+  "conclusion": "failure",
+  "head_sha": "0000000000000000000000000000000000000000",
+  "head_branch": "synthetic-test",
+  "run_started_at": "2026-01-01T00:00:00Z",
+  "html_url": "https://github.com/Manara-Education/backend-foundation/actions",
+  "pull_request": null,
+  "artifact": null
+}
