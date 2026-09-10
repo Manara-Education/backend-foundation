@@ -476,7 +476,7 @@ These are three different things and are worth keeping apart:
 | Stage | State |
 |---|---|
 | **Implemented** | yes — workflow, notifier and 65 fixture checks are in this repository |
-| **Activated** | yes, as of 2026-09-10. `security-notify.yml` is on `main`, which is what `workflow_run` and `schedule` dispatch from, and both repository variables are set: `SECURITY_ALERT_EMAIL_TO` = `hamedarfat9@gmail.com`, `SECURITY_ALERT_EMAIL_FROM` = `no-reply@manara-edu.com` |
+| **Activated** | yes, as of 2026-09-10, by merging `security-notify.yml` to **`develop`** — see the note below on which branch that is. Both repository variables are set: `SECURITY_ALERT_EMAIL_TO` = `hamedarfat9@gmail.com`, `SECURITY_ALERT_EMAIL_FROM` = `no-reply@manara-edu.com` |
 | **Delivery verified** | **no.** `SECURITY_ALERT_RESEND_API_KEY` is still unset, so no real message has been sent to `hamedarfat9@gmail.com` |
 
 What that combination does TODAY, exactly: a completed assessment triggers the
@@ -498,3 +498,23 @@ The one remaining step is the secret. It should be a **send-only** Resend key,
 not the application's `RESEND_API_KEY`: that one lives in the `Production`
 environment, is scoped to a deployment job, and would give a workflow that
 processes untrusted PR output a production credential for no benefit.
+
+#### The branch that activates this is `develop`, not `main`
+
+`workflow_run` dispatches the workflow file from the repository's **default
+branch**, and this repository's default branch is `develop`:
+
+```console
+$ gh api repos/Manara-Education/<repo> --jq .default_branch
+develop
+```
+
+`main` is the release branch — a tag push from it is what deploys — so a
+notifier sitting only on `main` is inert. That mistake was made here and is
+recorded rather than quietly corrected: two pull requests put this workflow on
+`main` first, every Security assessment afterwards completed normally, and not
+one `Security notification` run appeared. Merging the same file to `develop` is
+what registered the workflow and made `workflow_run` fire.
+
+Keeping the copy on `main` is harmless and is left in place, so that a future
+change of default branch does not silently switch the alerts off again.
