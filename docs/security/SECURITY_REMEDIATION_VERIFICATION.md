@@ -238,6 +238,54 @@ hostname. The sysctl is harmless to a root Caddy and can stay.
 
 ---
 
+## 6b. Enforcement status — the gate reports, it does not yet block
+
+Read from the live rulesets, not from intent:
+
+| Repository | Ruleset | Enforcement | Bypass actors | Required checks |
+|---|---|---|---|---|
+| backend-foundation | `develop_branch_rule` | active | **0** | `Build and test`, `Build the container image` |
+| frontend-foundation | `develop_branch_rule` | active | **0** | `Install, type-check and build`, `Build the container image` |
+
+**`Security Gate` is not in either list.** It runs on every pull request and
+every push to `develop`/`main`, and it reports pass or fail — but a pull request
+can still be merged while it is red.
+
+### Why it has deliberately NOT been added yet
+
+Adding it today would be actively harmful, not merely premature. `develop` is
+currently red in both repositories — that is the 46-blocking baseline this whole
+report is about — and every pull request is assessed against a tree that
+inherits the same container base images. So making the check required while
+`develop` is red would block **every** pull request in both repositories,
+including the pull requests that fix the problem. The gate would be enforcing a
+state nobody could merge their way out of.
+
+### The order that works
+
+1. Merge the runtime PRs — backend-foundation#71, frontend-foundation#102,
+   manara-infrastructure#11.
+2. Confirm the scheduled or push assessment of `develop` is **green** in both
+   repositories. Not "the gate reported" — green.
+3. **Then** add `Security Gate` to the required checks of `develop_branch_rule`
+   and `main_release_rule` in both repositories.
+
+Step 3 is a repository-settings change, is outward-facing, and is left for a
+human to make deliberately. It is not something this work performed on its own.
+
+`bypass_actors` is already **0** in both rulesets, so once the check is
+required there is no admin override — which is why step 2 matters rather than
+being a nicety.
+
+### Merge queue
+
+`merge_group` is **not** configured in either repository — neither ruleset
+carries a `merge_queue` rule — so the workflows do not subscribe to that event.
+If a merge queue is enabled later, `merge_group` must be added to the `on:`
+block of `security.yml`, or queued merges would bypass assessment entirely.
+
+---
+
 ## 7. Checks not performed
 
 Stated rather than implied.
