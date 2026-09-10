@@ -476,8 +476,25 @@ These are three different things and are worth keeping apart:
 | Stage | State |
 |---|---|
 | **Implemented** | yes — workflow, notifier and 65 fixture checks are in this repository |
-| **Activated** | requires this workflow on the **default branch**. `workflow_run` and `schedule` only run from there, so merging to `develop` alone activates nothing |
-| **Delivery verified** | **pending.** `SECURITY_ALERT_RESEND_API_KEY` does not exist yet, so no real message has been sent to `hamedarfat9@gmail.com` |
+| **Activated** | yes, as of 2026-09-10. `security-notify.yml` is on `main`, which is what `workflow_run` and `schedule` dispatch from, and both repository variables are set: `SECURITY_ALERT_EMAIL_TO` = `hamedarfat9@gmail.com`, `SECURITY_ALERT_EMAIL_FROM` = `no-reply@manara-edu.com` |
+| **Delivery verified** | **no.** `SECURITY_ALERT_RESEND_API_KEY` is still unset, so no real message has been sent to `hamedarfat9@gmail.com` |
 
-Until the key is set and the workflow is on the default branch, blocking
-assessments still block — the gate is unaffected — but nobody is emailed.
+What that combination does TODAY, exactly: a completed assessment triggers the
+notifier, the notifier resolves the run, downloads the verdict and renders the
+report — and then exits 1 with
+
+```
+::error title=Security notification::the mail credential is not configured:
+environment variable SECURITY_ALERT_RESEND_API_KEY is empty. The report was
+built but could not be sent. ... The security verdict is unaffected.
+```
+
+So the alert is a red job with the report attached as an artifact rather than
+an email. That is the intended failure mode and not a workaround: a notifier
+that cannot send must not look like a clean assessment. Blocking findings keep
+blocking either way — the gate never consults the notifier.
+
+The one remaining step is the secret. It should be a **send-only** Resend key,
+not the application's `RESEND_API_KEY`: that one lives in the `Production`
+environment, is scoped to a deployment job, and would give a workflow that
+processes untrusted PR output a production credential for no benefit.
