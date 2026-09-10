@@ -151,13 +151,31 @@ It does not block under current policy.
 *Owner:* frontend runtime. *Next action:* re-evaluate if Caddy ever pulls in
 an openpgp-importing dependency; the gate will surface it either way.
 
-**2. GHSA-gcjh-h69q-9w9g / GO-2026-6094 — `cel-go` v0.28.1, MEDIUM, tracked.**
-*Fixed* — pinned to v0.30.0 in `feature/security-caddy-runtime`. Verification
-of that specific pin is pending its CI run.
+**2. GHSA-gcjh-h69q-9w9g / GO-2026-6094 — `cel-go` v0.28.1, MEDIUM, tracked,
+no *safe* fix available.**
 
-The two databases disagree on the fix: the GitHub advisory says v0.29.0, the Go
-database says v0.30.0. v0.30.0 is the version both agree is clean — when
-sources disagree the conservative one wins.
+JSON private fields exposed through NativeTypes and ParseStructTag. The gate
+tracks it rather than blocking, so the image is green either way.
+
+**The upgrade was attempted and rejected on evidence.** Pinning v0.30.0 — the
+version both databases agree is clean, the GitHub advisory saying v0.29.0 and
+the Go database v0.30.0 — builds cel-go fine and then fails to compile Caddy:
+
+```
+caddy/v2@v2.11.4/modules/caddyhttp/celmatcher.go:506:5:
+    cannot use []interpreter.Interpretable ...
+```
+
+cel-go changed that interface between the release Caddy pins and the fixed one.
+Clearing this finding would therefore need a patched `celmatcher.go` — a fork of
+Caddy's HTTP matcher carried indefinitely, which is a materially worse security
+position than one tracked MEDIUM: a forked matcher is exactly where a subtle
+routing bug would live, and it would silently miss upstream's own fixes.
+
+It stays on the register, unfixed and unsuppressed.
+
+*Owner:* frontend runtime. *Next action:* resolves itself when Caddy moves to
+cel-go ≥ v0.30.0 upstream; the gate will show it.
 
 **Nothing was baselined, ignored without a fix, or cleared by weakening a
 rule.** `exceptions.yml` remains empty in both repositories, and no severity
