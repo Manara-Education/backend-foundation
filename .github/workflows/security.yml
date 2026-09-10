@@ -1228,7 +1228,10 @@ jobs:
               --owner "$OWNER" \
               --workspace "$GITHUB_WORKSPACE" \
               --register-out "out/$slug/findings.json" \
-              --report-out "out/$slug/report.md"
+              --report-out "out/$slug/report.md" \
+              --verdict-out "out/$slug/verdict.json" \
+              --target-slug "$slug" \
+              --target-name "$name"
             rc=$?
             set -e
             echo "::endgroup::"
