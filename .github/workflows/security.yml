@@ -334,13 +334,13 @@ jobs:
           echo "${RUNNER_TEMP}/security-tools" >> "$GITHUB_PATH"
 
       - name: Download the recorded intelligence snapshot
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: intel-${{ matrix.target.slug }}
           path: intel
 
       - name: Download the SBOM
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sbom-${{ matrix.target.slug }}
           path: sbom
@@ -473,7 +473,7 @@ jobs:
       # anything, and ANY non-zero exit is a genuine scanner failure that fails
       # this job.
       - name: Download the SBOM produced by the intelligence job
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sbom-${{ matrix.target.slug }}
           path: sbom
@@ -1095,7 +1095,7 @@ jobs:
       # evaluator an empty directory, which it reports as missing reports and
       # blocks on — the same answer, with a usable explanation.
       - name: Download every report
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: _artifacts
         continue-on-error: true
