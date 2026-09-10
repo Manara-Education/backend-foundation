@@ -1208,10 +1208,52 @@ jobs:
             exit 2
           fi
 
+          # BOOTSTRAP, for exactly one release and then dead code — the same
+          # shape as the policy fallback above, and for the same reason.
+          #
+          # This workflow comes from the PULL REQUEST; the evaluator comes from
+          # the BASE BRANCH. That is deliberate and is what stops a PR grading
+          # its own homework. It also means the pull request that first teaches
+          # the workflow to ask for --verdict-out is guaranteed to be asking an
+          # evaluator that has never heard of it:
+          #
+          #   evaluate.py: error: unrecognized arguments: --verdict-out ...
+          #
+          # which the gate correctly reported as exit 2, could-not-evaluate —
+          # not as a pass. Rather than weaken that, the flag is offered only
+          # when the base evaluator actually supports it, and its absence is
+          # announced rather than swallowed.
+          #
+          # Once this PR is on the base branch the probe always succeeds. If it
+          # ever starts failing again, that means someone removed --verdict-out
+          # from the evaluator, and the warning is how you would find out.
+          verdict_supported=no
+          if python3 .github/security/evaluate.py --help 2>&1 | grep -q -- '--verdict-out'; then
+            verdict_supported=yes
+          else
+            echo "::warning title=Security Gate::The evaluator on ${GITHUB_BASE_REF:-this branch} does not support --verdict-out, so no machine-readable verdict is produced and the email notifier will report this run as INCOMPLETE. Expected ONLY while bootstrapping."
+          fi
+
           while IFS=$'\t' read -r slug ref sha name; do
             [ -n "$slug" ] || continue
             echo "::group::Security Gate — $name ($sha)"
             mkdir -p "out/$slug"
+            # An array rather than a string. Target names contain spaces and
+            # parentheses — "PR #72 (feature/security-blocking-email)" — and a
+            # string would word-split into four broken arguments.
+            #
+            # Expanded below as ${a[@]+"${a[@]}"} rather than "${a[@]}": under
+            # `set -u` bash 3.2 treats an EMPTY array's expansion as an unbound
+            # variable and aborts. Runners have bash 5, where it is fine, but
+            # anyone reproducing this on macOS would hit it — and the failure
+            # would look like a gate error rather than a shell portability
+            # detail.
+            verdict_args=()
+            if [ "$verdict_supported" = yes ]; then
+              verdict_args=(--verdict-out "out/$slug/verdict.json"
+                            --target-slug "$slug"
+                            --target-name "$name")
+            fi
             if [ -f .github/security/findings.json ]; then
               cp .github/security/findings.json "out/$slug/findings.json"
             fi
@@ -1229,9 +1271,7 @@ jobs:
               --workspace "$GITHUB_WORKSPACE" \
               --register-out "out/$slug/findings.json" \
               --report-out "out/$slug/report.md" \
-              --verdict-out "out/$slug/verdict.json" \
-              --target-slug "$slug" \
-              --target-name "$name"
+              ${verdict_args[@]+"${verdict_args[@]}"}
             rc=$?
             set -e
             echo "::endgroup::"
