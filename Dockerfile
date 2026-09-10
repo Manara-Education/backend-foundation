@@ -9,7 +9,11 @@
 # over time. The repository now carries a Maven Wrapper, so this stage builds
 # with the exact Maven version pinned in .mvn/wrapper/maven-wrapper.properties,
 # verified against a recorded SHA-256. Same Maven here, in CI and on a laptop.
-FROM eclipse-temurin:25-jdk-alpine AS build
+# Pinned by digest as well as by tag, so the jar this stage produces comes from
+# a base that cannot change underneath a rebuild without a reviewed diff.
+# .github/dependabot.yml carries a `docker` ecosystem that proposes the bump —
+# a digest pin discovers nothing on its own, not even with --pull.
+FROM eclipse-temurin:25-jdk-alpine@sha256:09349d79941fd53bb3d487b393ca118d8853c08c09193f416fe6a8718df9e732 AS build
 
 # The wrapper's only-script distribution downloads and unpacks Maven itself.
 # Alpine's busybox provides wget but not unzip, so unzip is the one build-only
@@ -52,7 +56,26 @@ RUN set -eu; \
 # A JRE, not a JDK. The previous runtime stage shipped the full JDK — compiler,
 # javac, jlink, debugging tools — into production for no reason. Every one of
 # those is attack surface that the running application never uses.
-FROM eclipse-temurin:25-jre-alpine AS runtime
+FROM eclipse-temurin:25-jre-alpine@sha256:3137541deb3cac6626b5d9a4a2187bc0d6a34312f858bd2c67dd01e732e6b682 AS runtime
+
+# --- OS packages -----------------------------------------------------------
+# Every blocking finding against this image is an Alpine package, not anything
+# Manara wrote and not an application dependency: OpenSSL 3.5.7-r0
+# (CVE-2026-14456, reported three times as openssl/libssl3/libcrypto3) and
+# libexpat 2.8.3-r0 (CVE-2026-76956, CVE-2026-76957).
+#
+# The base is Alpine 3.24.1 and both fixes are already published in that SAME
+# 3.24 branch — openssl 3.5.8-r0 and libexpat 2.8.4-r0 — so this is an
+# in-release upgrade from the supported repository. No repository pinning, no
+# mixing of Alpine branches, and no `apk add` of a package the image did not
+# already have. apk resolves openssl, libssl3 and libcrypto3 together, which is
+# what keeps the three consistent instead of upgrading one of them alone.
+#
+# Deliberately not version-pinned: pinning would freeze this image at today's
+# patch level and make the next OpenSSL advisory a manual edit. What is pinned
+# is the base digest above; where the packages land is proved by the container
+# scan in CI on every assessment, not asserted here.
+RUN apk upgrade --no-cache
 
 # Run as a non-root user. Previously the application ran as root, so a remote
 # code execution would have started with uid 0 inside the container. `app` owns

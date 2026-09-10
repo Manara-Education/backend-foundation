@@ -98,3 +98,36 @@ updates:
         update-types:
           - "patch"
           - "minor"
+
+  # Base images. Added because the Dockerfile now pins its bases by DIGEST, and
+  # a digest pin is inert on its own: it never discovers a newer image, and
+  # `docker build --pull` will not either — --pull re-resolves a tag, and there
+  # is no tag left to re-resolve. Without this ecosystem the pin would quietly
+  # freeze the runtime at one point in time, which is the opposite of what
+  # pinning it was for.
+  #
+  # What this DOES cover: the `FROM ... @sha256:` lines in ./Dockerfile.
+  # What it does NOT cover, stated because the gap is easy to miss: the module
+  # versions passed as build arguments to a from-source build (the X_CRYPTO /
+  # X_NET / X_TEXT / GRPC arguments in the frontend's Caddy stage). Those are
+  # ARG strings, not a manifest Dependabot can parse, so nothing here proposes
+  # them. The container scan in the Security Gate is what catches those: it
+  # reads the module list back out of the compiled binary, so a stale pin
+  # surfaces as a blocking finding rather than as silence.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Africa/Cairo"
+    open-pull-requests-limit: 5
+    assignees:
+      - "Hamed-mohamed-Git"
+    commit-message:
+      prefix: "chore(docker)"
+    groups:
+      docker-base-images:
+        applies-to: version-updates
+        patterns:
+          - "*"
