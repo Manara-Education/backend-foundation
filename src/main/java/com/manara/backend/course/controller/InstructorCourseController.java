@@ -46,8 +46,11 @@ public class InstructorCourseController {
     private final CourseService courseService;
 
     /**
-     * Every course on the platform, drafts and private courses included — for instructors and
-     * administrators, and now enforced as such rather than merely documented.
+     * The caller's own courses; every course on the platform only for an administrator.
+     *
+     * <p>For an instructor this lists exactly what {@code /my-courses} does, in the same shape. It
+     * used to list every instructor's courses, drafts and private ones included, to anyone holding
+     * the self-assignable INSTRUCTOR role. See {@link CourseService#getAllCourses}.
      */
     @GetMapping
     public ApiResponse<List<CourseResponse>> getAllCourses(@AuthenticationPrincipal User user) {

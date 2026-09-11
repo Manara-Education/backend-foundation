@@ -18,11 +18,25 @@ public interface CourseRepository extends JpaRepository<Course, Long> {
     List<Course> findByInstructorId(Long instructorId);
 
     /**
-     * List queries render the instructor's name, so the instructor and its user are fetched up
+     * Every course on the platform, unscoped — the administrator's catalogue and nothing else. What
+     * an instructor is shown goes through {@link #findAllOwnedByUserWithInstructor}.
+     *
+     * <p>List queries render the instructor's name, so the instructor and its user are fetched up
      * front. Without this every row triggered two extra selects.
      */
     @Query("select c from Course c join fetch c.instructor i join fetch i.user")
     List<Course> findAllWithInstructor();
+
+    /**
+     * The courses one account owns, for the instructor catalogue.
+     *
+     * <p>Keyed on the owning user rather than the instructor profile, because that is the test of
+     * ownership the editor applies: the course's instructor is the signed-in account. Filtered in
+     * the {@code WHERE} clause for the same reason discovery is — another instructor's course never
+     * enters the result, so nothing counted, paginated or serialised on top of it can reach one.
+     */
+    @Query("select c from Course c join fetch c.instructor i join fetch i.user u where u.id = :userId")
+    List<Course> findAllOwnedByUserWithInstructor(@Param("userId") Long userId);
 
     @Query("select c from Course c join fetch c.instructor i join fetch i.user where c.status = :status")
     List<Course> findAllByStatusWithInstructor(@Param("status") CourseStatus status);
