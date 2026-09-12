@@ -11,21 +11,23 @@ import org.springframework.security.web.context.HttpSessionSecurityContextReposi
 
 /**
  * Owns the session-management slice of the security filter chain. SecurityConfig consumes
- * the {@link Customizer} bean below so that all session policy (creation, fixation defense,
- * concurrency limits) lives next to the SessionManager and SessionConfig.
+ * the {@link Customizer} bean below so that all session policy (creation, fixation defense)
+ * lives next to the SessionManager and SessionConfig.
+ *
+ * <p>There is deliberately no {@code maximumSessions} here. It configures Spring Security's
+ * concurrency control, which only Spring Security's own authentication filters ever invoke, and
+ * which keeps its register in memory. Sign-in here never passes through those filters, so the
+ * setting limited nothing while reading as though it did. The limit is enforced by
+ * {@link com.manara.backend.session.manager.SessionCeiling}.
  */
 @Configuration
 public class SessionSecurityConfig {
-
-    private static final int MAX_CONCURRENT_SESSIONS = 5;
 
     @Bean
     public Customizer<SessionManagementConfigurer<HttpSecurity>> sessionManagementCustomizer() {
         return sees -> sees
                 .sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED)
-                .sessionFixation(SessionManagementConfigurer.SessionFixationConfigurer::changeSessionId)
-                .maximumSessions(MAX_CONCURRENT_SESSIONS)
-                .maxSessionsPreventsLogin(false);
+                .sessionFixation(SessionManagementConfigurer.SessionFixationConfigurer::changeSessionId);
     }
 
     @Bean
