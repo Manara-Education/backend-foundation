@@ -21,6 +21,18 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import org.apache.tomcat.util.http.fileupload.FileUploadException;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
+import org.springframework.web.HttpMediaTypeNotAcceptableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 
 @Slf4j
 @RestControllerAdvice
@@ -196,6 +208,98 @@ public class GlobalExceptionHandler {
         log.debug("Malformed request body", ex);
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ApiResponse.error(messageService.get("error.request.malformed")));
+    }
+
+    // --- The request is at fault -------------------------------------------
+    //
+    // Each of these is raised by Spring MVC before, or instead of, running a controller, because
+    // the request cannot be matched or bound. Until they had handlers of their own the catch-all
+    // below answered them, so a non-numeric id or an unknown enum value reached the client as a 500
+    // and the log as an ERROR with a stack trace (pentest, 2026-09-10). None of them quotes the
+    // submitted value back.
+    //
+    // MissingPathVariableException is deliberately not among them. It shares a parent with a
+    // missing query parameter, but it means a controller binds a variable its own template does not
+    // declare: the code is wrong, not the request, and it stays a 500.
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<@NonNull ApiResponse<Void>> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        log.debug("Request value for '{}' could not be converted", ex.getName());
+        return badRequest("error.request.parameterInvalid", ex.getName());
+    }
+
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<@NonNull ApiResponse<Void>> handleMissingParameter(
+            MissingServletRequestParameterException ex) {
+        return badRequest("error.request.parameterMissing", ex.getParameterName());
+    }
+
+    @ExceptionHandler(MissingServletRequestPartException.class)
+    public ResponseEntity<@NonNull ApiResponse<Void>> handleMissingPart(MissingServletRequestPartException ex) {
+        return badRequest("error.request.partMissing", ex.getRequestPartName());
+    }
+
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<@NonNull ApiResponse<Void>> handleMethodNotAllowed(
+            HttpRequestMethodNotSupportedException ex) {
+        var response = ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED);
+        if (ex.getSupportedHttpMethods() != null) {
+            response.allow(ex.getSupportedHttpMethods().toArray(HttpMethod[]::new));
+        }
+        return response.body(ApiResponse.error(messageService.get("error.request.methodNotAllowed")));
+    }
+
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<@NonNull ApiResponse<Void>> handleMediaTypeNotSupported(
+            HttpMediaTypeNotSupportedException ex) {
+        HttpHeaders headers = new HttpHeaders();
+        if (!ex.getSupportedMediaTypes().isEmpty()) {
+            headers.setAccept(ex.getSupportedMediaTypes());
+        }
+        return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+                .headers(headers)
+                .body(ApiResponse.error(messageService.get("error.request.mediaTypeUnsupported")));
+    }
+
+    /**
+     * The body's type is set rather than negotiated: the request has just said it accepts nothing
+     * this API produces, so negotiating the error against it fails the same way and sends an empty
+     * 406.
+     */
+    @ExceptionHandler(HttpMediaTypeNotAcceptableException.class)
+    public ResponseEntity<@NonNull ApiResponse<Void>> handleNotAcceptable(HttpMediaTypeNotAcceptableException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_ACCEPTABLE)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(ApiResponse.error(messageService.get("error.request.notAcceptable")));
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<@NonNull ApiResponse<Void>> handleUploadTooLarge(MaxUploadSizeExceededException ex) {
+        return ResponseEntity.status(HttpStatus.CONTENT_TOO_LARGE)
+                .body(ApiResponse.error(messageService.get("error.request.tooLarge")));
+    }
+
+    /**
+     * A multipart body the container could not parse is the client's fault only when the parser
+     * refused the body itself -- no boundary, a part that never ends -- which Tomcat reports as a
+     * FileUploadException somewhere in the cause chain. Any other multipart failure is the server
+     * failing to handle a well-formed upload, such as its temporary upload directory having been
+     * removed, and is still answered as one.
+     */
+    @ExceptionHandler(MultipartException.class)
+    public ResponseEntity<@NonNull ApiResponse<Void>> handleMultipart(MultipartException ex) {
+        for (Throwable cause = ex; cause != null; cause = cause.getCause()) {
+            if (cause instanceof FileUploadException) {
+                log.debug("Malformed multipart request", ex);
+                return badRequest("error.request.malformed");
+            }
+        }
+        return handleGeneric(ex);
+    }
+
+    private ResponseEntity<@NonNull ApiResponse<Void>> badRequest(String messageCode, Object... args) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.error(messageService.get(messageCode, args)));
     }
 
     @ExceptionHandler(Exception.class)
