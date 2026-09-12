@@ -14,10 +14,19 @@ services:
     image: postgres:17.10
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      # No fallback. This used to default to the literal `password` while the
+      # port below listened on every interface, so any machine that could route
+      # to a developer's laptop could log in to its database. The stack now
+      # refuses to start until a password has been chosen in .env.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
       POSTGRES_DB: ${POSTGRES_DB:-manara_db}
+    # Loopback only. The application run from an IDE or ./mvnw on this machine
+    # reaches the database at localhost:5432, and the `app` service below
+    # reaches it over the compose network, which uses no published port at all.
+    # A bare "5432:5432" publishes on 0.0.0.0 — every network this machine
+    # joins, office LAN or café Wi-Fi.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     # depends_on: service_healthy below waits on this, so the application is not
@@ -33,13 +42,21 @@ services:
   redis:
     container_name: manara_redis
     image: redis:7.4-alpine
-    command: ["redis-server", "--appendonly", "yes"]
+    # AUTH is on whenever REDIS_PASSWORD is set, and it should be: Redis holds
+    # every session and every rate-limit counter. Left empty, Redis runs without
+    # AUTH, and the loopback binding below is then the only thing keeping other
+    # machines out. Run through a shell so an unset password adds no argument at
+    # all, rather than an empty `--requirepass ""`.
+    command: ["sh", "-c", "exec redis-server --appendonly yes $${REDIS_PASSWORD:+--requirepass \"$$REDIS_PASSWORD\"}"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    # Loopback only, for the same reason as PostgreSQL above.
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "[ -z \"$$REDIS_PASSWORD\" ] || export REDISCLI_AUTH=\"$$REDIS_PASSWORD\"; redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -69,9 +86,10 @@ services:
       - SERVER_PORT=8080
       - DATABASE_URL=jdbc:postgresql://postgres:5432/${POSTGRES_DB:-manara_db}
       - POSTGRES_USER=${POSTGRES_USER:-postgres}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - COOKIE_SECURE=true
       # Supplied from the host environment / .env — never hardcode the key here.
       - RESEND_API_KEY=${RESEND_API_KEY}
