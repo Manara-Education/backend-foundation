@@ -6,6 +6,7 @@ import com.manara.backend.auth.dto.LoginRequest;
 import com.manara.backend.auth.dto.ResetPasswordRequest;
 import com.manara.backend.auth.mapper.AuthMapper;
 import com.manara.backend.auth.model.OtpType;
+import com.manara.backend.auth.password.PasswordPolicy;
 import com.manara.backend.common.exception.BusinessException;
 import com.manara.backend.common.service.MessageService;
 import com.manara.backend.profile.mapper.ProfileMapper;
@@ -81,6 +82,10 @@ class AuthServiceTest {
     // what is being tested. @Spy so @InjectMocks passes it to the constructor.
     @Spy
     private final AuthMapper authMapper = new AuthMapper();
+
+    // Real as well: plain rules over a bundled list. Left out, @InjectMocks would pass null.
+    @Spy
+    private final PasswordPolicy passwordPolicy = PasswordPolicy.standard();
 
     @InjectMocks
     private AuthService authService;

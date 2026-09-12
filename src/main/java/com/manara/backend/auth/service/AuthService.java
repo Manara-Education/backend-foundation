@@ -4,6 +4,7 @@ import com.manara.backend.auth.dto.*;
 import com.manara.backend.auth.mapper.AuthMapper;
 import com.manara.backend.common.dto.MessageResponse;
 import com.manara.backend.auth.model.OtpType;
+import com.manara.backend.auth.password.PasswordPolicy;
 import com.manara.backend.session.manager.SessionManager;
 import com.manara.backend.common.exception.BusinessException;
 import com.manara.backend.common.exception.ResourceNotFoundException;
@@ -37,6 +38,7 @@ public class AuthService {
     private final InstructorRepository instructorRepository;
     private final StudentRepository studentRepository;
     private final PasswordEncoder passwordEncoder;
+    private final PasswordPolicy passwordPolicy;
     private final OtpService otpService;
     private final AuthenticationManager authenticationManager;
     private final MessageService messageService;
@@ -259,6 +261,13 @@ public class AuthService {
 
         if (passwordEncoder.matches(request.getNewPassword(), user.getPassword())) {
             throw new BusinessException("auth.password.sameAsCurrent");
+        }
+
+        // The one part of the password policy the request cannot carry: the address and name it is
+        // compared with belong to the account, not to anything the caller sent. The rest of the
+        // policy, the 72-byte ceiling included, has already been applied by validation.
+        if (passwordPolicy.isAboutAccount(request.getNewPassword(), user.getEmail(), user.getFullName())) {
+            throw new BusinessException(PasswordPolicy.Violation.PERSONAL.messageKey());
         }
 
         user.setPassword(passwordEncoder.encode(request.getNewPassword()));
