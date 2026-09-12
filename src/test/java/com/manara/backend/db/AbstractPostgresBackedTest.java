@@ -57,10 +57,10 @@ public abstract class AbstractPostgresBackedTest {
     }
 
     /**
-     * Registration sends an OTP inside the caller's transaction, so a provider that rejects the
-     * message rolls the new account back. Stubbed here because these tests are about the database,
-     * not about Resend — and because reaching a real provider from a test suite would be wrong
-     * regardless of what it proved.
+     * Stubbed because these tests are about the database, not about Resend — and because reaching a
+     * real provider from a test suite would be wrong regardless of what it proved. Authentication
+     * mail is sent after commit on the email dispatch pool, so a test that cares what was sent has to
+     * wait for it rather than check at once.
      */
     @MockitoBean
     protected EmailService emailService;

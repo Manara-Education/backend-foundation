@@ -25,7 +25,6 @@ import static org.mockito.BDDMockito.given;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
  * MANARA-SEC-006. Whether a stranger can find out who has an account here.
@@ -71,14 +70,14 @@ class AccountEnumerationTest extends AbstractPostgresBackedTest {
         // Asserted rather than fired and forgotten. This account IS the fixture: every case below
         // compares the registered arm against the absent one, so a registration that silently
         // failed would leave both arms absent and the comparisons would pass while testing nothing.
-        mockMvc.perform(post("/api/v1/auth/register").with(csrf())
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("""
-                        {"fullName":"Exists Test","email":"%s","password":"%s","role":"STUDENT",
-                         "termsAccepted":true,"termsVersion":"%s"}
-                        """.formatted(REGISTERED, PASSWORD,
-                                termsVersionRegistry.current().orElseThrow().id())))
-                .andExpect(status().isCreated());
+        //
+        // The row is asserted, not just the status. Registration answers 201 whether or not it
+        // created anything -- that is one of the things tested below -- so a 201 alone no longer
+        // says the fixture exists.
+        assertThat(register(REGISTERED)).startsWith("201 ");
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM users WHERE email = ?", Integer.class, REGISTERED))
+                .as("the fixture account must really have been created")
+                .isEqualTo(1);
     }
 
     @AfterEach
@@ -138,6 +137,18 @@ class AccountEnumerationTest extends AbstractPostgresBackedTest {
                 .isEqualTo(verifyResetOtp(REGISTERED, "000000"));
     }
 
+    @Test
+    @DisplayName("register answers a registered and an unknown address identically")
+    void registrationIsUniform() throws Exception {
+        // SEC-F05: the last anonymous auth endpoint that answered the question outright, with 400
+        // "Email is already registered" for an address with an account and 201 for one without.
+        // What each address is sent, and that the existing account is left alone, is covered by
+        // UniformRegistrationTest; this is only the comparison.
+        assertThat(register(REGISTERED))
+                .as("a registered and an unknown address must be indistinguishable here")
+                .isEqualTo(register(UNKNOWN));
+    }
+
     // ── The oracles that survive a naive fix ──────────────────────────────────
 
     @Test
@@ -152,6 +163,19 @@ class AccountEnumerationTest extends AbstractPostgresBackedTest {
         assertThat(forgotPassword(REGISTERED))
                 .as("an outage must not distinguish a registered address from an unknown one")
                 .isEqualTo(forgotPassword(UNKNOWN));
+    }
+
+    @Test
+    @DisplayName("a mail provider outage does not answer registrations differently either")
+    void aProviderOutageIsNotARegistrationOracle() throws Exception {
+        // Registration sent its code inline, inside the transaction, so an outage turned a new
+        // address's 201 into a 503 while an existing address was answered as it always was.
+        given(emailService.send(any()))
+                .willThrow(new EmailDeliveryException("error.email.deliveryFailed"));
+
+        assertThat(register(REGISTERED))
+                .as("an outage must not distinguish a registered address from an unknown one")
+                .isEqualTo(register(UNKNOWN));
     }
 
     @Test
@@ -206,6 +230,16 @@ class AccountEnumerationTest extends AbstractPostgresBackedTest {
     private String answerOf(MvcResult result) throws Exception {
         return result.getResponse().getStatus()
                 + " " + result.getResponse().getContentAsString();
+    }
+
+    private String register(String email) throws Exception {
+        return answerOf(mockMvc.perform(post("/api/v1/auth/register").with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {"fullName":"Exists Test","email":"%s","password":"%s","role":"STUDENT",
+                         "termsAccepted":true,"termsVersion":"%s"}
+                        """.formatted(email, PASSWORD, termsVersionRegistry.current().orElseThrow().id())))
+                .andReturn());
     }
 
     private String forgotPassword(String email) throws Exception {

@@ -264,11 +264,12 @@ class RegistrationTermsConsentTest extends AbstractPostgresBackedTest {
     // ── The account that fails after consent was decided ──────────────────────
 
     @Test
-    @DisplayName("a registration that fails part-way leaves no orphan consent row")
+    @DisplayName("a registration that creates no account leaves no orphan consent row")
     void failedAccountCreationLeavesNoConsentRow() throws Exception {
-        // The address is already taken, so the duplicate check refuses this after the terms have
-        // been resolved and before anything is written. If consent were recorded at the moment it
-        // was validated rather than alongside the account, this is where the orphan would appear.
+        // The address is already taken, so this creates nothing -- after the terms have been
+        // resolved, and before anything is written. If consent were recorded at the moment it was
+        // validated rather than alongside the account, this is where the orphan would appear. It is
+        // answered like a new registration (SEC-F05), so only the tables can tell what happened.
         register("""
                 {"fullName":"Consent Test","email":"%s","password":"%s","role":"STUDENT",
                  "termsAccepted":true,"termsVersion":"%s"}
@@ -281,11 +282,11 @@ class RegistrationTermsConsentTest extends AbstractPostgresBackedTest {
                 {"fullName":"Consent Test","email":"%s","password":"%s","role":"STUDENT",
                  "termsAccepted":true,"termsVersion":"%s"}
                 """.formatted(EMAIL, PASSWORD, currentVersionId()))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.errors[0]").value("Email is already registered"));
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("success"));
 
         assertThat(rowCounts())
-                .as("the refused second registration wrote nothing at all")
+                .as("the second registration of a taken address wrote nothing at all")
                 .isEqualTo(afterFirst);
     }
 

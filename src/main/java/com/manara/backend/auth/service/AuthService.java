@@ -12,17 +12,16 @@ import com.manara.backend.terms.service.TermsService;
 import com.manara.backend.user.model.Role;
 import com.manara.backend.user.model.User;
 import com.manara.backend.user.repository.UserRepository;
-import com.manara.backend.profile.mapper.ProfileMapper;
-import com.manara.backend.profile.repository.InstructorRepository;
-import com.manara.backend.profile.repository.StudentRepository;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.EnumSet;
@@ -34,16 +33,14 @@ import java.util.Set;
 public class AuthService {
 
     private final UserRepository userRepository;
-    private final InstructorRepository instructorRepository;
-    private final StudentRepository studentRepository;
     private final PasswordEncoder passwordEncoder;
     private final OtpService otpService;
     private final AuthenticationManager authenticationManager;
     private final MessageService messageService;
     private final SessionManager sessionManager;
     private final AuthMapper authMapper;
-    private final ProfileMapper profileMapper;
     private final TermsService termsService;
+    private final RegistrationProcessor registrationProcessor;
 
     /**
      * The roles a stranger may give themselves by filling in the public registration form.
@@ -61,7 +58,7 @@ public class AuthService {
     private static final Set<Role> SELF_ASSIGNABLE_ROLES = EnumSet.of(Role.STUDENT, Role.INSTRUCTOR);
 
     /**
-     * Creates an account.
+     * Creates an account, or, for an address that already has one, answers exactly as if it had.
      *
      * <p>This method is the application's <strong>only</strong> account-creation path — there is no
      * social sign-up, no OAuth, no invitation flow, no admin-created account and no service-account
@@ -71,15 +68,36 @@ public class AuthService {
      *
      * <p>The terms check runs first, before the duplicate-address read and before anything at all is
      * written. A refused registration leaves no user row, no student or instructor profile, no
-     * consent row, no OTP and no email — the account and its consent are created together in this
-     * one transaction, or neither is.
+     * consent row, no OTP and no email — the account and its consent are created together in one
+     * transaction, or neither is.
      *
      * <p>The role allowlist is checked immediately after, and still before the duplicate-address
      * read: a privileged registration is refused without writing a user, a profile or an OTP,
      * without sending mail, and without the reply revealing whether the address was already
      * registered.
+     *
+     * <p>Past those two checks the caller can no longer see which way it went. An address that
+     * already had an account used to be refused with 400 "Email is already registered", which made
+     * this form a membership test for anybody. Now a new address gets its account and a verification
+     * code, while an existing one has nothing written to it and its owner gets a notice
+     * ({@link AccountExistsNotifier}). Both are answered 201 with the same text. The work is kept
+     * comparable as well as the answer: the password is hashed on both paths, and both emails go out
+     * after commit and off the request thread, so neither path waits on the mail provider and an
+     * outage no longer answers new addresses alone with a 503. Comparable is not constant — the new
+     * path still writes rows the other does not.
+     *
+     * <p>A failed send therefore no longer rolls the registration back. The account stays,
+     * unverified, and its owner asks for another code from the verification screen, as they would
+     * after any lost email.
+     *
+     * <p>Not transactional itself, for the reason {@code CourseCheckoutService} is not. Two
+     * registrations racing for one new address can both pass the existence check, and the unique
+     * index on {@code users.email} refuses the second insert. That exception leaves its transaction
+     * unusable, so the loser is answered from a fresh one, as the existing-account case it now is.
      */
-    @Transactional
+    // NOT_SUPPORTED rather than nothing: the class default would otherwise open a read-only
+    // transaction here, and the processor would join it -- read-only, and poisoned by a lost race.
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public MessageResponse register(RegisterRequest request) {
         // Decided before any side effect. That the acceptance flag itself is an explicit `true` has
         // already been settled by validation on the request; what is checked here is that the
@@ -96,25 +114,24 @@ public class AuthService {
             throw new BusinessException("auth.role.notSelfAssignable");
         }
 
-        if (userRepository.existsByEmail(request.getEmail())) {
-            throw new BusinessException("auth.email.duplicate");
-        }
-
+        // Hashed whether or not the address turns out to be taken, and before that is known. bcrypt is
+        // deliberately the slowest thing this request does; skipping it for existing accounts had
+        // them answered in about a twentieth of the time, which was the status code's disclosure again.
         var encodedPassword = passwordEncoder.encode(request.getPassword());
-        var user = userRepository.save(authMapper.toUser(request, encodedPassword, roleToSet));
 
-        termsService.recordAcceptance(user, acceptedTermsVersion);
-
-        if (roleToSet == Role.INSTRUCTOR) {
-            instructorRepository.save(profileMapper.toInstructor(user));
-        } else if (roleToSet == Role.STUDENT) {
-            studentRepository.save(profileMapper.toStudent(user));
+        try {
+            registrationProcessor.register(request, encodedPassword, roleToSet, acceptedTermsVersion);
+        } catch (DataIntegrityViolationException concurrentRegistration) {
+            // Lost a race for a new address. The winner's row is committed by now, so this is the
+            // existing-account case and is answered as one. If no account holds the address, the
+            // database refused something else, and that is not this method's to hide.
+            if (!registrationProcessor.settleLostRace(request.getEmail())) {
+                throw concurrentRegistration;
+            }
         }
-
-        otpService.generateAndSend(user, OtpType.EMAIL_VERIFICATION);
 
         return MessageResponse.builder()
-                .message(messageService.get("auth.register.success"))
+                .message(messageService.get("auth.register.accepted"))
                 .build();
     }
 

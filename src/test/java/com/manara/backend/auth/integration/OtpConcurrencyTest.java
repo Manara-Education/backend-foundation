@@ -170,7 +170,7 @@ class OtpConcurrencyTest extends AbstractPostgresBackedTest {
     void onlyOneCodeSurvivesConcurrentResends() throws Exception {
         runTogether(() -> {
             try {
-                otpService.generateAndSend(account, OtpType.PASSWORD_RESET);
+                otpService.generateAndSendQuietly(account, OtpType.PASSWORD_RESET);
             } catch (RuntimeException expected) {
                 // A resend that loses its race is fine; two usable codes are not.
             }
