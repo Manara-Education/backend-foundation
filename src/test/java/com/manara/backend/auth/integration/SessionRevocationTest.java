@@ -44,8 +44,8 @@ class SessionRevocationTest extends AbstractPostgresBackedTest {
 
     private static final String DOMAIN = "@revocation.example";
     private static final String EMAIL = "sara" + DOMAIN;
-    private static final String PASSWORD = "sunlit harbour lantern 42";
-    private static final String NEW_PASSWORD = "quiet orchard kettle 97";
+    private static final String PASSWORD = "Sunlit harbour lantern 42!";
+    private static final String NEW_PASSWORD = "Quiet orchard kettle 97!";
     private static final String SESSION_COOKIE = "MANARA_SESSION";
 
     private MockMvc mockMvc;

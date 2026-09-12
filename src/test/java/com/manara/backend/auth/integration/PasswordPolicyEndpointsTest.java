@@ -12,6 +12,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpHeaders;
@@ -45,6 +46,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * throw — a 500. Every refusal here is asserted as a 400 carrying the policy's own reason, at all
  * three endpoints, because a rule two of them enforce is a rule with a side door.
  *
+ * <p>The four requirements the forms show — 15 characters, an upper-case English letter, a digit and
+ * a symbol — are sent straight to the API here, the way a caller that skips the form's own checks
+ * would send them. The client's checklist is a convenience; this is the enforcement.
+ *
  * <p>Driven through HTTP against the running application rather than against the validator: the
  * claim is about what the endpoints do, including that a refusal writes nothing — no account, no
  * new hash, no spent code, no revoked session.
@@ -55,20 +60,24 @@ class PasswordPolicyEndpointsTest extends AbstractPostgresBackedTest {
     private static final String SESSION_COOKIE = "MANARA_SESSION";
     private static final String ORIGINAL_PASSWORD = "sunlit harbour lantern 42";
 
-    /** 29 code points, 53 UTF-8 bytes: within the limit although well past 15 letters. */
-    private static final String ARABIC_PASSPHRASE = "نخيل البحر يغني للقمر كل مساء";
-    private static final String ASCII_PASSPHRASE_60 = "lanterns drift past the quiet harbour wall every evening now";
+    /** Arabic letters beside the three required characters: 33 code points, 57 UTF-8 bytes. */
+    private static final String ARABIC_PASSPHRASE = "نخيل البحر يغني للقمر كل مساء Q7!";
+    private static final String ASCII_PASSPHRASE_60 = "Lanterns drift past the quiet harbour wall every evening, 7!";
 
     /** 14 code points but 16 UTF-16 units, so counting {@code String.length()} would accept it. */
     private static final String FOURTEEN_CODE_POINTS = "river stone 😀😀";
+    /** Meets all four requirements, and is one byte more than bcrypt can use. */
     private static final String ASCII_73_BYTES =
-            "lanterns drift past the quiet harbour wall every single evening at dusk!!";
-    /** 37 Arabic letters, two bytes each. */
-    private static final String ARABIC_74_BYTES = "الشمسوالقمروالنجوموالبحروالجبالوالسهل";
+            "Lanterns drift past the quiet harbour wall every single evening at 7 pm!!";
+    /** 35 Arabic letters, two bytes each, and the three required characters. */
+    private static final String ARABIC_73_BYTES = "ب".repeat(35) + "A1!";
 
     private static final String TOO_SHORT = "at least 15 characters";
-    private static final String TOO_LONG = "72 bytes";
-    private static final String COMMON = "common or leaked";
+    private static final String MISSING_UPPERCASE = "uppercase English letter";
+    private static final String MISSING_NUMBER = "at least one number";
+    private static final String MISSING_SYMBOL = "special symbol";
+    private static final String TOO_LONG = "too long";
+    private static final String COMMON = "too common";
     private static final String PERSONAL = "your email address";
 
     private MockMvc mockMvc;
@@ -103,10 +112,15 @@ class PasswordPolicyEndpointsTest extends AbstractPostgresBackedTest {
     static List<Refused> refusedPasswords() {
         return List.of(
                 new Refused("the pentest's 123456", "123456", TOO_SHORT),
-                new Refused("a 16-character entry on the common-password list", "passwordpassword", COMMON),
                 new Refused("14 code points that are 16 UTF-16 units", FOURTEEN_CODE_POINTS, TOO_SHORT),
+                new Refused("no upper-case letter or symbol", "password123456789", MISSING_UPPERCASE),
+                new Refused("no symbol", "PASSWORD123456789", MISSING_SYMBOL),
+                new Refused("no symbol, though mixed case", "PasswordPassword1", MISSING_SYMBOL),
+                new Refused("no upper-case letter or digit", "abcdefghijklmno!", MISSING_UPPERCASE),
+                new Refused("no digit", "Harbour lights at dusk!", MISSING_NUMBER),
+                new Refused("a common entry that meets all four requirements", "11111_Fantastique", COMMON),
                 new Refused("73 ASCII bytes", ASCII_73_BYTES, TOO_LONG),
-                new Refused("37 Arabic letters, 74 bytes", ARABIC_74_BYTES, TOO_LONG));
+                new Refused("35 Arabic letters and three more characters, 73 bytes", ARABIC_73_BYTES, TOO_LONG));
     }
 
     @BeforeEach
@@ -136,8 +150,7 @@ class PasswordPolicyEndpointsTest extends AbstractPostgresBackedTest {
         assertThat(FOURTEEN_CODE_POINTS.codePointCount(0, FOURTEEN_CODE_POINTS.length())).isEqualTo(14);
         assertThat(FOURTEEN_CODE_POINTS.length()).isEqualTo(16);
         assertThat(ASCII_73_BYTES.getBytes(StandardCharsets.UTF_8)).hasSize(73);
-        assertThat(ARABIC_74_BYTES.codePointCount(0, ARABIC_74_BYTES.length())).isEqualTo(37);
-        assertThat(ARABIC_74_BYTES.getBytes(StandardCharsets.UTF_8)).hasSize(74);
+        assertThat(ARABIC_73_BYTES.getBytes(StandardCharsets.UTF_8)).hasSize(73);
         assertThat(ARABIC_PASSPHRASE.getBytes(StandardCharsets.UTF_8)).hasSizeLessThanOrEqualTo(72);
         assertThat(ASCII_PASSPHRASE_60).hasSize(60);
     }
@@ -230,17 +243,19 @@ class PasswordPolicyEndpointsTest extends AbstractPostgresBackedTest {
     @DisplayName("the account's own address, its local part and the service name are refused everywhere")
     void personalPasswordsAreRefused() throws Exception {
         String email = "long-address-owner" + DOMAIN;
+        // Each of these meets the four requirements, so what is refused is whose details they are.
+        String ownAddress = email.toUpperCase() + "1";
 
-        expectRefusal(register(email, email), PERSONAL);
-        expectRefusal(register(email, "long-address-owner2026"), PERSONAL);
+        expectRefusal(register(email, ownAddress), PERSONAL);
+        expectRefusal(register(email, "Long-Address-Owner2026!"), PERSONAL);
         expectRefusal(register(email, "Manara manara 2026!"), PERSONAL);
 
         seedVerifiedAccount(email, ORIGINAL_PASSWORD);
         requestResetCode(email);
-        expectRefusal(reset(email, outstandingCode(email), email), PERSONAL);
+        expectRefusal(reset(email, outstandingCode(email), ownAddress), PERSONAL);
 
         Device device = signIn(email, ORIGINAL_PASSWORD);
-        expectRefusal(changePassword(device, ORIGINAL_PASSWORD, email.toUpperCase()), PERSONAL);
+        expectRefusal(changePassword(device, ORIGINAL_PASSWORD, ownAddress), PERSONAL);
         assertThat(storedHashMatches(email, ORIGINAL_PASSWORD)).isTrue();
     }
 
@@ -257,19 +272,21 @@ class PasswordPolicyEndpointsTest extends AbstractPostgresBackedTest {
         signIn(email, "sunshine");
     }
 
-    @Test
-    @DisplayName("the byte limit is explained in Arabic when the client asks for Arabic")
-    void byteLimitIsExplainedInArabic() throws Exception {
-        MvcResult result = mockMvc.perform(post("/api/v1/auth/register").with(csrf())
-                        .header(HttpHeaders.ACCEPT_LANGUAGE, "ar")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(registrationBody("arabic-locale" + DOMAIN, ARABIC_74_BYTES)))
-                .andExpect(status().isBadRequest())
-                .andReturn();
+    // ── What the refusal says ─────────────────────────────────────────────────
 
-        assertThat(result.getResponse().getContentAsString(StandardCharsets.UTF_8))
-                .contains("72")
-                .contains("بايت");
+    @Test
+    @DisplayName("a missing requirement is refused in the checklist's Arabic wording when the client asks for Arabic")
+    void missingRequirementIsExplainedInArabic() throws Exception {
+        assertThat(refusalBody("ar", "missing-symbol-ar" + DOMAIN, "PasswordPassword1"))
+                .contains("يجب أن تحتوي كلمة المرور على رمز خاص واحد على الأقل.");
+    }
+
+    @ParameterizedTest(name = "a password too long to store is refused in \"{0}\" without naming bytes or hashing")
+    @ValueSource(strings = {"en", "ar"})
+    void tooLongRefusalNamesNoInternals(String language) throws Exception {
+        assertThat(refusalBody(language, "too-long-" + language + DOMAIN, ARABIC_73_BYTES))
+                .contains("ar".equals(language) ? "كلمة المرور طويلة جدًا" : "Password is too long")
+                .doesNotContainIgnoringCase("byte", "بايت", "UTF", "bcrypt", "hash", "72");
     }
 
     // ------------------------------------------------------------------ helpers
@@ -297,6 +314,17 @@ class PasswordPolicyEndpointsTest extends AbstractPostgresBackedTest {
     private void expectRefusal(ResultActions actions, String reason) throws Exception {
         actions.andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors", hasItem(containsString(reason))));
+    }
+
+    /** The body of a refused registration, in the language asked for. */
+    private String refusalBody(String language, String email, String password) throws Exception {
+        MvcResult result = mockMvc.perform(post("/api/v1/auth/register").with(csrf())
+                        .header(HttpHeaders.ACCEPT_LANGUAGE, language)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(registrationBody(email, password)))
+                .andExpect(status().isBadRequest())
+                .andReturn();
+        return result.getResponse().getContentAsString(StandardCharsets.UTF_8);
     }
 
     private ResultActions register(String email, String password) throws Exception {

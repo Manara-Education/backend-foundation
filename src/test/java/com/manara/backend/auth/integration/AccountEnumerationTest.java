@@ -43,7 +43,7 @@ class AccountEnumerationTest extends AbstractPostgresBackedTest {
     private static final String DOMAIN = "@enumeration.example";
     private static final String REGISTERED = "exists" + DOMAIN;
     private static final String UNKNOWN = "nobody" + DOMAIN;
-    private static final String PASSWORD = "sunlit harbour lantern 42";
+    private static final String PASSWORD = "Sunlit harbour lantern 42!";
 
     private MockMvc mockMvc;
 

@@ -61,7 +61,7 @@ class RegisterRequestTermsBindingTest {
     @DisplayName("an omitted field is null, and is reported — @AssertTrue alone would let it pass")
     void omittedAcceptanceIsRejected() {
         RegisterRequest request = json.readValue("""
-                {"fullName":"Ali","email":"ali@x.com","password":"sunlit harbour lantern 42",
+                {"fullName":"Ali","email":"ali@x.com","password":"Sunlit harbour lantern 42!",
                  "termsVersion":"%s"}
                 """.formatted(VERSION), RegisterRequest.class);
 
@@ -97,7 +97,7 @@ class RegisterRequestTermsBindingTest {
     @DisplayName("a missing version is reported even when acceptance is a perfectly good true")
     void missingVersionIsRejected() {
         RegisterRequest request = json.readValue("""
-                {"fullName":"Ali","email":"ali@x.com","password":"sunlit harbour lantern 42",
+                {"fullName":"Ali","email":"ali@x.com","password":"Sunlit harbour lantern 42!",
                  "termsAccepted":true}
                 """, RegisterRequest.class);
 
@@ -114,7 +114,7 @@ class RegisterRequestTermsBindingTest {
 
     private RegisterRequest read(String termsAccepted, String termsVersion) {
         return json.readValue("""
-                {"fullName":"Ali","email":"ali@x.com","password":"sunlit harbour lantern 42",
+                {"fullName":"Ali","email":"ali@x.com","password":"Sunlit harbour lantern 42!",
                  "termsAccepted":%s,"termsVersion":%s}
                 """.formatted(termsAccepted, termsVersion), RegisterRequest.class);
     }

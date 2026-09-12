@@ -39,7 +39,7 @@ class AuthRequestEmailBindingTest {
     void registerRequestCanonicalisesEmail(String raw) {
         RegisterRequest request = json.readValue(
                 """
-                {"fullName":"Ali","email":%s,"password":"sunlit harbour lantern 42"}
+                {"fullName":"Ali","email":%s,"password":"Sunlit harbour lantern 42!"}
                 """.formatted(quote(raw)), RegisterRequest.class);
 
         assertThat(request.getEmail()).isEqualTo(CANONICAL);
@@ -51,7 +51,7 @@ class AuthRequestEmailBindingTest {
     void loginRequestCanonicalisesEmail(String raw) {
         LoginRequest request = json.readValue(
                 """
-                {"email":%s,"password":"sunlit harbour lantern 42"}
+                {"email":%s,"password":"Sunlit harbour lantern 42!"}
                 """.formatted(quote(raw)), LoginRequest.class);
 
         assertThat(request.getEmail()).isEqualTo(CANONICAL);
@@ -69,7 +69,7 @@ class AuthRequestEmailBindingTest {
         assertThat(json.readValue("{\"email\":%s}".formatted(padded),
                 ForgotPasswordRequest.class).getEmail()).isEqualTo(CANONICAL);
         assertThat(json.readValue(
-                "{\"email\":%s,\"code\":\"123456\",\"newPassword\":\"sunlit harbour lantern 42\"}".formatted(padded),
+                "{\"email\":%s,\"code\":\"123456\",\"newPassword\":\"Sunlit harbour lantern 42!\"}".formatted(padded),
                 ResetPasswordRequest.class).getEmail()).isEqualTo(CANONICAL);
     }
 
@@ -86,7 +86,7 @@ class AuthRequestEmailBindingTest {
         // one was sent — so any non-blank value serves here.
         RegisterRequest request = json.readValue(
                 """
-                {"fullName":"Ali","email":"  Ali@x.com  ","password":"sunlit harbour lantern 42",
+                {"fullName":"Ali","email":"  Ali@x.com  ","password":"Sunlit harbour lantern 42!",
                  "termsAccepted":true,"termsVersion":"1.0"}
                 """, RegisterRequest.class);
 
@@ -100,7 +100,7 @@ class AuthRequestEmailBindingTest {
     void invalidAddressIsStillRejected() {
         RegisterRequest request = json.readValue(
                 """
-                {"fullName":"Ali","email":"  not-an-address  ","password":"sunlit harbour lantern 42"}
+                {"fullName":"Ali","email":"  not-an-address  ","password":"Sunlit harbour lantern 42!"}
                 """, RegisterRequest.class);
 
         assertThat(validator.validate(request))
@@ -113,7 +113,7 @@ class AuthRequestEmailBindingTest {
     void blankAddressStaysBlank() {
         RegisterRequest request = json.readValue(
                 """
-                {"fullName":"Ali","email":"   ","password":"sunlit harbour lantern 42"}
+                {"fullName":"Ali","email":"   ","password":"Sunlit harbour lantern 42!"}
                 """, RegisterRequest.class);
 
         assertThat(request.getEmail()).isEmpty();

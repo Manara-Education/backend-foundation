@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -19,15 +20,20 @@ import java.util.stream.Collectors;
  * registration, change and reset — through {@link ValidPassword}, {@link PasswordNotPersonal} and
  * {@code AuthService#changePassword}.
  *
- * <p>Modelled on NIST SP 800-63B-4 for password-only authentication: a length floor, a ceiling, a
- * check against passwords known to be common or breached, and a few context-specific refusals —
- * and deliberately no composition rules. "Must contain an upper-case letter, a digit and a symbol"
- * steers people to {@code Password1!}, which is on every list; fifteen characters of anything,
- * spaces and Arabic included, is both stronger and easier to remember.
+ * <p>Four requirements a person is shown and ticks off while typing: at least 15 characters, an
+ * upper-case English letter, a digit and a symbol. The client's checklist
+ * ({@code src/features/auth/password-policy} in frontend-foundation) tests the same four with the
+ * same patterns, in the same order, and words each refusal as {@code messages_ar.properties} does.
+ * The client's copy saves a round trip; this one is the rule, and applies to a request sent
+ * straight to the API just the same.
+ *
+ * <p>Behind them sit the checks no checklist can show: a ceiling, a list of passwords known to be
+ * common or breached, and a few context-specific refusals. Their messages say what to change, never
+ * how the password is stored.
  *
  * <p>Applied only when a password is <em>set</em>. Sign-in never consults it, so accounts created
- * under the old six-character rule keep working. Nothing here changes what is hashed either: the
- * normalised form below exists for comparison only.
+ * under an earlier rule keep working. Nothing here changes what is hashed either: the normalised
+ * form below exists for comparison only.
  */
 public final class PasswordPolicy {
 
@@ -37,10 +43,24 @@ public final class PasswordPolicy {
     /**
      * bcrypt's own limit. It uses at most 72 bytes of the UTF-8 encoding, and the Spring Security
      * encoder refuses anything longer outright — which reached the client as a 500. Refused here
-     * first, with a reason, and never truncated: two passwords sharing their first 72 bytes would
-     * otherwise be the same password.
+     * first and never truncated: two passwords sharing their first 72 bytes would otherwise be the
+     * same password. The refusal only says the password is too long; bytes are this class's
+     * concern, not the reader's.
      */
     public static final int MAX_UTF8_BYTES = 72;
+
+    /** English capitals only. Arabic has no letter case, so an upper-case letter can only mean A to Z. */
+    private static final Pattern UPPERCASE = Pattern.compile("[A-Z]");
+
+    private static final Pattern NUMBER = Pattern.compile("[0-9]");
+
+    /**
+     * Any character Unicode classes as punctuation or a symbol, in any script — {@code !}, {@code ؟},
+     * {@code €}, an emoji. A list of allowed symbols would refuse perfectly good ones. JavaScript's
+     * {@code /[\p{P}\p{S}]/u} puts every code point in the same class, which is what lets the client
+     * apply this rule without ever disagreeing with the server.
+     */
+    private static final Pattern SYMBOL = Pattern.compile("[\\p{P}\\p{S}]");
 
     static final String BUNDLED_BLOCKLIST = "/auth/password-blocklist.txt";
 
@@ -56,9 +76,15 @@ public final class PasswordPolicy {
      */
     private static final int SHORTEST_EMBEDDED_TERM = 3;
 
-    /** A broken rule, and the message key that explains it. No message quotes the password. */
+    /**
+     * A broken rule, and the message key that explains it, in the order {@link #check} tests them.
+     * No message quotes the password.
+     */
     public enum Violation {
         TOO_SHORT("validation.password.size"),
+        MISSING_UPPERCASE("validation.password.uppercase"),
+        MISSING_NUMBER("validation.password.number"),
+        MISSING_SYMBOL("validation.password.symbol"),
         TOO_LONG("validation.password.tooLong"),
         REPETITIVE("validation.password.repetitive"),
         COMMON("validation.password.common"),
@@ -88,8 +114,9 @@ public final class PasswordPolicy {
 
     /**
      * The first rule the password breaks without reference to any account, or empty if it breaks
-     * none. {@code null} passes: whether a password was sent at all is {@code @NotBlank}'s question,
-     * and answering it here as well would report it twice.
+     * none. The four shown requirements come first, in the order the client lists them, so both
+     * name the same missing requirement. {@code null} passes: whether a password was sent at all is
+     * {@code @NotBlank}'s question, and answering it here as well would report it twice.
      */
     public Optional<Violation> check(String password) {
         if (password == null) {
@@ -97,6 +124,15 @@ public final class PasswordPolicy {
         }
         if (password.codePointCount(0, password.length()) < MIN_CODE_POINTS) {
             return Optional.of(Violation.TOO_SHORT);
+        }
+        if (!hasUppercase(password)) {
+            return Optional.of(Violation.MISSING_UPPERCASE);
+        }
+        if (!hasNumber(password)) {
+            return Optional.of(Violation.MISSING_NUMBER);
+        }
+        if (!hasSymbol(password)) {
+            return Optional.of(Violation.MISSING_SYMBOL);
         }
         if (password.getBytes(StandardCharsets.UTF_8).length > MAX_UTF8_BYTES) {
             return Optional.of(Violation.TOO_LONG);
@@ -126,6 +162,23 @@ public final class PasswordPolicy {
         }
         String comparable = comparable(password);
         return identityTerms(email, fullName).stream().anyMatch(term -> isTermWithFiller(comparable, term));
+    }
+
+    /*
+     * The three character requirements read the password as typed, never its comparable form: that
+     * one is lower-cased, and NFKC would turn a full-width Ａ into the A these rules ask for.
+     */
+
+    private static boolean hasUppercase(String password) {
+        return UPPERCASE.matcher(password).find();
+    }
+
+    private static boolean hasNumber(String password) {
+        return NUMBER.matcher(password).find();
+    }
+
+    private static boolean hasSymbol(String password) {
+        return SYMBOL.matcher(password).find();
     }
 
     /**

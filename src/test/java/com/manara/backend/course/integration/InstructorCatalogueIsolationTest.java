@@ -57,7 +57,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class InstructorCatalogueIsolationTest extends AbstractPostgresBackedTest {
 
     private static final String DOMAIN = "@catalogue-isolation.example";
-    private static final String PASSWORD = "catalogue isolation passphrase 2026";
+    private static final String PASSWORD = "Catalogue isolation passphrase 2026!";
     private static final String BASE = "/api/v1/instructor/courses";
 
     private MockMvc mockMvc;
