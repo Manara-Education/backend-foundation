@@ -1,6 +1,7 @@
 package com.manara.backend.course.service;
 
 import com.manara.backend.common.exception.BusinessException;
+import com.manara.backend.common.exception.ErrorCode;
 import com.manara.backend.common.exception.ResourceNotFoundException;
 import com.manara.backend.course.dto.CheckoutRequest;
 import com.manara.backend.course.mapper.CourseMapper;
@@ -21,6 +22,7 @@ import com.manara.backend.course.repository.CoursePurchaseRepository;
 import com.manara.backend.course.repository.CourseSubscriptionRepository;
 import com.manara.backend.course.repository.EnrollmentRepository;
 import com.manara.backend.course.repository.SubscriptionPlanRepository;
+import com.manara.backend.payment.config.CommerceMode;
 import com.manara.backend.payment.dto.PaymentMethodRequest;
 import com.manara.backend.payment.model.PaymentCharge;
 import com.manara.backend.payment.model.PaymentReceipt;
@@ -97,11 +99,7 @@ class CheckoutProcessorTest {
 
     @BeforeEach
     void setUp() {
-        Clock fixed = Clock.fixed(NOW.toInstant(ZoneOffset.UTC), ZoneId.of("UTC"));
-        checkoutProcessor = new CheckoutProcessor(
-                courseRepository, studentRepository, enrollmentRepository, courseEntitlementRepository,
-                coursePurchaseRepository, courseSubscriptionRepository, subscriptionPlanRepository, new CourseMapper(),
-                new EntitlementMapper(), entitlementPolicy, new SubscriptionWindow(), paymentGateway, fixed);
+        checkoutProcessor = processorIn(CommerceMode.DEMONSTRATION);
 
         lenient().when(entitlementPolicy.accessOf(any(Long.class), any(Student.class)))
                 .thenReturn(CourseAccess.none());
@@ -116,9 +114,10 @@ class CheckoutProcessorTest {
         givenCourse(CourseAccessType.FREE, null);
         givenNoExistingAccess();
 
-        checkoutProcessor.checkout(studentUser, COURSE_ID, new CheckoutRequest());
+        var response = checkoutProcessor.checkout(studentUser, COURSE_ID, new CheckoutRequest());
 
         verify(paymentGateway, never()).charge(any(), any());
+        assertThat(response.isSimulated()).as("nothing was paid, simulated or otherwise").isFalse();
         CourseEntitlement saved = savedEntitlement();
         assertThat(saved.getSource()).isEqualTo(EntitlementSource.FREE);
         assertThat(saved.getExpiresAt()).isNull();
@@ -153,6 +152,7 @@ class CheckoutProcessorTest {
         verify(courseEntitlementRepository, never()).save(any());
         verify(enrollmentRepository, never()).save(any());
         assertThat(response.getPaymentReference()).isNull();
+        assertThat(response.isSimulated()).isFalse();
     }
 
     // --- PURCHASE ------------------------------------------------------------
@@ -170,6 +170,7 @@ class CheckoutProcessorTest {
         assertThat(saved.getSource()).isEqualTo(EntitlementSource.PURCHASE);
         assertThat(saved.getExpiresAt()).isNull();
         assertThat(response.getPaymentReference()).isEqualTo("sim_test");
+        assertThat(response.isSimulated()).as("a demonstration purchase must be labelled as one").isTrue();
     }
 
     /**
@@ -186,7 +187,7 @@ class CheckoutProcessorTest {
         givenCourse(CourseAccessType.PURCHASE, BigDecimal.valueOf(490));
         givenNoExistingAccess();
         given(paymentGateway.charge(any(), any()))
-                .willReturn(new PaymentReceipt("sim_test", BigDecimal.valueOf(490), NOW));
+                .willReturn(new PaymentReceipt("sim_test", BigDecimal.valueOf(490), NOW, true));
 
         checkoutProcessor.checkout(studentUser, COURSE_ID, purchaseRequest());
 
@@ -458,7 +459,134 @@ class CheckoutProcessorTest {
                 .hasMessage("error.course.notFound");
     }
 
+    // --- simulated receipts outside a demonstration (SEC-D01) ----------------
+
+    /**
+     * The simulator already refuses to charge outside DEMONSTRATION. This is the refusal at the point
+     * of granting, and it has to hold against a gateway that returned a simulated receipt anyway —
+     * before anything is written, so nothing grants access.
+     */
+    @Test
+    void aSimulatedReceiptBuysNothingOutsideADemonstration() {
+        CheckoutProcessor live = processorIn(CommerceMode.LIVE);
+        givenCourse(CourseAccessType.PURCHASE, BigDecimal.valueOf(490));
+        givenNoExistingAccess();
+        givenPaymentAccepted();
+
+        assertThatThrownBy(() -> live.checkout(studentUser, COURSE_ID, purchaseRequest()))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("error.payment.unavailable");
+        verify(coursePurchaseRepository, never()).save(any());
+        verify(courseEntitlementRepository, never()).save(any());
+        verify(enrollmentRepository, never()).save(any());
+    }
+
+    @Test
+    void aSimulatedReceiptOpensNoSubscriptionOutsideADemonstration() {
+        CheckoutProcessor live = processorIn(CommerceMode.LIVE);
+        Course course = givenCourse(CourseAccessType.SUBSCRIPTION, null);
+        givenNoExistingAccess();
+        givenPlan(course, SubscriptionUnit.MONTH, 1, BigDecimal.valueOf(250));
+        givenPaymentAccepted();
+
+        assertThatThrownBy(() -> live.checkout(studentUser, COURSE_ID, subscriptionRequest(99L)))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("error.payment.unavailable");
+        verify(courseSubscriptionRepository, never()).save(any());
+        verify(courseEntitlementRepository, never()).save(any());
+        verify(enrollmentRepository, never()).save(any());
+    }
+
+    /**
+     * The refusal is about the receipt, not about LIVE: a receipt that does not say it was simulated
+     * is granted there as before. The receipt is a test double, not a provider integration.
+     */
+    @Test
+    void aReceiptThatIsNotSimulatedIsStillGrantedInLive() {
+        CheckoutProcessor live = processorIn(CommerceMode.LIVE);
+        givenCourse(CourseAccessType.PURCHASE, BigDecimal.valueOf(490));
+        givenNoExistingAccess();
+        given(paymentGateway.charge(any(), any()))
+                .willReturn(new PaymentReceipt("not_simulated", BigDecimal.valueOf(490), NOW, false));
+
+        var response = live.checkout(studentUser, COURSE_ID, purchaseRequest());
+
+        verify(coursePurchaseRepository).save(any());
+        assertThat(savedEntitlement().getSource()).isEqualTo(EntitlementSource.PURCHASE);
+        assertThat(response.isSimulated()).isFalse();
+    }
+
+    @Test
+    void aGatewayThatReturnsNoReceiptGrantsNothing() {
+        givenCourse(CourseAccessType.PURCHASE, BigDecimal.valueOf(490));
+        givenNoExistingAccess();
+        given(paymentGateway.charge(any(), any())).willReturn(null);
+
+        assertThatThrownBy(() -> checkoutProcessor.checkout(studentUser, COURSE_ID, purchaseRequest()))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("error.payment.unavailable");
+        verify(coursePurchaseRepository, never()).save(any());
+        verify(courseEntitlementRepository, never()).save(any());
+    }
+
+    // --- FREE_ONLY: no payment taken or simulated (SEC-D01) ------------------
+
+    @Test
+    void inFreeOnlyAPurchaseIsRefusedBeforeAnythingIsChargedOrWritten() {
+        CheckoutProcessor freeOnly = processorIn(CommerceMode.FREE_ONLY);
+        givenCourse(CourseAccessType.PURCHASE, BigDecimal.valueOf(490));
+        givenNoExistingAccess();
+
+        assertThatThrownBy(() -> freeOnly.checkout(studentUser, COURSE_ID, purchaseRequest()))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("error.payment.unavailable")
+                .satisfies(thrown -> assertThat(((BusinessException) thrown).getErrorCode())
+                        .isEqualTo(ErrorCode.PAYMENTS_UNAVAILABLE));
+        verify(paymentGateway, never()).charge(any(), any());
+        verify(coursePurchaseRepository, never()).save(any());
+        verify(courseEntitlementRepository, never()).save(any());
+        verify(enrollmentRepository, never()).save(any());
+    }
+
+    @Test
+    void inFreeOnlyASubscriptionIsRefusedBeforeAnythingIsChargedOrWritten() {
+        CheckoutProcessor freeOnly = processorIn(CommerceMode.FREE_ONLY);
+        givenCourse(CourseAccessType.SUBSCRIPTION, null);
+        givenNoExistingAccess();
+
+        assertThatThrownBy(() -> freeOnly.checkout(studentUser, COURSE_ID, subscriptionRequest(99L)))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(thrown -> assertThat(((BusinessException) thrown).getErrorCode())
+                        .isEqualTo(ErrorCode.PAYMENTS_UNAVAILABLE));
+        verify(paymentGateway, never()).charge(any(), any());
+        verify(courseSubscriptionRepository, never()).save(any());
+        verify(courseEntitlementRepository, never()).save(any());
+        verify(enrollmentRepository, never()).save(any());
+    }
+
+    @Test
+    void inFreeOnlyAFreeCourseStillEnrols() {
+        CheckoutProcessor freeOnly = processorIn(CommerceMode.FREE_ONLY);
+        givenCourse(CourseAccessType.FREE, null);
+        givenNoExistingAccess();
+
+        var response = freeOnly.checkout(studentUser, COURSE_ID, new CheckoutRequest());
+
+        verify(paymentGateway, never()).charge(any(), any());
+        assertThat(savedEntitlement().getSource()).isEqualTo(EntitlementSource.FREE);
+        verify(enrollmentRepository).save(any(Enrollment.class));
+        assertThat(response.isSimulated()).isFalse();
+    }
+
     // --- fixtures ------------------------------------------------------------
+
+    private CheckoutProcessor processorIn(CommerceMode mode) {
+        Clock fixed = Clock.fixed(NOW.toInstant(ZoneOffset.UTC), ZoneId.of("UTC"));
+        return new CheckoutProcessor(
+                courseRepository, studentRepository, enrollmentRepository, courseEntitlementRepository,
+                coursePurchaseRepository, courseSubscriptionRepository, subscriptionPlanRepository, new CourseMapper(),
+                new EntitlementMapper(), entitlementPolicy, new SubscriptionWindow(), paymentGateway, mode, fixed);
+    }
 
     private Course givenCourse(CourseAccessType accessType, BigDecimal purchasePrice) {
         Course course = Course.builder()
@@ -487,9 +615,10 @@ class CheckoutProcessorTest {
                 .price(price).orderIndex(0).course(course).build()));
     }
 
+    /** A demonstration charge: what the simulator returns. */
     private void givenPaymentAccepted() {
         given(paymentGateway.charge(any(), any()))
-                .willReturn(new PaymentReceipt("sim_test", BigDecimal.ONE, NOW));
+                .willReturn(new PaymentReceipt("sim_test", BigDecimal.ONE, NOW, true));
     }
 
     private BigDecimal chargedAmount() {

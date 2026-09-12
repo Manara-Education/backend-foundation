@@ -1,6 +1,7 @@
 package com.manara.backend.payment.service;
 
 import com.manara.backend.common.exception.BusinessException;
+import com.manara.backend.payment.config.CommerceMode;
 import com.manara.backend.payment.dto.PaymentMethodRequest;
 import com.manara.backend.payment.model.PaymentCharge;
 import org.junit.jupiter.api.Test;
@@ -27,8 +28,9 @@ class SimulatedPaymentGatewayTest {
 
     private static final LocalDateTime NOW = LocalDateTime.of(2026, 8, 21, 12, 0);
 
-    private final SimulatedPaymentGateway gateway = new SimulatedPaymentGateway(
-            Clock.fixed(NOW.toInstant(ZoneOffset.UTC), ZoneId.of("UTC")));
+    private final Clock clock = Clock.fixed(NOW.toInstant(ZoneOffset.UTC), ZoneId.of("UTC"));
+
+    private final SimulatedPaymentGateway gateway = new SimulatedPaymentGateway(clock, CommerceMode.DEMONSTRATION);
 
     private final PaymentCharge charge =
             new PaymentCharge(BigDecimal.valueOf(490), "Course", "course-7:student-20:purchase");
@@ -38,6 +40,9 @@ class SimulatedPaymentGatewayTest {
         var receipt = gateway.charge(charge, instrument());
 
         assertThat(receipt.reference()).startsWith("sim_");
+        assertThat(receipt.simulated())
+                .as("the receipt must say, in a form checkout can check, that no money moved")
+                .isTrue();
         assertThat(receipt.amount()).isEqualByComparingTo("490");
         assertThat(receipt.paidAt()).isEqualTo(NOW);
     }
@@ -47,6 +52,27 @@ class SimulatedPaymentGatewayTest {
         assertThatThrownBy(() -> gateway.charge(charge, null))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("error.payment.required");
+    }
+
+    /**
+     * SEC-D01. The class's condition keeps the simulator out of anything but a demonstration; this is
+     * what still holds if it is ever registered some other way. It takes the published mode's word for
+     * whether this deployment is a demonstration, not the fact of its own registration.
+     */
+    @Test
+    void outsideADemonstrationItRefusesToCharge() {
+        var otherModes = Arrays.stream(CommerceMode.values())
+                .filter(mode -> mode != CommerceMode.DEMONSTRATION)
+                .toList();
+        assertThat(otherModes).isNotEmpty();
+
+        for (CommerceMode mode : otherModes) {
+            var gatewayInThatMode = new SimulatedPaymentGateway(clock, mode);
+            assertThatThrownBy(() -> gatewayInThatMode.charge(charge, instrument()))
+                    .as("the simulator must not charge in %s", mode)
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessage("error.payment.unavailable");
+        }
     }
 
     /**

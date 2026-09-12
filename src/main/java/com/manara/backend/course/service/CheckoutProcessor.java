@@ -8,6 +8,7 @@ import com.manara.backend.course.dto.CheckoutResponse;
 import com.manara.backend.course.mapper.CourseMapper;
 import com.manara.backend.course.mapper.EntitlementMapper;
 import com.manara.backend.course.model.Course;
+import com.manara.backend.course.model.CourseAccessType;
 import com.manara.backend.course.model.CourseEntitlement;
 import com.manara.backend.course.model.CoursePurchase;
 import com.manara.backend.course.model.CourseStatus;
@@ -23,6 +24,7 @@ import com.manara.backend.course.repository.CourseRepository;
 import com.manara.backend.course.repository.CourseSubscriptionRepository;
 import com.manara.backend.course.repository.EnrollmentRepository;
 import com.manara.backend.course.repository.SubscriptionPlanRepository;
+import com.manara.backend.payment.config.CommerceMode;
 import com.manara.backend.payment.dto.PaymentMethodRequest;
 import com.manara.backend.payment.model.PaymentCharge;
 import com.manara.backend.payment.model.PaymentReceipt;
@@ -32,6 +34,7 @@ import com.manara.backend.profile.repository.StudentRepository;
 import com.manara.backend.user.model.Role;
 import com.manara.backend.user.model.User;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -67,6 +70,7 @@ import java.util.List;
  * <em>first</em> checkouts, with no row yet to lock — is settled by the unique constraints on
  * {@code enrollments} and {@code course_entitlements} and retried by {@link CourseCheckoutService}.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
@@ -84,6 +88,8 @@ public class CheckoutProcessor {
     private final EntitlementPolicy entitlementPolicy;
     private final SubscriptionWindow subscriptionWindow;
     private final PaymentGateway paymentGateway;
+    /** Published by CommerceConfig; decides whether paid checkout is open and what a simulated receipt may grant. */
+    private final CommerceMode commerceMode;
     private final Clock clock;
 
     /**
@@ -105,6 +111,13 @@ public class CheckoutProcessor {
         // Already open: this is a repeat of a checkout that succeeded. Same answer, no charge.
         if (entitlement != null && entitlement.isActiveAt(now)) {
             return respond(course, student, null);
+        }
+
+        // A deployment that takes no payments refuses a paid course here, before the switch below
+        // writes anything: no receipt, purchase, subscription, entitlement or enrolment. After the
+        // repeat check on purpose, so a learner who already holds the course gets the same answer.
+        if (commerceMode == CommerceMode.FREE_ONLY && course.getAccessType() != CourseAccessType.FREE) {
+            throw new BusinessException(ErrorCode.PAYMENTS_UNAVAILABLE, "error.payment.unavailable");
         }
 
         PaymentReceipt receipt = switch (course.getAccessType()) {
@@ -136,9 +149,9 @@ public class CheckoutProcessor {
             throw new BusinessException("error.course.purchasePriceRequired");
         }
 
-        PaymentReceipt receipt = paymentGateway.charge(
+        PaymentReceipt receipt = requireGrantable(course, paymentGateway.charge(
                 new PaymentCharge(price, course.getTitle(), idempotencyKey(course, student, "purchase")),
-                paymentMethodOf(request));
+                paymentMethodOf(request)));
 
         // Written in the same transaction as the entitlement it paid for, so a charge can never
         // grant access without leaving a record of itself, and a rolled-back grant can never leave
@@ -171,10 +184,10 @@ public class CheckoutProcessor {
                 now, existing == null ? null : existing.getExpiresAt());
         LocalDateTime expiresAt = subscriptionWindow.endOf(startsAt, plan);
 
-        PaymentReceipt receipt = paymentGateway.charge(
+        PaymentReceipt receipt = requireGrantable(course, paymentGateway.charge(
                 new PaymentCharge(plan.getPrice(), course.getTitle() + " - " + plan.getName(),
                         idempotencyKey(course, student, "plan-" + plan.getId())),
-                paymentMethodOf(request));
+                paymentMethodOf(request)));
 
         closeOpenTerms(course, student);
         courseSubscriptionRepository.save(
@@ -251,6 +264,26 @@ public class CheckoutProcessor {
                 enrollment == null ? null : enrollment.getId(),
                 entitlementPolicy.accessOf(course.getId(), student),
                 receipt);
+    }
+
+    /**
+     * The receipt, if it may pay for access in this deployment.
+     *
+     * <p>Startup refuses a production deployment that has not stated its mode, and the simulator
+     * refuses to charge outside DEMONSTRATION. This is the refusal at the point of granting, and the
+     * one that does not depend on either of those having been wired correctly: a simulated receipt,
+     * however it arrived, opens nothing unless this deployment declared itself a demonstration — and
+     * a gateway that returned no receipt has not taken payment at all. Both are refused before
+     * anything is written, so the transaction leaves no purchase, subscription or entitlement.
+     */
+    private PaymentReceipt requireGrantable(Course course, PaymentReceipt receipt) {
+        if (receipt == null || (receipt.simulated() && commerceMode != CommerceMode.DEMONSTRATION)) {
+            log.error("Checkout REFUSED for course {} in {} mode: {}. No access was granted.",
+                    course.getId(), commerceMode,
+                    receipt == null ? "the gateway returned no receipt" : "simulated receipt " + receipt.reference());
+            throw new BusinessException(ErrorCode.PAYMENTS_UNAVAILABLE, "error.payment.unavailable");
+        }
+        return receipt;
     }
 
     // --- validation ----------------------------------------------------------
