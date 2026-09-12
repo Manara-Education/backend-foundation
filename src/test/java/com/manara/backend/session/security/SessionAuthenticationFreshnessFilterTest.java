@@ -3,6 +3,7 @@ package com.manara.backend.session.security;
 import com.manara.backend.auth.config.AuthSecurityConfig;
 import com.manara.backend.common.service.MessageService;
 import com.manara.backend.session.manager.HttpSessionManager;
+import com.manara.backend.session.manager.SessionCeiling;
 import com.manara.backend.session.manager.SessionManager;
 import com.manara.backend.user.model.Role;
 import com.manara.backend.user.model.User;
@@ -67,6 +68,8 @@ class SessionAuthenticationFreshnessFilterTest {
     private MessageService messageService;
     @Mock
     private SecurityContextRepository securityContextRepository;
+    @Mock
+    private SessionCeiling sessionCeiling;
 
     private SessionAuthenticationFreshnessFilter filter;
 
@@ -76,7 +79,7 @@ class SessionAuthenticationFreshnessFilterTest {
 
     @BeforeEach
     void setUp() {
-        SessionManager sessionManager = new HttpSessionManager(securityContextRepository);
+        SessionManager sessionManager = new HttpSessionManager(securityContextRepository, sessionCeiling);
         filter = new SessionAuthenticationFreshnessFilter(
                 userRepository,
                 sessionManager,

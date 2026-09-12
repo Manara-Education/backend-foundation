@@ -3,6 +3,7 @@ package com.manara.backend.auth.security;
 import com.manara.backend.auth.config.AuthSecurityConfig;
 import com.manara.backend.common.service.MessageService;
 import com.manara.backend.session.manager.HttpSessionManager;
+import com.manara.backend.session.manager.SessionCeiling;
 import com.manara.backend.session.manager.SessionManager;
 import com.manara.backend.session.security.SessionAuthenticationFreshnessFilter;
 import com.manara.backend.user.model.Role;
@@ -164,7 +165,7 @@ class PasswordResetRequiredFilterTest {
         SecurityContextRepository contextRepository = mock(SecurityContextRepository.class);
         SessionAuthenticationFreshnessFilter freshnessFilter = new SessionAuthenticationFreshnessFilter(
                 userRepository,
-                new HttpSessionManager(contextRepository),
+                new HttpSessionManager(contextRepository, mock(SessionCeiling.class)),
                 messageService,
                 new ObjectMapper(),
                 List.of(new AuthSecurityConfig()));

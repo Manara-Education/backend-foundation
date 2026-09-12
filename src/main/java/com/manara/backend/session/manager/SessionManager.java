@@ -32,9 +32,14 @@ public interface SessionManager {
      *   3. persist the SecurityContext into the session so subsequent requests resolve auth from cookie
      *   4. stamp {@link #AUTH_VERSION_ATTRIBUTE} with the epoch the principal was just read under,
      *      so the session can be told apart from one opened under a credential since replaced
+     *   5. record the session against its account's ceiling, to be counted once it has been stored —
+     *      ending the account's oldest session if this one is past the limit
      */
     void establish(Authentication auth, HttpServletRequest request, HttpServletResponse response);
 
-    /** Tears down the current session: invalidate, clear context, expire session + CSRF cookies. */
+    /**
+     * Tears down the current session: invalidate, give its place under the account's ceiling back,
+     * clear context, expire session + CSRF cookies.
+     */
     void terminate(HttpServletRequest request, HttpServletResponse response);
 }
