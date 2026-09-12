@@ -8,16 +8,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
-import javax.imageio.ImageIO;
-import javax.imageio.ImageReader;
-import javax.imageio.stream.ImageInputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
-import java.util.Iterator;
 import java.util.Locale;
 import java.util.UUID;
 
@@ -26,10 +21,12 @@ import java.util.UUID;
 public class FileUploadService {
 
     private final UploadProperties properties;
+    private final UploadedImageReencoder reencoder;
     private final Path fileStorageLocation;
 
-    public FileUploadService(UploadProperties properties) {
+    public FileUploadService(UploadProperties properties, UploadedImageReencoder reencoder) {
         this.properties = properties;
+        this.reencoder = reencoder;
         this.fileStorageLocation = Paths.get(properties.dir()).toAbsolutePath().normalize();
         try {
             Files.createDirectories(this.fileStorageLocation);
@@ -47,6 +44,11 @@ public class FileUploadService {
      * any authenticated instructor could place a file of any type, under any extension, into a
      * directory the web server hands out — with the extension chosen by the uploader. This now
      * refuses anything that is not demonstrably one of the permitted image formats.
+     *
+     * <p>What is stored is never the uploaded bytes. {@link UploadedImageReencoder} decodes the
+     * image completely and writes a new file from its pixels, and the stored name's extension is
+     * that of the format it wrote. The client's filename and Content-Type are only ever compared
+     * against allow-lists, as a cheap gate before any of that work is done.
      *
      * <p>It also refuses anyone who is not an instructor. {@link UploadSecurityConfig} already
      * rejects those callers a filter earlier, which is what keeps a denied request from being
@@ -67,37 +69,57 @@ public class FileUploadService {
             throw new BusinessException("error.file.empty");
         }
 
-        String extension = validatedExtension(file);
-        validateDeclaredMediaType(file);
-        // Must come last: it reads the bytes, and there is no reason to do that for a file the
-        // cheap checks have already rejected.
-        validateIsRealImage(file);
+        // The multipart limit refuses a larger request first. This is the method that reads the
+        // bytes into memory, so it states its own bound rather than trusting configuration elsewhere.
+        if (file.getSize() > properties.maxFileSize().toBytes()) {
+            throw new BusinessException("error.file.tooLarge");
+        }
 
+        validateExtension(file);
+        validateDeclaredMediaType(file);
+
+        Path temporary = null;
+        boolean placed = false;
         try {
+            byte[] source = file.getBytes();
+
+            // Written beside its final location and moved into place in one step, so the served
+            // directory never holds a half-written file under a name this store handed out.
+            // createFile rather than createTempFile: the latter makes the file owner-only and the
+            // mode survives the move; this takes the default permissions Files.copy used to.
+            temporary = Files.createFile(
+                    this.fileStorageLocation.resolve(".upload-" + UUID.randomUUID() + ".tmp"));
+            UploadedImageReencoder.StoredFormat format = reencoder.reencode(source, temporary);
+
             // The stored name is a fresh UUID, never anything derived from the client's
             // filename. That removes path traversal ("../../etc/passwd"), null bytes, control
             // characters and collisions in one stroke, rather than trying to sanitise them.
-            String newFileName = UUID.randomUUID() + "." + extension;
+            String newFileName = UUID.randomUUID() + "." + format.extension();
             Path targetLocation = this.fileStorageLocation.resolve(newFileName).normalize();
 
-            // Defence in depth. A UUID plus a validated extension cannot escape the directory,
-            // but this asserts it rather than assuming it.
+            // Defence in depth. A UUID plus an extension this service chose cannot escape the
+            // directory, but this asserts it rather than assuming it.
             if (!targetLocation.startsWith(this.fileStorageLocation)) {
                 throw new BusinessException("error.file.storeFailed");
             }
 
-            try (InputStream in = file.getInputStream()) {
-                Files.copy(in, targetLocation, StandardCopyOption.REPLACE_EXISTING);
-            }
-
+            Files.move(temporary, targetLocation, StandardCopyOption.ATOMIC_MOVE);
+            placed = true;
             return "/uploads/" + newFileName;
         } catch (IOException ex) {
+            log.warn("Failed to store an upload", ex);
             throw new BusinessException("error.file.storeFailed");
+        } finally {
+            // Every refusal after the temporary file exists — an image that does not decode
+            // included — lands here, so none of them leaves a file in the served directory.
+            if (!placed && temporary != null) {
+                deleteTemporary(temporary);
+            }
         }
     }
 
     /** The extension must be present and on the allow-list. */
-    private String validatedExtension(MultipartFile file) {
+    private void validateExtension(MultipartFile file) {
         String originalFileName = StringUtils.cleanPath(
                 file.getOriginalFilename() == null ? "" : file.getOriginalFilename());
 
@@ -110,13 +132,12 @@ public class FileUploadService {
         if (!properties.allowedExtensions().contains(extension)) {
             throw new BusinessException("error.file.extensionNotAllowed");
         }
-        return extension;
     }
 
     /**
      * The declared Content-Type must be on the allow-list. This is a cheap first gate and
      * nothing more: the header is supplied by the client and is trivially forged, which is
-     * exactly why {@link #validateIsRealImage} exists.
+     * exactly why {@link UploadedImageReencoder} decodes the bytes themselves.
      */
     private void validateDeclaredMediaType(MultipartFile file) {
         String contentType = file.getContentType();
@@ -126,42 +147,11 @@ public class FileUploadService {
         }
     }
 
-    /**
-     * Confirms the bytes really are a decodable image of a format ImageIO recognises.
-     *
-     * <p>This is the check that matters. Renaming {@code payload.svg} or a polyglot script to
-     * {@code avatar.png} and setting {@code Content-Type: image/png} passes every check above;
-     * it does not pass this one, because no {@link ImageReader} will claim the bytes.
-     *
-     * <p>Dimensions are read from the header rather than by decoding the pixels, so a
-     * decompression bomb — a small file that expands to an enormous raster — is rejected on its
-     * declared size instead of being materialised in memory first.
-     */
-    private void validateIsRealImage(MultipartFile file) {
-        try (InputStream in = file.getInputStream();
-             ImageInputStream imageStream = ImageIO.createImageInputStream(in)) {
-
-            if (imageStream == null) {
-                throw new BusinessException("error.file.notAnImage");
-            }
-
-            Iterator<ImageReader> readers = ImageIO.getImageReaders(imageStream);
-            if (!readers.hasNext()) {
-                throw new BusinessException("error.file.notAnImage");
-            }
-
-            ImageReader reader = readers.next();
-            try {
-                reader.setInput(imageStream, true, true);
-                long pixels = (long) reader.getWidth(0) * reader.getHeight(0);
-                if (pixels > properties.maxPixels()) {
-                    throw new BusinessException("error.file.imageTooLarge");
-                }
-            } finally {
-                reader.dispose();
-            }
+    private void deleteTemporary(Path temporary) {
+        try {
+            Files.deleteIfExists(temporary);
         } catch (IOException ex) {
-            throw new BusinessException("error.file.notAnImage");
+            log.warn("Failed to delete temporary upload {}", temporary, ex);
         }
     }
 
