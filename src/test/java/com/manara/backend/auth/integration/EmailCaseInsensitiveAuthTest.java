@@ -39,7 +39,7 @@ class EmailCaseInsensitiveAuthTest extends AbstractPostgresBackedTest {
 
     private static final String DOMAIN = "@authcase.example";
     private static final String CANONICAL = "ali" + DOMAIN;
-    private static final String PASSWORD = "password123";
+    private static final String PASSWORD = "sunlit harbour lantern 42";
 
     private MockMvc mockMvc;
 
