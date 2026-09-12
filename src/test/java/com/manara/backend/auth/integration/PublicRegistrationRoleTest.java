@@ -47,7 +47,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class PublicRegistrationRoleTest extends AbstractPostgresBackedTest {
 
     private static final String DOMAIN = "@registrationrole.example";
-    private static final String PASSWORD = "sunlit harbour lantern 42";
+    private static final String PASSWORD = "Sunlit harbour lantern 42!";
 
     private MockMvc mockMvc;
 

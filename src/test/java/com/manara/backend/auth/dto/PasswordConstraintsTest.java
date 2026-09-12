@@ -24,11 +24,17 @@ class PasswordConstraintsTest {
     void registrationAppliesThePolicy() {
         assertThat(violations(register("sara@example.com", "123456")))
                 .containsExactly("password {validation.password.size}");
-        assertThat(violations(register("sara@example.com", "passwordpassword")))
+        assertThat(violations(register("sara@example.com", "abcdefghijklmno!")))
+                .containsExactly("password {validation.password.uppercase}");
+        assertThat(violations(register("sara@example.com", "Harbour lights at dusk!")))
+                .containsExactly("password {validation.password.number}");
+        assertThat(violations(register("sara@example.com", "PasswordPassword1")))
+                .containsExactly("password {validation.password.symbol}");
+        assertThat(violations(register("sara@example.com", "11111_Fantastique")))
                 .containsExactly("password {validation.password.common}");
-        assertThat(violations(register("long.address.owner@example.com", "long.address.owner@example.com")))
+        assertThat(violations(register("long.address.owner@example.com", "Long.Address.Owner@example.com1")))
                 .containsExactly("password {validation.password.personal}");
-        assertThat(violations(register("sara@example.com", "sunlit harbour lantern 42"))).isEmpty();
+        assertThat(violations(register("sara@example.com", "Sunlit harbour lantern 42!"))).isEmpty();
     }
 
     @Test
@@ -36,9 +42,9 @@ class PasswordConstraintsTest {
     void resetAppliesThePolicy() {
         var ownAddress = ResetPasswordRequest.builder()
                 .email("long.address.owner@example.com").code("123456")
-                .newPassword("long.address.owner@example.com").build();
+                .newPassword("Long.Address.Owner@example.com1").build();
         var tooLong = ResetPasswordRequest.builder()
-                .email("sara@example.com").code("123456").newPassword("ب".repeat(37)).build();
+                .email("sara@example.com").code("123456").newPassword("ب".repeat(35) + "A1!").build();
 
         assertThat(violations(ownAddress)).containsExactly("newPassword {validation.password.personal}");
         assertThat(violations(tooLong)).containsExactly("newPassword {validation.password.tooLong}");
@@ -70,7 +76,7 @@ class PasswordConstraintsTest {
                 .allSatisfy(v -> assertThat(v.getMessage()).doesNotContain(secret));
         assertThat(ChangePasswordRequest.builder().currentPassword("old secret value").newPassword("new secret value")
                 .build().toString()).doesNotContain("secret value");
-        assertThat(register("sara@example.com", "sunlit harbour lantern 42").toString()).doesNotContain("lantern");
+        assertThat(register("sara@example.com", "Sunlit harbour lantern 42!").toString()).doesNotContain("lantern");
     }
 
     private static RegisterRequest register(String email, String password) {

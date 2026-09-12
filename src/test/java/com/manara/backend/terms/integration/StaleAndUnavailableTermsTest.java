@@ -50,7 +50,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class StaleAndUnavailableTermsTest extends AbstractPostgresBackedTest {
 
     private static final String EMAIL = "stale@termsstale.example";
-    private static final String PASSWORD = "sunlit harbour lantern 42";
+    private static final String PASSWORD = "Sunlit harbour lantern 42!";
 
     /** The version the client believes in — real, published, and no longer the one in force. */
     private static final TermsVersion SUPERSEDED =
