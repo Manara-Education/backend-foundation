@@ -9,7 +9,6 @@ import com.manara.backend.common.exception.BusinessException;
 import com.manara.backend.common.util.EmailAddress;
 import com.manara.backend.email.service.DeferredEmailDispatcher;
 import com.manara.backend.email.model.EmailMessage;
-import com.manara.backend.email.service.EmailService;
 import com.manara.backend.user.model.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
@@ -27,7 +26,6 @@ public class OtpService {
     private final OtpMapper otpMapper;
     private final SecureRandom secureRandom;
     private final OtpEmailFactory otpEmailFactory;
-    private final EmailService emailService;
     private final DeferredEmailDispatcher deferredEmailDispatcher;
     private final OtpAttemptRecorder attemptRecorder;
 
@@ -45,24 +43,6 @@ public class OtpService {
     private int maxAttempts;
 
     /**
-     * Invalidates any outstanding code of this type, issues a new one, and emails it.
-     *
-     * <p>The generated code is never returned, logged, or exposed by any API — it exists only in
-     * this method and in the message handed to the email feature.
-     *
-     * <p>Delivery is synchronous and runs inside the caller's transaction. That is deliberate: if
-     * the provider rejects the message the transaction rolls back, so callers such as registration
-     * never leave behind an unverified account whose owner received no code. The cost is that a
-     * database connection is held for the duration of an outbound HTTP call, and the Resend SDK
-     * exposes no timeout configuration (OkHttp's ~10s defaults apply). Acceptable at OTP volumes;
-     * revisit with asynchronous dispatch if email traffic grows beyond authentication flows.
-     */
-    @Transactional
-    public void generateAndSend(User user, OtpType type) {
-        emailService.send(generate(user, type));
-    }
-
-    /**
      * Retires the account's outstanding codes of this type, mints one, stores it, and builds the
      * message that carries it. Shared by both dispatch paths so that the code in the database and
      * the code in the email cannot drift apart depending on which one was used.
@@ -75,6 +55,32 @@ public class OtpService {
         otpRepository.save(otpMapper.toOtp(user, code, type, expiresAt));
 
         return otpEmailFactory.create(user.getEmail(), code, type, expirationMinutes);
+    }
+
+    /**
+     * Invalidates any outstanding code of this type, issues a new one, and has it emailed once this
+     * transaction commits, without telling the caller anything about the delivery.
+     *
+     * <p>The generated code is never returned, logged, or exposed by any API — it exists only in
+     * this method and in the message handed to the email feature.
+     *
+     * <p>Every caller is an endpoint an unauthenticated stranger can point at an address:
+     * registration, forgot-password and resend-otp. The provider call happens after commit and off
+     * the request thread, and a delivery failure is logged rather than raised, because each
+     * alternative can be measured. Sending inline costs a few hundred milliseconds only when there is
+     * an account to write to, and a provider outage answers only those requests with a 503. Either one
+     * re-creates the membership test that unifying the status codes was meant to close, and the second
+     * one does it precisely when nobody is watching.
+     *
+     * <p>There used to be a synchronous variant, and registration used it so that a failed send would
+     * roll the new account back. It went when registration stopped saying whether an address was
+     * taken: a 503 that only a new address could produce was the same disclosure by another route. A
+     * failed send now leaves an unverified account behind, and its owner asks for another code, just
+     * as after an email that was lost.
+     */
+    @Transactional
+    public void generateAndSendQuietly(User user, OtpType type) {
+        deferredEmailDispatcher.dispatchAfterCommit(generate(user, type));
     }
 
     /**
@@ -91,29 +97,6 @@ public class OtpService {
      * than continuing against the one already in flight. Without this, a six-digit code with a
      * ten-minute lifetime and no attempt ceiling is enumerable.
      */
-    /**
-     * Issues a code without telling the caller anything about the attempt.
-     *
-     * <p>For the two endpoints an unauthenticated stranger can point at a stranger's address:
-     * forgot-password and resend-otp. It differs from {@link #generateAndSend} in the two ways that
-     * a caller could otherwise measure -- the provider call happens after this transaction commits
-     * and off the request thread, and a delivery failure is logged rather than raised.
-     *
-     * <p>Both differences are the point. Sending inline costs a few hundred milliseconds only when
-     * there is an account to send to, and a provider outage answers only existing accounts with a
-     * 503. Either one re-creates the membership test that unifying the status codes was meant to
-     * close, and the second one does it precisely when nobody is watching.
-     *
-     * <p>{@link #generateAndSend} keeps the old behaviour and registration keeps using it. There the
-     * caller is creating their own account, a failure has to roll the registration back rather than
-     * leave somebody holding an account they can never verify, and there is no third party whose
-     * membership could be disclosed.
-     */
-    @Transactional
-    public void generateAndSendQuietly(User user, OtpType type) {
-        deferredEmailDispatcher.dispatchAfterCommit(generate(user, type));
-    }
-
     public Otp validateCode(String email, String code, OtpType type) {
         // The anonymous reset flow answers every failure the same way. Reached without a session,
         // it would otherwise re-derive in one request what forgot-password had just stopped
