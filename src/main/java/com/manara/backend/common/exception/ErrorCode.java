@@ -45,6 +45,13 @@ public enum ErrorCode {
     TERMS_UNAVAILABLE,
 
     /**
+     * Paid checkout is not available on this deployment: it takes no payments (FREE_ONLY), or a
+     * payment could not be accepted as real. Nothing was charged or granted, and retrying will not
+     * change that — a client can say paid courses are not on sale rather than offer a retry.
+     */
+    PAYMENTS_UNAVAILABLE,
+
+    /**
      * The session was ended by something other than the person holding it — the account's password
      * was changed or reset from somewhere else, or the session predates a deploy that changed how
      * sessions are validated. It carries HTTP 401, and the session and its cookies are already gone
