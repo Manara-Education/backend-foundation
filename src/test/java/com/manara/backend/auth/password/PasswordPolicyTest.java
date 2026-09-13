@@ -154,7 +154,7 @@ class PasswordPolicyTest {
         assertThat(arabic.getProperty("validation.password.size"))
                 .isEqualTo("يجب أن تتكون كلمة المرور من 15 حرفًا على الأقل.");
         assertThat(arabic.getProperty("validation.password.uppercase"))
-                .isEqualTo("يجب أن تحتوي كلمة المرور على حرف إنجليزي كبير واحد على الأقل.");
+                .isEqualTo("يجب أن تحتوي كلمة المرور على حرف كبير واحد على الأقل.");
         assertThat(arabic.getProperty("validation.password.number"))
                 .isEqualTo("يجب أن تحتوي كلمة المرور على رقم واحد على الأقل.");
         assertThat(arabic.getProperty("validation.password.symbol"))

@@ -73,7 +73,7 @@ class PasswordPolicyEndpointsTest extends AbstractPostgresBackedTest {
     private static final String ARABIC_73_BYTES = "ب".repeat(35) + "A1!";
 
     private static final String TOO_SHORT = "at least 15 characters";
-    private static final String MISSING_UPPERCASE = "uppercase English letter";
+    private static final String MISSING_UPPERCASE = "uppercase letter";
     private static final String MISSING_NUMBER = "at least one number";
     private static final String MISSING_SYMBOL = "special symbol";
     private static final String TOO_LONG = "too long";
