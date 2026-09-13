@@ -87,6 +87,7 @@ public class EntitlementMapper {
                 .accessType(course.getAccessType())
                 .access(toCourseAccessResponse(access))
                 .paymentReference(receipt == null ? null : receipt.reference())
+                .simulated(receipt != null && receipt.simulated())
                 .build();
     }
 }

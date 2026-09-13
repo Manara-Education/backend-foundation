@@ -37,4 +37,15 @@ public class CheckoutResponse {
      * {@code sim_}.
      */
     private String paymentReference;
+
+    /**
+     * {@code true} when the charge this call made was simulated: a demonstration deployment, where no
+     * money moved and access was granted anyway. {@code false} for a free course, for a real
+     * provider's receipt, and on a repeat that charged nothing — whenever {@link #paymentReference}
+     * is null or real.
+     *
+     * <p>Additive, so a client that does not read it is unaffected. It exists so a client can label a
+     * demonstration purchase as one rather than present it as a sale.
+     */
+    private boolean simulated;
 }

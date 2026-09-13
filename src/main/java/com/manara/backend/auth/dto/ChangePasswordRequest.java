@@ -1,11 +1,12 @@
 package com.manara.backend.auth.dto;
 
+import com.manara.backend.auth.password.ValidPassword;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
 
 /**
  * Changing the password of the signed-in account.
@@ -16,6 +17,9 @@ import lombok.NoArgsConstructor;
  *
  * There is no confirmation field: the reset flow does not have one either, and the two
  * password boxes are matched on the client before anything is sent.
+ *
+ * The policy's check against the account's own address and name is made in
+ * {@code AuthService#changePassword}: both come from the session, not from this request.
  */
 @Data
 @Builder
@@ -24,9 +28,11 @@ import lombok.NoArgsConstructor;
 public class ChangePasswordRequest {
 
     @NotBlank(message = "{validation.currentPassword.required}")
+    @ToString.Exclude
     private String currentPassword;
 
     @NotBlank(message = "{validation.newPassword.required}")
-    @Size(min = 6, message = "{validation.password.size}")
+    @ValidPassword
+    @ToString.Exclude
     private String newPassword;
 }

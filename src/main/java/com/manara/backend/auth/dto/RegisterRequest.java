@@ -1,23 +1,27 @@
 package com.manara.backend.auth.dto;
 
+import com.manara.backend.auth.password.PasswordNotPersonal;
+import com.manara.backend.auth.password.PasswordOwner;
+import com.manara.backend.auth.password.ValidPassword;
 import com.manara.backend.common.json.CanonicalEmailDeserializer;
 import com.manara.backend.common.json.StrictBooleanDeserializer;
 import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
 import tools.jackson.databind.annotation.JsonDeserialize;
 
 @Data
 @Builder
 @AllArgsConstructor
 @NoArgsConstructor
-public class RegisterRequest {
+@PasswordNotPersonal
+public class RegisterRequest implements PasswordOwner {
 
     @NotBlank(message = "{validation.fullName.required}")
     private String fullName;
@@ -29,8 +33,11 @@ public class RegisterRequest {
     @NotBlank(message = "{validation.email.required}")
     private String email;
 
+    // The password policy, here and — for the address and name — in @PasswordNotPersonal on the
+    // class. Kept out of toString so this request can never be logged with it.
     @NotBlank(message = "{validation.password.required}")
-    @Size(min = 6, message = "{validation.password.size}")
+    @ValidPassword
+    @ToString.Exclude
     private String password;
 
     private com.manara.backend.user.model.Role role;
@@ -65,4 +72,19 @@ public class RegisterRequest {
      */
     @NotBlank(message = "{validation.terms.version.required}")
     private String termsVersion;
+
+    @Override
+    public String proposedPassword() {
+        return password;
+    }
+
+    @Override
+    public String accountEmail() {
+        return email;
+    }
+
+    @Override
+    public String accountFullName() {
+        return fullName;
+    }
 }

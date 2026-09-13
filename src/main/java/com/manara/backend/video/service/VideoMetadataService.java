@@ -1,5 +1,6 @@
 package com.manara.backend.video.service;
 
+import com.manara.backend.common.util.LogSanitizer;
 import com.manara.backend.course.model.Course;
 import com.manara.backend.course.repository.CourseRepository;
 import com.manara.backend.lesson.model.LessonContentType;
@@ -66,7 +67,8 @@ public class VideoMetadataService {
             // The interface asks adapters not to throw; this is the belt to that braces, so a
             // third-party client wrapping an error in something unexpected cannot kill the worker.
             log.warn("Video metadata lookup failed for provider={} videoId={}: {}",
-                    resolved.provider(), resolved.externalId(), e.getMessage());
+                    resolved.provider(), LogSanitizer.sanitize(resolved.externalId()),
+                    LogSanitizer.sanitize(e.getMessage()));
             return VideoMetadata.empty();
         }
     }

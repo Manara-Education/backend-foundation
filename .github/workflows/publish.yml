@@ -60,6 +60,9 @@ on:
 permissions:
   contents: read
   packages: write
+  # Reading the release and the check runs the promotion gate depends on.
+  checks: read
+  actions: read
 
 concurrency:
   group: publish-${{ github.event.workflow_run.head_branch || inputs.tag }}
@@ -72,11 +75,19 @@ jobs:
     timeout-minutes: 30
     # A failed release must not publish an image. workflow_run fires on
     # completion regardless of outcome, so the conclusion has to be checked
-    # explicitly. A manual dispatch has no workflow_run to inspect and is
-    # allowed through on the operator's judgement.
+    # explicitly.
+    #
+    # A manual dispatch used to be allowed straight through here, "on the
+    # operator's judgement". That was the hole: dispatching this workflow needs
+    # only write access, and the only thing then checked was that the tag looked
+    # like a version. Any semver tag, pointing anywhere — a feature branch, an
+    # unreviewed commit — would be built and pushed to the registry under a
+    # release name. Both paths now prove the same things before anything is
+    # built, in the step below.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success'
+    environment: Production
 
     steps:
       - name: Resolve the tag being published
@@ -92,21 +103,40 @@ jobs:
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Check out the released commit
+      # The validator's own checkout, from the workflow's ref rather than the
+      # candidate's. Nothing from the tag being promoted runs until it has been
+      # approved, and the script that does the approving is never taken from the
+      # code under review.
+      - name: Check out the validation scripts
         uses: actions/checkout@v7
         with:
-          # The tag, not the default branch. Building from the branch would
-          # publish whatever has landed since the release was cut, under the
-          # released version's name.
-          ref: ${{ steps.resolve.outputs.tag }}
+          fetch-depth: 0
           persist-credentials: false
 
-      # Under workflow_run, github.sha is the DEFAULT BRANCH's head, not the
-      # tagged commit — so it cannot be used to label or tag the image. This
-      # resolves the real commit from the checkout above.
-      - name: Resolve the tagged commit
+      # Applies to the automatic and the manual path identically. A release must
+      # exist and still point here, the commit must be on main, and CI must have
+      # passed on that exact commit.
+      - name: Validate the candidate
         id: commit
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          .github/scripts/validate-promotion.sh \
+            --tag "$TAG" \
+            --require-release \
+            --require-checks \
+            --check "Build and test" \
+            --check "Build the container image"
+
+      - name: Check out the approved commit
+        uses: actions/checkout@v7
+        with:
+          # The resolved commit, not the tag. A tag is a movable label, and the
+          # SHA below is the one the checks above were actually about.
+          ref: ${{ steps.commit.outputs.sha }}
+          persist-credentials: false
+          clean: true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4

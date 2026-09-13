@@ -1,0 +1,560 @@
+#!/usr/bin/env bash
+# Controlled verification of the gate's decision logic.
+#
+# Every case below is a fixture. Nothing here touches a real branch, a real
+# deployment, or a real credential. The point is to prove the failure modes
+# actually fail — a gate is only worth having if "the scanner broke" and
+# "the data was stale" are as red as "we found a critical CVE".
+set -uo pipefail
+
+SHARED="$(cd "$(dirname "$0")" && pwd)"
+# Resolve the checkout root rather than hardcoding anyone's home directory,
+# so this suite runs identically on a laptop and on a runner.
+REPO_ROOT="$(cd "$SHARED/../.." && pwd)"
+WORK="$(mktemp -d)"
+MANIFEST_OK="${1:?usage: verify-gate.sh <good-manifest.json> <real-osv-report.json>}"
+OSV_REAL="${2:?}"
+PASS=0; FAIL=0
+
+run_case() {
+  local name="$1" expected="$2" dir="$3"; shift 3
+  local out; out="$(python3 "$SHARED/evaluate.py" \
+      --reports-dir "$dir" --manifest "$dir/manifest.json" \
+      --policy "${POL:-$SHARED/policy.yml}" --exceptions "${EXC:-$SHARED/exceptions.yml}" \
+      --event "${EVENT:-push}" --ref "${REF:-develop}" --revision "${REV:-abc1234}" \
+      --repository Manara-Education/backend-foundation \
+      --workspace "$REPO_ROOT" \
+      --register-out "$dir/findings.json" --report-out "$dir/report.md" 2>&1)"
+  local code=$?
+  if [ "$code" = "$expected" ]; then
+    printf '  \033[32mPASS\033[0m  %-56s exit=%s\n' "$name" "$code"; PASS=$((PASS+1))
+  else
+    printf '  \033[31mFAIL\033[0m  %-56s exit=%s (wanted %s)\n' "$name" "$code" "$expected"
+    echo "$out" | sed 's/^/          /' | head -6; FAIL=$((FAIL+1))
+  fi
+}
+
+# Build a report set with all six required reports clean.
+mk_clean() {
+  local d="$1"; mkdir -p "$d/status" "$d/intel"
+  cp "$MANIFEST_OK" "$d/manifest.json"
+  echo '{"results":[]}'  > "$d/deps-osv.osv.json"
+  echo '{"Results":[]}'  > "$d/deps-trivy.trivy.json"
+  echo '{"Results":[]}'  > "$d/config-trivy.trivy.json"
+  echo '{"Results":[]}'  > "$d/image-trivy.trivy.json"
+  echo '[]'              > "$d/secrets-gitleaks.gitleaks.json"
+  echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"CodeQL","rules":[]}},"results":[]}]}' > "$d/sast-codeql.sarif"
+  for r in deps-osv deps-trivy config-trivy image-trivy secrets-gitleaks sast-codeql; do
+    echo success > "$d/status/$r.status"
+  done
+  local fresh; fresh="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  for r in deps-trivy image-trivy; do
+    printf '{"Version":"0.74.0","VulnerabilityDB":{"Version":2,"UpdatedAt":"%s"}}\n' "$fresh" > "$d/intel/$r.trivydb.json"
+  done
+  # config-trivy gets what `trivy config` ACTUALLY reports: a check bundle and
+  # no vulnerability database. A fixture that handed it a vulnerability DB would
+  # be testing a situation that cannot occur.
+  printf '{"Version":"0.74.0","CheckBundle":{"Digest":"sha256:1583562f8b90ed2a071b99f0e5ffff6b57e4ceb6ca3e4796577b4e6a339eb74c","DownloadedAt":"%s"}}\n' \
+    "$fresh" > "$d/intel/config-trivy.trivydb.json"
+}
+
+# The reported fix must never be a downgrade. Checked directly rather than
+# through a fixture, because the failure is silent: the finding is still
+# correct, only the remediation advice is wrong, and "upgrade to 1.25.11" from
+# 1.26.3 reads plausibly enough to be followed.
+python3 - "$SHARED/evaluate.py" <<'PYEOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("ev", sys.argv[1])
+ev = importlib.util.module_from_spec(spec); spec.loader.exec_module(ev)
+cases = [("11.0.24", ["11.0.25", "10.1.58", "9.0.121"], "11.0.25"),
+         ("1.26.3",  ["1.25.11", "1.26.4"],             "1.26.4"),
+         ("1.26.3",  ["1.25.13", "1.26.6"],             "1.26.6"),
+         ("8.19.0-r0", ["8.22.0-r0"],                   "8.22.0-r0"),
+         # A SINGLE candidate below the installed version. This is the case a
+         # `len(candidates) == 1` shortcut used to wave through, and it is not
+         # hypothetical: grpc v1.83.1 against GHSA-2v4p-qf9q-27wj, whose fix
+         # for that branch is 1.83.2, was reported by the scanner with the sole
+         # fixed version "1.82.2" and printed by the gate as the remediation.
+         ("1.83.1",  ["1.82.2"],                        ""),
+         # ...and the same advisory with both branch fixes present must pick
+         # the one on the branch actually in use.
+         ("1.83.1",  ["1.82.2", "1.83.2"],              "1.83.2"),
+         # One candidate ABOVE the installed version is still a real upgrade;
+         # removing the shortcut must not have broken the ordinary case.
+         ("1.81.0",  ["1.82.2"],                        "1.82.2"),
+         ("0.55.0",  ["0.56.0"],                        "0.56.0")]
+bad = [(i, c, ev.select_fixed_version(i, c), w) for i, c, w in cases
+       if ev.select_fixed_version(i, c) != w]
+for i, c, got, want in bad:
+    print(f"  FAIL  fixed-version for {i} from {c}: got {got}, want {want}")
+print("  ok    the reported fix is never a downgrade" if not bad else "")
+raise SystemExit(1 if bad else 0)
+PYEOF
+if [ $? -eq 0 ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
+
+echo "Security Gate decision logic"
+echo
+
+# 1 — clean assessment passes
+C="$WORK/clean"; mk_clean "$C"
+run_case "clean assessment passes" 0 "$C"
+
+# 1b — running twice must not duplicate the register
+C2="$WORK/idem"; mk_clean "$C2"
+cp "$OSV_REAL" "$C2/deps-osv.osv.json"
+python3 "$SHARED/evaluate.py" --reports-dir "$C2" --manifest "$C2/manifest.json" \
+  --policy "$SHARED/policy.yml" --exceptions "$SHARED/exceptions.yml" --event push \
+  --ref develop --revision abc1234 --repository Manara-Education/backend-foundation \
+  --workspace "$REPO_ROOT" \
+  --register-out "$C2/findings.json" --report-out "$C2/r1.md" >/dev/null 2>&1
+n1=$(python3 -c "import json;print(len(json.load(open('$C2/findings.json'))['findings']))")
+python3 "$SHARED/evaluate.py" --reports-dir "$C2" --manifest "$C2/manifest.json" \
+  --policy "$SHARED/policy.yml" --exceptions "$SHARED/exceptions.yml" --event push \
+  --ref develop --revision abc1234 --repository Manara-Education/backend-foundation \
+  --workspace "$REPO_ROOT" \
+  --register-out "$C2/findings.json" --report-out "$C2/r2.md" >/dev/null 2>&1
+n2=$(python3 -c "import json;print(len(json.load(open('$C2/findings.json'))['findings']))")
+first=$(python3 -c "import json;print(json.load(open('$C2/findings.json'))['findings'][0]['first_seen'])")
+if [ "$n1" = "3" ] && [ "$n2" = "3" ]; then
+  printf '  \033[32mPASS\033[0m  %-56s %s then %s findings\n' "repeat scan preserves findings without duplication" "$n1" "$n2"; PASS=$((PASS+1))
+else
+  printf '  \033[31mFAIL\033[0m  %-56s %s then %s\n' "repeat scan duplication" "$n1" "$n2"; FAIL=$((FAIL+1))
+fi
+
+# 2 — a real blocking finding fails
+B="$WORK/blocking"; mk_clean "$B"; cp "$OSV_REAL" "$B/deps-osv.osv.json"
+run_case "real CRITICAL dependency finding blocks" 1 "$B"
+
+# 3 — scanner failure cannot yield success
+F="$WORK/scanfail"; mk_clean "$F"; echo failure > "$F/status/deps-osv.status"
+run_case "scanner job failure blocks" 1 "$F"
+
+Fc="$WORK/cancel"; mk_clean "$Fc"; echo cancelled > "$Fc/status/sast-codeql.status"
+run_case "scanner job cancellation blocks" 1 "$Fc"
+
+S="$WORK/skip"; mk_clean "$S"; echo skipped > "$S/status/config-trivy.status"
+run_case "unexpected skip of a required scanner blocks" 1 "$S"
+
+M="$WORK/missing"; mk_clean "$M"; rm "$M/image-trivy.trivy.json"
+run_case "missing report blocks (not treated as empty)" 1 "$M"
+
+U="$WORK/unparse"; mk_clean "$U"; echo 'not json {{' > "$U/deps-trivy.trivy.json"
+run_case "unparseable report blocks" 1 "$U"
+
+E="$WORK/emptyrep"; mk_clean "$E"; : > "$E/config-trivy.trivy.json"
+run_case "empty report blocks" 1 "$E"
+
+# 4 — intelligence failures cannot yield success
+ST="$WORK/stale"; mk_clean "$ST"
+python3 - "$ST/manifest.json" <<'PY'
+import json,sys,datetime as dt
+p=sys.argv[1]; d=json.load(open(p))
+old=(dt.datetime.now(dt.timezone.utc)-dt.timedelta(hours=48)).isoformat()
+d["sources"]["osv"]["retrieved_at"]=old
+json.dump(d,open(p,"w"))
+PY
+run_case "stale mandatory intelligence blocks" 2 "$ST"
+
+MI="$WORK/missintel"; mk_clean "$MI"
+python3 - "$MI/manifest.json" <<'PY'
+import json,sys
+p=sys.argv[1]; d=json.load(open(p))
+d["sources"]["cisa-kev"]={"status":"failed","error":"simulated outage"}
+json.dump(d,open(p,"w"))
+PY
+run_case "unavailable mandatory source blocks (no empty pass)" 2 "$MI"
+
+NM="$WORK/nomanifest"; mk_clean "$NM"; rm "$NM/manifest.json"
+run_case "absent intelligence manifest blocks" 2 "$NM"
+
+SD="$WORK/staledb"; mk_clean "$SD"
+printf '{"Version":"0.74.0","VulnerabilityDB":{"Version":2,"UpdatedAt":"2026-08-01T00:00:00Z"}}\n' > "$SD/intel/deps-trivy.trivydb.json"
+run_case "scanner using a stale DB blocks" 1 "$SD"
+
+ND="$WORK/nodb"; mk_clean "$ND"; rm "$ND/intel/image-trivy.trivydb.json"
+run_case "scanner not recording its DB revision blocks" 1 "$ND"
+
+# A config scan is held to its CHECK BUNDLE, not to the vulnerability database.
+# `trivy config` never downloads the vulnerability DB, so requiring one from it
+# failed a job that was working correctly. These two cases pin that behaviour:
+# a bundle is accepted, and the absence of one still blocks.
+CB="$WORK/checkbundle"; mk_clean "$CB"
+printf '{"Version":"0.74.0","CheckBundle":{"Digest":"sha256:1583562f8b90ed2a071b99f0e5ffff6b57e4ceb6ca3e4796577b4e6a339eb74c","DownloadedAt":"%s"}}\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$CB/intel/config-trivy.trivydb.json"
+run_case "config scan accepted on its check bundle alone" 0 "$CB"
+
+NB="$WORK/nobundle"; mk_clean "$NB"
+printf '{"Version":"0.74.0"}\n' > "$NB/intel/config-trivy.trivydb.json"
+run_case "config scan with neither bundle nor database blocks" 1 "$NB"
+
+# 5 — secrets
+SEC="$WORK/secret"; mk_clean "$SEC"
+echo '[{"RuleID":"stripe-access-token","File":"src/config.ts","StartLine":12,"Commit":"deadbeefcafe"}]' > "$SEC/secrets-gitleaks.gitleaks.json"
+run_case "detected secret blocks" 1 "$SEC"
+
+# 5b — CodeQL keeps its rules on a tool EXTENSION, not on the driver
+#
+# The driver is "CodeQL" with an empty rule list; every query lives on the
+# query pack (codeql/java-queries) and a result points at it by
+# rule.toolComponent.index + rule.index. These fixtures have that real shape.
+# While the rule lookup read only driver.rules, every CodeQL result on develop
+# reached the gate as zero findings — including a HIGH that should have blocked.
+mk_codeql() {
+  python3 - "$1/sast-codeql.sarif" "$2" <<'PY'
+import json, sys
+path, severity = sys.argv[1], sys.argv[2]
+props = ({"tags": ["security"], "security-severity": severity} if severity
+         else {"tags": ["maintainability"]})
+doc = {"version": "2.1.0", "runs": [{
+    "tool": {"driver": {"name": "CodeQL", "rules": []},
+             "extensions": [{"name": "codeql/java-queries",
+                             "rules": [{"id": "java/unrelated"},
+                                       {"id": "java/example", "properties": props}]}]},
+    "results": [{"ruleId": "java/example",
+                 "rule": {"id": "java/example", "index": 1, "toolComponent": {"index": 0}},
+                 "message": {"text": "fixture"},
+                 "locations": [{"physicalLocation": {
+                     "artifactLocation": {"uri": "src/main/java/Example.java"},
+                     "region": {"startLine": 7}}}]}]}]}
+json.dump(doc, open(path, "w"))
+PY
+}
+count_findings() {
+  python3 -c "import json,sys;print(sum(1 for f in json.load(open(sys.argv[1]))['findings'] if f['status']==sys.argv[2]))" "$1/findings.json" "$2"
+}
+
+CQH="$WORK/codeql-high"; mk_clean "$CQH"; mk_codeql "$CQH" 8.6
+run_case "CodeQL HIGH whose rule is on an extension blocks" 1 "$CQH"
+
+CQM="$WORK/codeql-medium"; mk_clean "$CQM"; mk_codeql "$CQM" 6.1
+run_case "CodeQL MEDIUM whose rule is on an extension passes" 0 "$CQM"
+n_tracked=$(count_findings "$CQM" tracked)
+if [ "$n_tracked" = "1" ]; then
+  printf '  \033[32mPASS\033[0m  %-56s %s tracked\n' "  ...and is tracked rather than dropped" "$n_tracked"; PASS=$((PASS+1))
+else
+  printf '  \033[31mFAIL\033[0m  %-56s %s tracked (wanted 1)\n' "  CodeQL MEDIUM tracked" "$n_tracked"; FAIL=$((FAIL+1))
+fi
+
+CQQ="$WORK/codeql-quality"; mk_clean "$CQQ"; mk_codeql "$CQQ" ""
+run_case "CodeQL quality query on an extension does not block" 0 "$CQQ"
+
+# 6 — KEV escalation below the severity threshold
+KEV="$WORK/kev"; mk_clean "$KEV"
+KEVCVE=$(python3 -c "import json;print(json.load(open('$MANIFEST_OK'))['sources']['cisa-kev']['kev_cve_ids'][0])")
+python3 - "$KEV/deps-osv.osv.json" "$KEVCVE" <<'PY'
+import json,sys
+out={"results":[{"source":{"path":"pom.xml"},"packages":[{"package":{"name":"demo","version":"1.0.0"},
+ "vulnerabilities":[{"id":sys.argv[2],"aliases":[sys.argv[2]],"summary":"low-labelled but exploited",
+ "database_specific":{"severity":"LOW"},"affected":[]}]}]}]}
+json.dump(out,open(sys.argv[1],"w"))
+PY
+run_case "LOW finding on the CISA KEV catalogue still blocks" 1 "$KEV"
+
+# 7 — exceptions
+EXPIRED="$WORK/expired"; mk_clean "$EXPIRED"
+cat > "$WORK/exc-expired.yml" <<'YML'
+exceptions:
+  - id: EXC-TEST-001
+    scope: {finding: CVE-2026-65905, component: "org.apache.tomcat.embed:tomcat-embed-core"}
+    reason: fixture
+    owner: Mohamed-Hamza
+    approval: https://example.invalid/fixture
+    expires: 2020-01-01
+YML
+cp "$OSV_REAL" "$EXPIRED/deps-osv.osv.json"
+EXC="$WORK/exc-expired.yml" run_case "expired exception blocks" 1 "$EXPIRED"
+
+INVALID="$WORK/invalid"; mk_clean "$INVALID"
+cat > "$WORK/exc-invalid.yml" <<'YML'
+exceptions:
+  - id: EXC-TEST-002
+    scope: {finding: CVE-2026-65905}
+    reason: no owner, no approval, no expiry
+YML
+EXC="$WORK/exc-invalid.yml" run_case "incomplete exception blocks" 1 "$INVALID"
+
+VALID="$WORK/valid"; mk_clean "$VALID"; cp "$OSV_REAL" "$VALID/deps-osv.osv.json"
+FUTURE=$(python3 -c "import datetime as d;print((d.date.today()+d.timedelta(days=30)).isoformat())")
+cat > "$WORK/exc-valid.yml" <<YML
+exceptions:
+  - id: EXC-TEST-003
+    scope:
+      finding: CVE-2026-65905
+      component: "org.apache.tomcat.embed:tomcat-embed-core"
+      version: "11.0.24"
+    reason: fixture covering exactly one advisory
+    owner: Mohamed-Hamza
+    approval: https://example.invalid/fixture
+    expires: ${FUTURE}
+YML
+# Still exit 1: the OTHER two criticals are not excepted. That is the point —
+# a narrow exception must not clear its neighbours.
+EXC="$WORK/exc-valid.yml" run_case "narrow exception clears only its own finding" 1 "$VALID"
+n_block=$(python3 -c "import json;print(sum(1 for f in json.load(open('$VALID/findings.json'))['findings'] if f['status']=='blocking'))")
+n_exc=$(python3 -c "import json;print(sum(1 for f in json.load(open('$VALID/findings.json'))['findings'] if f['status']=='excepted'))")
+if [ "$n_block" = "2" ] && [ "$n_exc" = "1" ]; then
+  printf '  \033[32mPASS\033[0m  %-56s 2 blocking, 1 excepted\n' "  ...and the other two still block"; PASS=$((PASS+1))
+else
+  printf '  \033[31mFAIL\033[0m  %-56s %s blocking, %s excepted\n' "  narrow exception scope" "$n_block" "$n_exc"; FAIL=$((FAIL+1))
+fi
+
+# 8 — event applicability: the PR-only report is not required on push
+PRONLY="$WORK/pronly"; mk_clean "$PRONLY"
+run_case "PR-only dependency-diff not required on push" 0 "$PRONLY"
+
+PRREQ="$WORK/prreq"; mk_clean "$PRREQ"
+EVENT=pull_request run_case "same report IS required on pull_request" 1 "$PRREQ"
+
+# 9 — a fix on develop must not clear main
+BR="$WORK/branch"; mk_clean "$BR"; cp "$OSV_REAL" "$BR/deps-osv.osv.json"
+python3 "$SHARED/evaluate.py" --reports-dir "$BR" --manifest "$BR/manifest.json" \
+  --policy "$SHARED/policy.yml" --exceptions "$SHARED/exceptions.yml" --event push \
+  --ref main --revision main111 --repository Manara-Education/backend-foundation \
+  --workspace /x --register-out "$BR/findings.json" --report-out "$BR/m.md" >/dev/null 2>&1
+python3 "$SHARED/evaluate.py" --reports-dir "$BR" --manifest "$BR/manifest.json" \
+  --policy "$SHARED/policy.yml" --exceptions "$SHARED/exceptions.yml" --event push \
+  --ref develop --revision dev111 --repository Manara-Education/backend-foundation \
+  --workspace /x --register-out "$BR/findings.json" --report-out "$BR/d.md" >/dev/null 2>&1
+echo '{"results":[]}' > "$BR/deps-osv.osv.json"   # remediated on develop only
+python3 "$SHARED/evaluate.py" --reports-dir "$BR" --manifest "$BR/manifest.json" \
+  --policy "$SHARED/policy.yml" --exceptions "$SHARED/exceptions.yml" --event push \
+  --ref develop --revision dev222 --repository Manara-Education/backend-foundation \
+  --workspace /x --register-out "$BR/findings.json" --report-out "$BR/d2.md" >/dev/null 2>&1
+still_main=$(python3 -c "
+import json;d=json.load(open('$BR/findings.json'))
+print(sum(1 for f in d['findings'] if 'main' in (f.get('branches') or {})))")
+gone_dev=$(python3 -c "
+import json;d=json.load(open('$BR/findings.json'))
+print(sum(1 for f in d['findings'] if 'develop' in (f.get('branches') or {})))")
+if [ "$still_main" = "3" ] && [ "$gone_dev" = "0" ]; then
+  printf '  \033[32mPASS\033[0m  %-56s main=%s develop=%s\n' "fix on develop does not clear main" "$still_main" "$gone_dev"; PASS=$((PASS+1))
+else
+  printf '  \033[31mFAIL\033[0m  %-56s main=%s develop=%s\n' "fix on develop does not clear main" "$still_main" "$gone_dev"; FAIL=$((FAIL+1))
+fi
+
+# 11 — remediation: every finding leaves with an owner and a deadline (TECH-30)
+#
+# policy.yml's `remediation` section turns a finding into work with an owner
+# and a due date. These cases pin the arithmetic, a clock that survives a
+# re-scan, a traceable lifecycle, and the rule that being overdue escalates
+# without changing what blocks.
+check() {  # name, result: "ok" or what went wrong
+  if [ "$2" = "ok" ]; then
+    printf '  \033[32mPASS\033[0m  %-56s\n' "$1"; PASS=$((PASS+1))
+  else
+    printf '  \033[31mFAIL\033[0m  %-56s %s\n' "$1" "$2"; FAIL=$((FAIL+1))
+  fi
+}
+age_register() {  # register, days: move every clock back, as a carried register would be
+  python3 - "$1" "$2" <<'PY'
+import json, sys, datetime as dt
+p, days = sys.argv[1], int(sys.argv[2])
+reg = json.load(open(p))
+old = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)).isoformat()
+for f in reg["findings"]:
+    f["first_seen"] = old
+json.dump(reg, open(p, "w"))
+PY
+}
+
+SLA="$WORK/sla"; mk_clean "$SLA"; cp "$OSV_REAL" "$SLA/deps-osv.osv.json"
+run_case "blocking findings still block with remediation applied" 1 "$SLA"
+check "every finding gets the policy owner and its deadline" "$(python3 - "$SLA/findings.json" "$SHARED/policy.yml" <<'PY'
+import json, sys, datetime as dt, yaml
+reg = json.load(open(sys.argv[1])); pol = yaml.safe_load(open(sys.argv[2]))["remediation"]
+bad = []
+for f in reg["findings"]:
+    days = pol["sla_days"][f["severity"]]
+    if f.get("kev"):
+        days = min(days, pol["kev_days"])
+    want = dt.datetime.fromisoformat(f["first_seen"]) + dt.timedelta(days=days)
+    if f.get("owner") != pol["triage_owner"]:
+        bad.append(f"{f['id']} owner={f.get('owner')!r}")
+    if dt.datetime.fromisoformat(f["remediation_due"]) != want:
+        bad.append(f"{f['id']} due={f['remediation_due']}")
+    if f["sla"]["state"] != "within-sla":
+        bad.append(f"{f['id']} state={f['sla']['state']}")
+    if [h["event"] for h in f.get("history", [])] != ["detected"]:
+        bad.append(f"{f['id']} history={f.get('history')}")
+print("ok" if reg["findings"] and not bad else ("; ".join(bad) or "no findings recorded"))
+PY
+)"
+grep -q '| Owner | Due |' "$SLA/report.md"
+check "  ...and the report shows owner and due date per finding" "$([ $? -eq 0 ] && echo ok || echo 'no Owner/Due columns')"
+
+age_register "$SLA/findings.json" 40
+run_case "re-assessment with a 40-day-old register still blocks" 1 "$SLA"
+check "the clock survives a re-scan; old CRITICALs are overdue" "$(python3 - "$SLA/findings.json" "$SLA/report.md" <<'PY'
+import json, sys, datetime as dt
+reg = json.load(open(sys.argv[1])); report = open(sys.argv[2]).read()
+now = dt.datetime.now(dt.timezone.utc)
+ages = [(now - dt.datetime.fromisoformat(f["first_seen"])).days for f in reg["findings"]]
+states = {f["sla"]["state"] for f in reg["findings"]}
+if min(ages) < 39:
+    print(f"clock restarted: ages {ages}")
+elif states != {"overdue"}:
+    print(f"states {states}")
+elif f"Overdue for remediation ({len(reg['findings'])})" not in report:
+    print("report does not list the overdue findings")
+else:
+    print("ok")
+PY
+)"
+
+MED="$WORK/medium"; mk_clean "$MED"
+python3 - "$MED/deps-osv.osv.json" <<'PY'
+import json, sys
+out = {"results": [{"source": {"path": "pom.xml"}, "packages": [{"package": {"name": "demo", "version": "1.0.0"},
+       "vulnerabilities": [{"id": "GHSA-fixt-ure0-medm", "aliases": ["CVE-2099-00001"], "summary": "medium fixture",
+                            "database_specific": {"severity": "MODERATE"}, "affected": []}]}]}]}
+json.dump(out, open(sys.argv[1], "w"))
+PY
+run_case "a MEDIUM finding does not block" 0 "$MED"
+age_register "$MED/findings.json" 200
+run_case "  ...nor does it block once 200 days overdue" 0 "$MED"
+med_state=$(python3 -c "import json;print(json.load(open('$MED/findings.json'))['findings'][0]['sla']['state'])")
+check "  ...but it is recorded as overdue" "$([ "$med_state" = overdue ] && echo ok || echo "state=$med_state")"
+
+check "a KEV finding gets the KEV deadline, not its label's" "$(python3 - "$KEV/findings.json" "$SHARED/policy.yml" <<'PY'
+import json, sys, yaml
+f = json.load(open(sys.argv[1]))["findings"][0]; pol = yaml.safe_load(open(sys.argv[2]))["remediation"]
+want = min(pol["sla_days"][f["severity"]], pol["kev_days"])
+print("ok" if f.get("kev") and f["sla"]["days"] == want < pol["sla_days"][f["severity"]]
+      else f"kev={f.get('kev')} severity={f['severity']} days={f['sla']['days']} want={want}")
+PY
+)"
+
+LC="$WORK/lifecycle"; mk_clean "$LC"; cp "$OSV_REAL" "$LC/deps-osv.osv.json"
+REF=main REV=main001 run_case "lifecycle: detected on main" 1 "$LC"
+echo '{"results":[]}' > "$LC/deps-osv.osv.json"
+REF=main REV=main002 run_case "lifecycle: the remediated revision passes" 0 "$LC"
+closed=$(python3 -c "import json;print(sorted({f['sla']['state'] for f in json.load(open('$LC/findings.json'))['findings']}))")
+cp "$OSV_REAL" "$LC/deps-osv.osv.json"
+REF=main REV=main003 run_case "lifecycle: the regression blocks again" 1 "$LC"
+check "detection, retest-closure and reappearance traced per revision" "$(python3 - "$LC/findings.json" "$closed" <<'PY'
+import json, sys
+reg = json.load(open(sys.argv[1]))
+seqs = {tuple((h["event"], h["revision"]) for h in f["history"]) for f in reg["findings"]}
+want = (("detected", "main001"), ("resolved", "main002"), ("reappeared", "main003"))
+if sys.argv[2] != "['closed']":
+    print(f"after the fix the states were {sys.argv[2]}, not closed")
+elif seqs != {want}:
+    print(f"histories {seqs}")
+else:
+    print("ok")
+PY
+)"
+
+mutate_policy() {  # out-file, python statement over `p` (the remediation mapping)
+  python3 - "$SHARED/policy.yml" "$1" "$2" <<'PY'
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1])); p = doc["remediation"]
+exec(sys.argv[3])
+yaml.safe_dump(doc, open(sys.argv[2], "w"))
+PY
+}
+BP="$WORK/badpolicy"; mk_clean "$BP"
+mutate_policy "$WORK/pol-no-high.yml" 'del p["sla_days"]["HIGH"]'
+POL="$WORK/pol-no-high.yml" run_case "a remediation policy missing a severity is exit 2" 2 "$BP"
+mutate_policy "$WORK/pol-inverted.yml" 'p["sla_days"]["CRITICAL"] = 90'
+POL="$WORK/pol-inverted.yml" run_case "deadlines that loosen as severity rises are exit 2" 2 "$BP"
+mutate_policy "$WORK/pol-org-owner.yml" 'p["triage_owner"] = "not a login!"'
+POL="$WORK/pol-org-owner.yml" run_case "an owner that is not a GitHub login is exit 2" 2 "$BP"
+mutate_policy "$WORK/pol-none.yml" 'doc.pop("remediation")'
+POL="$WORK/pol-none.yml" run_case "a policy with no remediation section is exit 2" 2 "$BP"
+
+# 10 — the verdict describes the decision and is never absent
+#
+# The notifier's entire job hangs on this file existing. A run that could not be
+# evaluated is exactly when a verdict matters most and exactly when it is
+# easiest to forget to write one, so the "could not be evaluated" cases are
+# checked here rather than assumed.
+verdict_case() {
+  local name="$1" expected_exit="$2" expected_status="$3" dir="$4"; shift 4
+  rm -f "$dir/verdict.json"
+  GITHUB_RUN_ID=4242 GITHUB_RUN_ATTEMPT=3 GITHUB_REPOSITORY=Manara-Education/backend-foundation \
+  python3 "$SHARED/evaluate.py" \
+    --reports-dir "$dir" --manifest "$dir/manifest.json" \
+    --policy "${POL:-$SHARED/policy.yml}" --exceptions "$SHARED/exceptions.yml" \
+    --event "${EVENT:-push}" --ref develop --revision abc1234 \
+    --repository Manara-Education/backend-foundation --workspace "$REPO_ROOT" \
+    --register-out "$dir/findings.json" --report-out "$dir/report.md" \
+    --verdict-out "$dir/verdict.json" --target-slug t0 --target-name develop >/dev/null 2>&1
+  local code=$?
+  local got
+  got="$(python3 - "$dir/verdict.json" "$code" <<'PY' 2>/dev/null
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["schema_version"] == 1, "schema_version"
+assert d["exit_code"] == int(sys.argv[2]), "exit_code does not match the process exit code"
+assert d["run_id"] == "4242" and d["run_attempt"] == 3, "run identity"
+assert isinstance(d["counts"]["by_severity"], dict), "counts"
+assert d["policy_revision"].startswith("sha256:") or d["policy_revision"] == "unavailable"
+print(d["status"])
+PY
+)"
+  if [ "$code" = "$expected_exit" ] && [ "$got" = "$expected_status" ]; then
+    printf '  \033[32mPASS\033[0m  %-56s %s/exit=%s\n' "$name" "$got" "$code"; PASS=$((PASS+1))
+  else
+    printf '  \033[31mFAIL\033[0m  %-56s status=%s exit=%s (wanted %s/%s)\n' \
+      "$name" "${got:-<no verdict>}" "$code" "$expected_status" "$expected_exit"; FAIL=$((FAIL+1))
+  fi
+}
+
+VP="$WORK/vpass"; mk_clean "$VP"
+verdict_case "a passing gate writes a PASS verdict" 0 PASS "$VP"
+
+VB="$WORK/vblock"; mk_clean "$VB"; cp "$OSV_REAL" "$VB/deps-osv.osv.json"
+verdict_case "a blocked gate writes a BLOCKED verdict" 1 BLOCKED "$VB"
+
+VE="$WORK/verror"; mk_clean "$VE"; rm "$VE/manifest.json"
+verdict_case "a gate that could not be evaluated still writes ERROR" 2 ERROR "$VE"
+
+VNP="$WORK/vnopolicy"; mk_clean "$VNP"
+POL="$WORK/policy-does-not-exist.yml" \
+  verdict_case "an unreadable policy still writes an ERROR verdict" 2 ERROR "$VNP"
+
+# The verdict must not be able to change the decision. Same fixture, run with
+# and without --verdict-out: identical exit code, identical register.
+VN="$WORK/vnoop"; mk_clean "$VN"; cp "$OSV_REAL" "$VN/deps-osv.osv.json"
+python3 "$SHARED/evaluate.py" --reports-dir "$VN" --manifest "$VN/manifest.json" \
+  --policy "$SHARED/policy.yml" --exceptions "$SHARED/exceptions.yml" --event push \
+  --ref develop --revision abc1234 --repository Manara-Education/backend-foundation \
+  --workspace "$REPO_ROOT" --register-out "$VN/a.json" --report-out "$VN/a.md" >/dev/null 2>&1
+rc_without=$?
+python3 "$SHARED/evaluate.py" --reports-dir "$VN" --manifest "$VN/manifest.json" \
+  --policy "$SHARED/policy.yml" --exceptions "$SHARED/exceptions.yml" --event push \
+  --ref develop --revision abc1234 --repository Manara-Education/backend-foundation \
+  --workspace "$REPO_ROOT" --register-out "$VN/b.json" --report-out "$VN/b.md" \
+  --verdict-out "$VN/b-verdict.json" >/dev/null 2>&1
+rc_with=$?
+# Timestamps are stripped from BOTH documents before comparing, because the two
+# runs happen a moment apart and every one of these fields would differ for that
+# reason alone. Written as an explicit set rather than as a chain of pops: the
+# first version of this check used
+#     f.pop('last_assessed', None) or f.pop('first_seen', None)
+# which short-circuits — when last_assessed is truthy, and in a real register it
+# always is, first_seen was never popped and the comparison failed on the clock
+# rather than on the register. That reported a regression in evaluate.py which
+# did not exist.
+same_reg=$(python3 -c "
+import json
+VOLATILE = {'updated_at', 'generated_at', 'last_assessed', 'first_seen',
+            'remediation_due', 'sla', 'history'}
+def strip(d):
+    out = {k: v for k, v in d.items() if k not in VOLATILE}
+    out['findings'] = [{k: v for k, v in f.items() if k not in VOLATILE}
+                       for f in d.get('findings', [])]
+    return out
+a=strip(json.load(open('$VN/a.json'))); b=strip(json.load(open('$VN/b.json')))
+print('same' if json.dumps(a,sort_keys=True)==json.dumps(b,sort_keys=True) else 'different')")
+if [ "$rc_without" = "$rc_with" ] && [ "$same_reg" = "same" ]; then
+  printf '  \033[32mPASS\033[0m  %-56s exit=%s both ways\n' "asking for a verdict changes no outcome" "$rc_with"; PASS=$((PASS+1))
+else
+  printf '  \033[31mFAIL\033[0m  %-56s %s vs %s, register %s\n' "asking for a verdict changes no outcome" "$rc_without" "$rc_with" "$same_reg"; FAIL=$((FAIL+1))
+fi
+
+echo
+echo "  $PASS passed, $FAIL failed"
+rm -rf "$WORK"
+[ "$FAIL" -eq 0 ]

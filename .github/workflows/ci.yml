@@ -46,6 +46,15 @@ on:
   push:
     branches:
       - develop
+      # main as well, and this is load-bearing rather than tidiness.
+      #
+      # A pull_request run's checks are recorded against the ephemeral merge ref
+      # GitHub builds for the PR, not against the commit that ends up on main.
+      # So before this line, the merge commit a release tag points at had no
+      # check runs at all — and promotion now refuses to build or deploy a
+      # commit whose required checks it cannot find. Without CI running here,
+      # that gate would reject every release.
+      - main
 
 # Least privilege: this job only reads the repository. It never writes to the
 # repo, comments on PRs, or touches deployments.

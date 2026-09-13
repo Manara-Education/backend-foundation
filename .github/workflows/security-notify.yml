@@ -16,8 +16,12 @@
 #
 # Two consequences of `workflow_run` worth stating, because both surprise people:
 #
-#   * It only exists once this file is on the default branch. Merging it to
-#     develop alone activates nothing.
+#   * It only exists once this file is on the DEFAULT branch — and in this
+#     repository the default branch is `develop`, not `main`. Putting it on
+#     `main` activates nothing at all: `main` is the release branch here, and
+#     `workflow_run` never dispatches from it. Checked with
+#     `gh api repos/:owner/:repo --jq .default_branch` rather than assumed,
+#     because assuming it was `main` cost a round of "implemented but silent".
 #   * It is NOT filtered by branch here, deliberately. Filtering to
 #     develop/main is the common recipe and it would silently drop every
 #     feature-branch pull request assessment — which is most of them.

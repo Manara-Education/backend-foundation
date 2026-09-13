@@ -29,13 +29,19 @@ public record RateLimitProperties(boolean enabled, List<RateLimitRule> rules) {
                 // --- Credential guessing -------------------------------------------------
                 // Brute force and credential stuffing. A person who has genuinely forgotten
                 // which password they used does not need more than ten tries in five minutes.
-                new RateLimitRule("login", HttpMethod.POST, "/api/v1/auth/login", 10, Duration.ofMinutes(5)),
+                // Refused outright while Redis is down: sign-in stores its session there and cannot
+                // succeed anyway, and letting it through would check passwords with no limit.
+                new RateLimitRule("login", HttpMethod.POST, "/api/v1/auth/login", 10, Duration.ofMinutes(5),
+                        RateLimitRule.OutagePolicy.REFUSE),
 
                 // --- Codes that gate account takeover ------------------------------------
                 // Backs up the per-code attempt ceiling in OtpService. That ceiling is the real
                 // defence; this stops an attacker cheaply cycling fresh codes to get five new
                 // guesses each time.
-                new RateLimitRule("otp-verify", HttpMethod.POST, "/api/v1/auth/verify-otp", 10, Duration.ofMinutes(10)),
+                // Also refused while Redis is down: a correct code signs the account in, which needs the
+                // session store, and the code would be spent on a request that then fails.
+                new RateLimitRule("otp-verify", HttpMethod.POST, "/api/v1/auth/verify-otp", 10, Duration.ofMinutes(10),
+                        RateLimitRule.OutagePolicy.REFUSE),
                 new RateLimitRule("reset-otp-verify", HttpMethod.POST, "/api/v1/auth/verify-reset-otp", 10, Duration.ofMinutes(10)),
                 new RateLimitRule("reset-password", HttpMethod.POST, "/api/v1/auth/reset-password", 10, Duration.ofMinutes(10)),
 

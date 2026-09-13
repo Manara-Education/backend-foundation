@@ -2,6 +2,7 @@ package com.manara.backend.video.provider;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.manara.backend.common.util.LogSanitizer;
 import com.manara.backend.video.model.VideoMetadata;
 import com.manara.backend.video.model.VideoProvider;
 import com.manara.backend.video.model.VideoReference;
@@ -140,7 +141,7 @@ public class VimeoVideoProviderAdapter implements VideoProviderAdapter {
             // A private, deleted, or embedding-disabled video answers 403/404 here. That is a fact
             // about the video, not a failure of the save, so it is logged and forgotten.
             log.warn("Failed to read Vimeo metadata for videoId={}: {}",
-                    reference.externalId(), e.getMessage());
+                    LogSanitizer.sanitize(reference.externalId()), LogSanitizer.sanitize(e.getMessage()));
             return VideoMetadata.empty();
         }
     }

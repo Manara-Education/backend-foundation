@@ -1,5 +1,6 @@
 package com.manara.backend.common.security.ratelimit;
 
+import com.manara.backend.common.util.LogSanitizer;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -12,6 +13,7 @@ import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,6 +27,8 @@ import java.util.Map;
  */
 @Slf4j
 public class RateLimitFilter extends OncePerRequestFilter {
+
+    private static final Duration OUTAGE_RETRY_AFTER = Duration.ofSeconds(30);
 
     private final RateLimiter rateLimiter;
     private final Map<RequestMatcher, RateLimitRule> rules = new LinkedHashMap<>();
@@ -46,13 +50,17 @@ public class RateLimitFilter extends OncePerRequestFilter {
             return;
         }
 
-        if (rateLimiter.tryConsume(rule, clientKey(request))) {
-            filterChain.doFilter(request, response);
-            return;
+        switch (rateLimiter.tryConsume(rule, clientKey(request))) {
+            case ALLOWED -> filterChain.doFilter(request, response);
+            case LIMITED -> {
+                // The path is whatever the client sent; it is sanitised so it cannot forge a log line.
+                log.warn("Rate limit '{}' exceeded for {} {}", rule.name(),
+                        LogSanitizer.sanitize(request.getMethod()), LogSanitizer.sanitize(request.getRequestURI()));
+                reject(response, rule);
+            }
+            // Already logged, at most once a minute, by the limiter.
+            case UNAVAILABLE -> unavailable(response);
         }
-
-        log.warn("Rate limit '{}' exceeded for {} {}", rule.name(), request.getMethod(), request.getRequestURI());
-        reject(response, rule);
     }
 
     private RateLimitRule matchingRule(HttpServletRequest request) {
@@ -87,5 +95,18 @@ public class RateLimitFilter extends OncePerRequestFilter {
         // Deliberately says nothing about which rule fired, what the limit is, or how much of it
         // is left — that would tell an attacker exactly how to pace themselves underneath it.
         response.getWriter().write("{\"status\":\"error\",\"errors\":[\"Too many requests. Please try again later.\"]}");
+    }
+
+    /**
+     * For a rule that refuses while its counter is down (RateLimitRule.OutagePolicy.REFUSE). Answered
+     * before the request reaches authentication, so an outage neither lets passwords be checked
+     * without a limit nor tells a right one from a wrong one.
+     */
+    private void unavailable(HttpServletResponse response) throws IOException {
+        response.setStatus(HttpStatus.SERVICE_UNAVAILABLE.value());
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        response.setCharacterEncoding("UTF-8");
+        response.setHeader(HttpHeaders.RETRY_AFTER, String.valueOf(OUTAGE_RETRY_AFTER.toSeconds()));
+        response.getWriter().write("{\"status\":\"error\",\"errors\":[\"This is temporarily unavailable. Please try again shortly.\"]}");
     }
 }

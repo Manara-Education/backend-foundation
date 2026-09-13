@@ -21,7 +21,7 @@ import static com.manara.backend.course.integration.CourseAuthoringFixtures.modu
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
+import static com.manara.backend.session.security.SignedIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -74,7 +74,7 @@ class CourseAuthoringApiTest extends AbstractCourseAuthoringTest {
                 """.formatted(course.getDescription(), course.getRevision());
 
         mockMvc.perform(put(BASE + "/{id}", course.getId())
-                        .with(user(instructorUser)).with(csrf())
+                        .with(signedIn(instructorUser)).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.title").value("Renamed over the wire"))
@@ -91,7 +91,7 @@ class CourseAuthoringApiTest extends AbstractCourseAuthoringTest {
                 """.formatted(course.getDescription());
 
         mockMvc.perform(put(BASE + "/{id}", course.getId())
-                        .with(user(instructorUser)).with(csrf())
+                        .with(signedIn(instructorUser)).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isBadRequest());
     }
@@ -105,7 +105,7 @@ class CourseAuthoringApiTest extends AbstractCourseAuthoringTest {
                 """.formatted(course.getDescription(), course.getRevision());
 
         mockMvc.perform(put(BASE + "/{id}", course.getId())
-                        .with(user(instructorUser)).with(csrf())
+                        .with(signedIn(instructorUser)).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status").value("PUBLISHED"));
@@ -126,7 +126,7 @@ class CourseAuthoringApiTest extends AbstractCourseAuthoringTest {
                 """.formatted(course.getDescription(), course.getRevision());
 
         mockMvc.perform(put(BASE + "/{id}", course.getId())
-                        .with(user(instructorUser)).with(csrf())
+                        .with(signedIn(instructorUser)).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.id").value(course.getId()));
@@ -146,13 +146,13 @@ class CourseAuthoringApiTest extends AbstractCourseAuthoringTest {
         var course = publishedCourse();
 
         mockMvc.perform(post(BASE + "/{id}/unpublish", course.getId())
-                        .with(user(instructorUser)).with(csrf()))
+                        .with(signedIn(instructorUser)).with(csrf()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status").value("DRAFT"))
                 .andExpect(jsonPath("$.data.hasUpdatesSincePublish").value(false));
 
         mockMvc.perform(post(BASE + "/{id}/publish", course.getId())
-                        .with(user(instructorUser)).with(csrf()))
+                        .with(signedIn(instructorUser)).with(csrf()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status").value("PUBLISHED"));
     }
@@ -164,7 +164,7 @@ class CourseAuthoringApiTest extends AbstractCourseAuthoringTest {
         var ids = moduleIdsOf(course);
 
         mockMvc.perform(patch(BASE + "/{id}/modules/order", course.getId())
-                        .with(user(instructorUser)).with(csrf())
+                        .with(signedIn(instructorUser)).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(
                                 java.util.Map.of("moduleIds", List.of(ids.get(1), ids.get(0))))))
@@ -183,7 +183,7 @@ class CourseAuthoringApiTest extends AbstractCourseAuthoringTest {
         var ids = lessonIdsOf(course);
 
         mockMvc.perform(patch(BASE + "/{id}/lessons/order", course.getId())
-                        .with(user(instructorUser)).with(csrf())
+                        .with(signedIn(instructorUser)).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(
                                 java.util.Map.of("lessonIds", List.of(ids.get(1), ids.get(0))))))
@@ -207,7 +207,7 @@ class CourseAuthoringApiTest extends AbstractCourseAuthoringTest {
         var ids = moduleLessonIdsOf(course, 0);
 
         mockMvc.perform(patch(BASE + "/{id}/modules/{moduleId}/lessons/order", course.getId(), moduleId)
-                        .with(user(instructorUser)).with(csrf())
+                        .with(signedIn(instructorUser)).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(
                                 java.util.Map.of("lessonIds", List.of(ids.get(1), ids.get(0))))))
@@ -229,7 +229,7 @@ class CourseAuthoringApiTest extends AbstractCourseAuthoringTest {
                 flatCourse("Flat", CourseStatus.PUBLISHED, lesson("One"), lesson("Two")));
 
         mockMvc.perform(patch(BASE + "/{id}/lessons/order", course.getId())
-                        .with(user(instructorUser)).with(csrf())
+                        .with(signedIn(instructorUser)).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
                 .andExpect(status().isBadRequest());
@@ -244,7 +244,7 @@ class CourseAuthoringApiTest extends AbstractCourseAuthoringTest {
                 flatCourse("Flat", CourseStatus.PUBLISHED, lesson("One"), lesson("Two")));
 
         mockMvc.perform(patch(BASE + "/{id}/lessons/order", course.getId())
-                        .with(user(instructorUser)).with(csrf())
+                        .with(signedIn(instructorUser)).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"lessonIds\": \"not-a-list\"}"))
                 .andExpect(status().isBadRequest());
@@ -278,7 +278,7 @@ class CourseAuthoringApiTest extends AbstractCourseAuthoringTest {
                 modularCourse("Elsewhere", CourseStatus.PUBLISHED, module("Theirs", lesson("x"))));
 
         mockMvc.perform(patch(BASE + "/{id}/modules/order", course.getId())
-                        .with(user(instructorUser)).with(csrf())
+                        .with(signedIn(instructorUser)).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(java.util.Map.of(
                                 "moduleIds", List.of(moduleIdsOf(course).get(0), moduleIdsOf(other).get(0))))))
@@ -306,7 +306,7 @@ class CourseAuthoringApiTest extends AbstractCourseAuthoringTest {
         var intruder = newInstructorUser();
 
         mockMvc.perform(post(BASE + "/{id}/unpublish", course.getId())
-                        .with(user(intruder)).with(csrf()))
+                        .with(signedIn(intruder)).with(csrf()))
                 .andExpect(status().isBadRequest());
 
         assertThat(reload(course.getId()).getStatus()).isEqualTo(CourseStatus.PUBLISHED);

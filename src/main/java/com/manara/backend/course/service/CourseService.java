@@ -4,7 +4,7 @@ import com.manara.backend.common.exception.BusinessException;
 import com.manara.backend.common.exception.ConflictException;
 import com.manara.backend.common.exception.ErrorCode;
 import com.manara.backend.common.exception.ResourceNotFoundException;
-import com.manara.backend.common.file.FileUploadService;
+import com.manara.backend.common.file.UploadRetentionService;
 import com.manara.backend.course.dto.CourseDetailsResponse;
 import com.manara.backend.course.dto.CourseRequest;
 import com.manara.backend.course.dto.CourseResponse;
@@ -110,29 +110,32 @@ public class CourseService {
     private final CourseDetailsViewRegistry courseDetailsViewRegistry;
     private final EntitlementMapper entitlementMapper;
     private final EntitlementPolicy entitlementPolicy;
-    private final FileUploadService fileUploadService;
+    private final UploadRetentionService uploadRetentionService;
     private final CourseModuleRepository courseModuleRepository;
     private final CourseViewPolicy courseViewPolicy;
     private final Clock clock;
 
     /**
-     * Catalogue for instructors and admins — every course on the platform, drafts and private
-     * courses included.
+     * The instructor catalogue: an instructor's own courses, or — for an administrator only —
+     * every course on the platform, drafts and private courses included.
      *
-     * <p>Now actually restricted to them. It always documented itself this way and never enforced
-     * it: the endpoint sits behind {@code anyRequest().authenticated()} and nothing below it looked
-     * at the caller's role, so any signed-in learner could read every instructor's unfinished draft
-     * by asking for the instructor catalogue instead of theirs. That was already wrong, and private
-     * courses make it load-bearing — this is the one list on the platform that deliberately shows
-     * courses no learner may discover, so it is the one place a private course would otherwise leak
-     * wholesale.
+     * <p>This is the one list on the platform that deliberately shows courses no learner may
+     * discover, so it is the one place a draft or a private course would otherwise leak wholesale.
+     * It first leaked to learners, because nothing looked at the caller's role. Checking the role
+     * then closed that and left the larger half open: INSTRUCTOR is a role anyone can give
+     * themselves at registration, so "instructors and admins" meant anybody with a mailbox — sign
+     * up, confirm the code, and read every other instructor's unfinished draft and private course.
+     * What makes a course an instructor's business is owning it, which the editor already enforced
+     * through {@link #requireOwnedCourse}; this list now says the same.
      *
-     * <p>Learners have their own catalogue and are not being taken anything away from: see
-     * {@link #getDiscoverableCourses()}, which is what the student browse endpoint calls.
+     * <p>Scoped in the query rather than by filtering the platform-wide list afterwards, so another
+     * instructor's course is never loaded, counted or mapped on this path. For an instructor it
+     * lists the same courses as {@link #getMyCourses}, in the same shape.
+     *
+     * <p>Learners are refused, as before. Their catalogue is {@link #getDiscoverableCourses()}.
      */
     public List<CourseResponse> getAllCourses(User user) {
-        requireStaff(user);
-        return courseRepository.findAllWithInstructor().stream()
+        return catalogueOf(user).stream()
                 .map(courseMapper::toCourseResponse)
                 .toList();
     }
@@ -305,14 +308,22 @@ public class CourseService {
 
         var response = saveAndRespond(course);
 
-        // Deleting the replaced upload last: the file is gone for good, so it only happens once the
-        // rest of the edit has been accepted. Only a payload that actually named a new image can
-        // retire the old one — an update that never mentioned the cover leaves the file alone.
+        // The cover this save replaced is no longer referenced by this course. That is all this
+        // says, and all it is entitled to say: whether the file is deleted is decided by
+        // UploadRetentionService, against who uploaded it and what still references it, and only
+        // once this transaction has committed.
+        //
+        // It used to call deleteFile directly, which made the URL in the course's own image column
+        // a delete capability for whatever file it named — including one uploaded by somebody else
+        // and attached here from a public /uploads/ address. The condition below is unchanged and
+        // still says exactly what it always said — a save that never mentioned the cover retires
+        // nothing. What has been removed is this method's authority to destroy a file on the
+        // strength of it.
         if (previousImage != null
                 && request.carriesImage()
                 && request.imageValue() != null
                 && !previousImage.equals(request.imageValue())) {
-            fileUploadService.deleteFile(previousImage);
+            uploadRetentionService.releaseWhenCommitted(previousImage, user.getId());
         }
         return response;
     }
@@ -624,16 +635,26 @@ public class CourseService {
     }
 
     /**
-     * Instructors and administrators, for the platform-wide catalogue.
+     * What the instructor catalogue may show this caller, decided by role and answered by a query.
      *
-     * <p>Refused with the same message an instructor-only operation uses, because it is the same
-     * refusal: this is an authoring-side view of the platform, and a learner asking for it is
-     * asking for somebody else's tooling.
+     * <p>Only ADMIN reaches the unrestricted list, and ADMIN is the one role nobody can give
+     * themselves: registration refuses it, and nothing else in the application writes a role. An
+     * instructor's list is keyed on the account itself — the test of ownership the editor applies —
+     * rather than on a profile looked up from it, so an instructor account with no profile row owns
+     * nothing and is shown nothing instead of failing.
+     *
+     * <p>Anybody else is refused with the same message an instructor-only operation uses, because it
+     * is the same refusal: this is an authoring-side view, and a learner asking for it is asking for
+     * somebody else's tooling.
      */
-    private void requireStaff(User user) {
-        if (user == null || (user.getRole() != Role.INSTRUCTOR && user.getRole() != Role.ADMIN)) {
-            throw new BusinessException("error.course.onlyInstructor");
+    private List<Course> catalogueOf(User user) {
+        if (user != null && user.getRole() == Role.ADMIN) {
+            return courseRepository.findAllWithInstructor();
         }
+        if (user != null && user.getRole() == Role.INSTRUCTOR) {
+            return courseRepository.findAllOwnedByUserWithInstructor(user.getId());
+        }
+        throw new BusinessException("error.course.onlyInstructor");
     }
 
     private Instructor requireInstructor(User user) {

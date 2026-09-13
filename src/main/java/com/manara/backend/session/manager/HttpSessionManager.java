@@ -20,6 +20,7 @@ public class HttpSessionManager implements SessionManager {
     private static final String SESSION_COOKIE = "MANARA_SESSION";
     private static final String CSRF_COOKIE = "XSRF-TOKEN";
     private final SecurityContextRepository securityContextRepository;
+    private final SessionCeiling sessionCeiling;
 
     @Override
     public void establish(User user, HttpServletRequest request, HttpServletResponse response) {
@@ -43,24 +44,91 @@ public class HttpSessionManager implements SessionManager {
         context.setAuthentication(auth);
         SecurityContextHolder.setContext(context);
         securityContextRepository.saveContext(context, request, response);
+
+        stampAuthVersion(request, auth);
+        countAgainstCeiling(request, auth);
+    }
+
+    /**
+     * Records the epoch this session is being opened under.
+     *
+     * <p>The number comes from the principal because the principal was read from the database
+     * moments ago, on this request — by the authentication provider on sign-in, or by the caller
+     * that re-read the row after bumping it. It is never read from a session, so it cannot inherit
+     * a stale value from the session being replaced.
+     *
+     * <p>A principal that is not one of ours leaves the session unstamped, and an unstamped session
+     * is refused on its next request. That is the safe direction: the alternative — stamping
+     * something plausible — would mint a session nobody can prove the epoch of.
+     */
+    private void stampAuthVersion(HttpServletRequest request, Authentication auth) {
+        if (auth.getPrincipal() instanceof User user) {
+            // Fetched after changeSessionId and after saveContext deliberately: this is the session
+            // the response's cookie will actually name.
+            request.getSession().setAttribute(AUTH_VERSION_ATTRIBUTE, user.getAuthVersion());
+        }
+    }
+
+    /**
+     * Puts the new session under its account's ceiling — which, if the account already holds as many
+     * sessions as it may, ends the oldest of them.
+     *
+     * <p>Only recorded here. The session is not in the store until the response is committed, and
+     * {@link SessionAdmissionFilter} has it counted then; {@link SessionCeiling} explains why counting
+     * any sooner would let a racing sign-in leave a session uncounted. Every way of signing in —
+     * password, emailed code, the re-issue after a password change — comes through this method, so
+     * none of them is exempt.
+     *
+     * <p>The session replaced above needs no bookkeeping of its own: it is already gone from the store,
+     * and the count drops sessions that are gone before it counts.
+     */
+    private void countAgainstCeiling(HttpServletRequest request, Authentication auth) {
+        if (auth.getPrincipal() instanceof User user && user.getId() != null) {
+            sessionCeiling.deferAdmission(request, user.getId());
+        }
     }
 
     @Override
     public void terminate(HttpServletRequest request, HttpServletResponse response) {
         HttpSession session = request.getSession(false);
         if (session != null) {
+            String sessionId = session.getId();
             session.invalidate();
+            releaseSlot(sessionId);
         }
         SecurityContextHolder.clearContext();
-        clearCookie(response, SESSION_COOKIE);
-        clearCookie(response, CSRF_COOKIE);
+        clearCookie(request, response, SESSION_COOKIE);
+        clearCookie(request, response, CSRF_COOKIE);
     }
 
-    private void clearCookie(HttpServletResponse response, String name) {
+    /**
+     * Gives the ended session's place under the ceiling back to its account. The account is read from
+     * the context before it is cleared, where it is the ended session's own principal: both callers —
+     * sign-out, and the refusal of a stale session — run on a request that session authenticated.
+     */
+    private void releaseSlot(String sessionId) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth != null && auth.getPrincipal() instanceof User user && user.getId() != null) {
+            sessionCeiling.release(user.getId(), sessionId);
+        }
+    }
+
+    /**
+     * Expires a cookie this application issued.
+     *
+     * <p>{@code Secure} whenever the request arrived over HTTPS — the rule
+     * {@code CookieCsrfTokenRepository} applies when it issues {@code XSRF-TOKEN}, and in production
+     * {@code server.forward-headers-strategy=native} makes it the scheme the client used at the proxy.
+     * Not unconditionally: a browser refuses a {@code Secure} cookie from an origin it does not
+     * consider secure, so over plain HTTP in development the expiring cookie would be dropped and the
+     * old one would outlive the sign-out.
+     */
+    private void clearCookie(HttpServletRequest request, HttpServletResponse response, String name) {
         Cookie cookie = new Cookie(name, null);
         cookie.setPath("/");
         cookie.setMaxAge(0);
         cookie.setHttpOnly(true);
+        cookie.setSecure(request.isSecure());
         response.addCookie(cookie);
     }
 }
