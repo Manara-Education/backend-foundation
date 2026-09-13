@@ -514,14 +514,53 @@ def parse_gitleaks(doc: Any, norm: Normaliser) -> list[Finding]:
     return out
 
 
+def sarif_rule(run: dict, res: dict) -> dict:
+    """The rule a SARIF result was produced by, wherever the producer keeps it.
+
+    CodeQL does not keep its rules on the driver. The driver is "CodeQL" with
+    an empty rule list; every query lives on a tool EXTENSION — the query pack,
+    codeql/java-queries — and each result points at it through
+    rule.toolComponent.index and rule.index. Reading only driver.rules found
+    nothing for any CodeQL result, and a rule that cannot be found has no
+    security-severity, which parse_sarif reads as "not a security rule" and
+    drops. That is how every CodeQL alert on develop reached this gate as zero
+    findings, a HIGH among them.
+
+    By position first, as SARIF 2.1.0 defines it — a result that names no
+    toolComponent refers to the driver — and only when the rule found there
+    carries the id the result claims. Then by id across every component, for
+    producers that only name the rule. An empty dict when neither finds it.
+    """
+    tool = run.get("tool") or {}
+    driver = tool.get("driver") or {}
+    extensions = tool.get("extensions") or []
+    ref = res.get("rule") or {}
+    rule_id = res.get("ruleId") or ref.get("id") or ""
+
+    component = driver
+    if "toolComponent" in ref:
+        i = (ref.get("toolComponent") or {}).get("index")
+        component = extensions[i] if isinstance(i, int) and 0 <= i < len(extensions) else {}
+    index = ref.get("index", res.get("ruleIndex"))
+    rules = component.get("rules") or []
+    if isinstance(index, int) and 0 <= index < len(rules):
+        rule = rules[index] or {}
+        if not rule_id or rule.get("id") == rule_id:
+            return rule
+
+    for comp in [driver, *extensions]:
+        for rule in comp.get("rules") or []:
+            if rule_id and (rule or {}).get("id") == rule_id:
+                return rule
+    return {}
+
+
 def parse_sarif(doc: dict, norm: Normaliser, detector: str) -> list[Finding]:
     out: list[Finding] = []
     for run in doc.get("runs", []) or []:
-        tool = (((run.get("tool") or {}).get("driver")) or {})
-        rules = {r.get("id"): r for r in (tool.get("rules") or [])}
         for res in run.get("results", []) or []:
             rule_id = res.get("ruleId", "")
-            rule = rules.get(rule_id, {}) or {}
+            rule = sarif_rule(run, res)
             props = rule.get("properties", {}) or {}
             number = None
             if props.get("security-severity"):

@@ -192,6 +192,52 @@ SEC="$WORK/secret"; mk_clean "$SEC"
 echo '[{"RuleID":"stripe-access-token","File":"src/config.ts","StartLine":12,"Commit":"deadbeefcafe"}]' > "$SEC/secrets-gitleaks.gitleaks.json"
 run_case "detected secret blocks" 1 "$SEC"
 
+# 5b — CodeQL keeps its rules on a tool EXTENSION, not on the driver
+#
+# The driver is "CodeQL" with an empty rule list; every query lives on the
+# query pack (codeql/java-queries) and a result points at it by
+# rule.toolComponent.index + rule.index. These fixtures have that real shape.
+# While the rule lookup read only driver.rules, every CodeQL result on develop
+# reached the gate as zero findings — including a HIGH that should have blocked.
+mk_codeql() {
+  python3 - "$1/sast-codeql.sarif" "$2" <<'PY'
+import json, sys
+path, severity = sys.argv[1], sys.argv[2]
+props = ({"tags": ["security"], "security-severity": severity} if severity
+         else {"tags": ["maintainability"]})
+doc = {"version": "2.1.0", "runs": [{
+    "tool": {"driver": {"name": "CodeQL", "rules": []},
+             "extensions": [{"name": "codeql/java-queries",
+                             "rules": [{"id": "java/unrelated"},
+                                       {"id": "java/example", "properties": props}]}]},
+    "results": [{"ruleId": "java/example",
+                 "rule": {"id": "java/example", "index": 1, "toolComponent": {"index": 0}},
+                 "message": {"text": "fixture"},
+                 "locations": [{"physicalLocation": {
+                     "artifactLocation": {"uri": "src/main/java/Example.java"},
+                     "region": {"startLine": 7}}}]}]}]}
+json.dump(doc, open(path, "w"))
+PY
+}
+count_findings() {
+  python3 -c "import json,sys;print(sum(1 for f in json.load(open(sys.argv[1]))['findings'] if f['status']==sys.argv[2]))" "$1/findings.json" "$2"
+}
+
+CQH="$WORK/codeql-high"; mk_clean "$CQH"; mk_codeql "$CQH" 8.6
+run_case "CodeQL HIGH whose rule is on an extension blocks" 1 "$CQH"
+
+CQM="$WORK/codeql-medium"; mk_clean "$CQM"; mk_codeql "$CQM" 6.1
+run_case "CodeQL MEDIUM whose rule is on an extension passes" 0 "$CQM"
+n_tracked=$(count_findings "$CQM" tracked)
+if [ "$n_tracked" = "1" ]; then
+  printf '  \033[32mPASS\033[0m  %-56s %s tracked\n' "  ...and is tracked rather than dropped" "$n_tracked"; PASS=$((PASS+1))
+else
+  printf '  \033[31mFAIL\033[0m  %-56s %s tracked (wanted 1)\n' "  CodeQL MEDIUM tracked" "$n_tracked"; FAIL=$((FAIL+1))
+fi
+
+CQQ="$WORK/codeql-quality"; mk_clean "$CQQ"; mk_codeql "$CQQ" ""
+run_case "CodeQL quality query on an extension does not block" 0 "$CQQ"
+
 # 6 — KEV escalation below the severity threshold
 KEV="$WORK/kev"; mk_clean "$KEV"
 KEVCVE=$(python3 -c "import json;print(json.load(open('$MANIFEST_OK'))['sources']['cisa-kev']['kev_cve_ids'][0])")
