@@ -349,6 +349,11 @@ jobs:
     # its own red job in the graph and so the deployment secrets scoped to the
     # Production environment below are never in scope while that is decided.
     needs: security-gate
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+      digest: ${{ steps.image.outputs.digest }}
+      deployed_at: ${{ steps.deploy.outputs.deployed_at }}
+      scan: ${{ steps.scan.outputs.result }}
 
     # Scopes the deployment secrets to this job and applies whatever protection
     # rules the Production environment carries.
@@ -477,6 +482,41 @@ jobs:
           echo "Approved $IMAGE:$TAG == :sha-$SHA -> $DIGEST"
 
       # ---------------------------------------------------------------------
+      # The published artifact, scanned by digest
+      # ---------------------------------------------------------------------
+      # The Security Gate assessed an image built from this commit in CI. This
+      # scans the image actually published and about to run, by digest, against
+      # today's advisories, as frontend-foundation already does. An advisory
+      # published after the release was cut stops the deployment here, with
+      # production untouched. --ignore-unfixed is deliberately not set.
+      - name: Install Trivy
+        run: |
+          bash .github/security/install-scanners.sh "${RUNNER_TEMP}/security-tools" trivy
+          echo "${RUNNER_TEMP}/security-tools" >> "$GITHUB_PATH"
+
+      - name: Scan the published image by digest
+        id: scan
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/observation"
+          report="$RUNNER_TEMP/observation/image-scan.txt"
+          trivy image "$IMAGE@$DIGEST" --scanners vuln --severity HIGH,CRITICAL \
+            --format table --exit-code 1 --timeout 20m --output "$report" || scan_failed=1
+          cat "$report"
+          if [ "${scan_failed:-0}" = "1" ]; then
+            echo "result=blocked" >> "$GITHUB_OUTPUT"
+            echo "::error title=Published image has blocking findings::$IMAGE@$DIGEST carries HIGH or CRITICAL"
+            echo "::error::vulnerabilities. Production has NOT been touched. Fix or formally except the"
+            echo "::error::findings and cut a new release."
+            exit 1
+          fi
+          echo "result=pass" >> "$GITHUB_OUTPUT"
+          echo "No HIGH or CRITICAL findings in the image about to be deployed."
+
+      # ---------------------------------------------------------------------
       # 3. SSH
       # ---------------------------------------------------------------------
       # The host key is pinned rather than accepted on first sight. `ssh-keyscan`
@@ -484,6 +524,7 @@ jobs:
       # thing host-key checking exists to prevent — and this connection carries
       # the right to restart production.
       - name: Configure SSH
+        id: ssh
         env:
           SSH_KEY: ${{ secrets.HETZNER_SSH_KEY }}
           HOST: ${{ secrets.HETZNER_HOST }}
@@ -495,6 +536,30 @@ jobs:
           printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC9vjpkD1lqIDMx/gUnhc3AbZgWXBPIQwBPYWr6JvY6H\n' \
             "$HOST" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
+
+      # ---------------------------------------------------------------------
+      # Is the host ready for this backend?
+      # ---------------------------------------------------------------------
+      # This backend refuses to start in production without an explicit commerce
+      # mode (CommerceConfig), and production must never grant simulated paid
+      # access. The mode reaches the container only if the host's
+      # manara-infrastructure passes MANARA_COMMERCE_MODE through compose and
+      # .env sets it. Checked BEFORE deploy.sh, which would otherwise replace a
+      # healthy backend with one that cannot boot.
+      - name: Check the host is ready for this backend
+        env:
+          HOST: ${{ secrets.HETZNER_HOST }}
+          USER: ${{ secrets.HETZNER_USER }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/observation"
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes \
+              -o ConnectTimeout=20 "$USER@$HOST" \
+              "cd /opt/manara && ./scripts/manifest.sh --json" > "$RUNNER_TEMP/observation/host-before.json" \
+            || { echo "::error::The host could not report its configuration (scripts/manifest.sh --json). Production has NOT been touched."; exit 1; }
+          python3 .github/scripts/release-evidence.py preflight \
+            --runtime "$RUNNER_TEMP/observation/host-before.json" \
+            --out "$RUNNER_TEMP/observation/preflight.json"
 
       # ---------------------------------------------------------------------
       # 4. Deploy
@@ -509,6 +574,7 @@ jobs:
       # No secret is passed over this connection. The server's .env already holds
       # them at mode 600 and is the only place they exist.
       - name: Deploy to Hetzner
+        id: deploy
         env:
           HOST: ${{ secrets.HETZNER_HOST }}
           USER: ${{ secrets.HETZNER_USER }}
@@ -526,6 +592,7 @@ jobs:
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes \
               -o ConnectTimeout=20 "$USER@$HOST" \
               "cd /opt/manara && ./scripts/deploy.sh backend '$TAG' '$DIGEST'"
+          echo "deployed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       # ---------------------------------------------------------------------
       # 5. Prove it from outside
@@ -537,17 +604,77 @@ jobs:
       - name: Verify production is serving
         run: |
           set -euo pipefail
+          out="$RUNNER_TEMP/observation/http-checks.json"
+          mkdir -p "$(dirname "$out")"
           for attempt in $(seq 1 10); do
-            code="$(curl -fsS -m 20 -o /dev/null -w '%{http_code}' https://manara-edu.com/ || echo 000)"
-            if [ "$code" = "200" ]; then
-              echo "https://manara-edu.com/ -> 200"
-              exit 0
-            fi
-            echo "attempt $attempt: got $code, retrying..."
+            # No -f: an HTTP error is a status code to record, not a curl failure.
+            root="$(curl -sS -m 20 -o /dev/null -w '%{http_code}' https://manara-edu.com/ 2>/dev/null || true)"
+            # 204 is this endpoint's success: it sets the CSRF cookie and returns
+            # no body. Reaching it proves /api/* routes to the backend through Caddy.
+            api="$(curl -sS -m 20 -o /dev/null -w '%{http_code}' https://manara-edu.com/api/v1/auth/csrf 2>/dev/null || true)"
+            root="${root:-000}"; api="${api:-000}"
+            if [ "$root" = "200" ] && [ "$api" = "204" ]; then break; fi
+            echo "attempt $attempt: root=$root api=$api, retrying..."
             sleep 10
           done
-          echo "::error::Production did not return 200 after the deployment."
-          exit 1
+          printf '[{"name":"the site root serves","target":"https://manara-edu.com/","expected":"200","observed":"%s","ok":%s},{"name":"the API reaches the backend","target":"https://manara-edu.com/api/v1/auth/csrf","expected":"204","observed":"%s","ok":%s}]\n' \
+            "$root" "$([ "$root" = 200 ] && echo true || echo false)" \
+            "$api" "$([ "$api" = 204 ] && echo true || echo false)" > "$out"
+          if [ "$root" = "200" ] && [ "$api" = "204" ]; then
+            echo "https://manara-edu.com/ -> 200, /api/v1/auth/csrf -> 204"
+          else
+            echo "::error::Production did not serve correctly after the deployment (root=$root api=$api)."
+            exit 1
+          fi
+
+      # ---------------------------------------------------------------------
+      # What is the host actually running now?
+      # ---------------------------------------------------------------------
+      # Recorded on every attempt that reached the host, successful or not:
+      # after a failure it is the recovery evidence. It is the host's own report
+      # (manara-infrastructure scripts/manifest.sh --json): image digests,
+      # revisions, the commerce mode and secret PRESENCE. No secret value
+      # leaves the host.
+      - name: Observe what production is running
+        if: always() && steps.ssh.outcome == 'success'
+        env:
+          HOST: ${{ secrets.HETZNER_HOST }}
+          USER: ${{ secrets.HETZNER_USER }}
+        run: |
+          set -uo pipefail
+          mkdir -p "$RUNNER_TEMP/observation"
+          if ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes \
+                 -o ConnectTimeout=20 "$USER@$HOST" \
+                 "cd /opt/manara && ./scripts/manifest.sh --json" > "$RUNNER_TEMP/observation/runtime.json"; then
+            echo "Recorded the host's report."
+          else
+            rm -f "$RUNNER_TEMP/observation/runtime.json"
+            echo "::warning::The host did not report what it runs; the release evidence will say so."
+          fi
+
+      # A healthy container and a serving site do not prove the host runs the
+      # approved artifact, configured as required. This does, from the host's
+      # report: the approved digest and commit, .env closed to other users and
+      # untracked, and for the backend an allowed commerce mode and every secret injected.
+      - name: Check the running release against what was approved
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          python3 .github/scripts/release-evidence.py check-runtime \
+            --runtime "$RUNNER_TEMP/observation/runtime.json" --service backend \
+            --image "$IMAGE" --digest "$DIGEST" --sha "$SHA" \
+            --out "$RUNNER_TEMP/observation/runtime-checks.json"
+
+      - name: Keep the observation for the evidence job
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: deployment-observation
+          path: ${{ runner.temp }}/observation/
+          retention-days: 90
+          if-no-files-found: warn
 
       - name: Summarise the deployment
         if: always()
@@ -572,3 +699,135 @@ jobs:
             echo "ssh <deploy-user>@<host> 'cd /opt/manara && ./scripts/rollback.sh backend'"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # ===========================================================================
+  # Release evidence (TECH-32, TECH-60)
+  # ===========================================================================
+  # One machine-readable manifest per deployment attempt, attached to the
+  # GitHub Release together with the security evidence it cites, then proved
+  # to resolve. See docs/security/RELEASE_EVIDENCE.md. A separate job, so the
+  # Production environment's secrets are out of scope while it runs, and so a
+  # FAILED attempt is recorded as faithfully as a successful one.
+  evidence:
+    name: Record the release evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [security-gate, deploy]
+    if: always() && needs.security-gate.result == 'success' && needs.deploy.result != 'skipped'
+    permissions:
+      contents: write   # attach the manifest and bundle to the GitHub Release
+      actions: read     # read the assessment run and download its artifacts
+      checks: read      # resolve the Security Gate and build check runs
+      packages: read    # re-resolve the image digest in GHCR
+    steps:
+      - name: Check out the evidence script
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      - name: Download the deployment observation
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: deployment-observation
+          path: observation
+
+      - name: Build the manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.security-gate.outputs.tag }}
+          SHA: ${{ needs.security-gate.outputs.sha }}
+          IMAGE: ${{ needs.deploy.outputs.image }}
+          DIGEST: ${{ needs.deploy.outputs.digest }}
+          DEPLOYED_AT: ${{ needs.deploy.outputs.deployed_at }}
+          SCAN: ${{ needs.deploy.outputs.scan }}
+          STATUS: ${{ needs.deploy.result }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -uo pipefail
+          python3 -c 'import yaml' 2>/dev/null \
+            || python3 -m pip install --quiet --disable-pip-version-check 'PyYAML==6.0.3' \
+            || python3 -m pip install --quiet --disable-pip-version-check --break-system-packages 'PyYAML==6.0.3'
+          reason=""
+          [ -s observation/runtime.json ] || reason="the deploy job did not obtain the host's report"
+          python3 .github/scripts/release-evidence.py collect \
+            --repository "$REPO" --service backend --tag "$TAG" --sha "$SHA" \
+            --image "${IMAGE:-ghcr.io/manara-education/backend-foundation}" --digest "${DIGEST:-unresolved}" \
+            --deploy-run-id "$RUN_ID" --deploy-run-attempt "$RUN_ATTEMPT" \
+            --deploy-status "$STATUS" --deployed-at "$DEPLOYED_AT" \
+            --required-check "Build and test" --required-check "Build the container image" \
+            --verification observation/preflight.json \
+            --verification observation/http-checks.json \
+            --verification observation/runtime-checks.json \
+            --runtime observation/runtime.json --runtime-reason "$reason" \
+            --image-scan observation/image-scan.txt --image-scan-result "${SCAN:-not-run}" \
+            --out evidence
+          rc=$?
+          # 1 means the manifest was written and records problems; 2 means no
+          # manifest could be built at all.
+          if [ "$rc" -eq 1 ]; then echo "::warning title=Release evidence::the manifest records problems; see its 'problems' list."; fi
+          [ "$rc" -le 1 ] || exit "$rc"
+
+      - name: Keep the evidence as a workflow artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-evidence
+          path: evidence/
+          retention-days: 90
+          if-no-files-found: warn
+
+      # Workflow artifacts expire; release assets stay with the GitHub Release.
+      - name: Attach the manifest and bundle to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.security-gate.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          manifest="$(sed -n 1p evidence/asset-names.txt)"
+          bundle="$(sed -n 2p evidence/asset-names.txt)"
+          cp evidence/release-manifest.json "evidence/$manifest"
+          gh release upload "$TAG" -R "$REPO" --clobber "evidence/$manifest" "evidence/$bundle"
+          echo "Attached $manifest and $bundle to $TAG."
+
+      - name: Prove every reference in the manifest resolves
+        if: needs.deploy.result == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+          python3 .github/scripts/release-evidence.py verify --manifest evidence/release-manifest.json
+
+      - name: Summarise the evidence
+        if: always()
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, pathlib
+          p = pathlib.Path("evidence/release-manifest.json")
+          print("### Release evidence\n")
+          if not p.exists():
+              print("_No manifest was produced; see the job log._")
+              raise SystemExit
+          m = json.loads(p.read_text())
+          v = m["security"].get("verdict") or {}
+          print("```")
+          print(f"release     {m['release']['tag']} @ {m['release']['commit']}")
+          print(f"artifact    {m['artifact']['reference']}")
+          print(f"gate        {m['security']['gate'].get('conclusion')}  {m['security']['gate'].get('url')}")
+          print(f"verdict     {v.get('status')}  generated {v.get('generated_at')}")
+          print(f"deployment  {m['deployment']['status']}  at {m['deployment']['deployed_at']}")
+          print(f"runtime     {m['runtime_observation']['status']}")
+          print(f"manifest    {m['evidence']['manifest_asset']}")
+          print(f"bundle      {m['evidence']['bundle']['url']}")
+          print(f"            {m['evidence']['bundle']['sha256']}")
+          print("```")
+          for problem in m.get("problems") or []:
+              print(f"- ⚠ {problem}")
+          PY
