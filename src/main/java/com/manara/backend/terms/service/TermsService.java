@@ -2,6 +2,7 @@ package com.manara.backend.terms.service;
 
 import com.manara.backend.common.exception.ConflictException;
 import com.manara.backend.common.exception.ErrorCode;
+import com.manara.backend.common.util.LogSanitizer;
 import com.manara.backend.terms.dto.TermsVersionResponse;
 import com.manara.backend.terms.exception.TermsUnavailableException;
 import com.manara.backend.terms.mapper.TermsMapper;
@@ -67,13 +68,15 @@ public class TermsService {
         }
 
         // Version ids only; nothing about who was registering. This line must be safe to keep
-        // forever in a log that outlives the account it refers to.
+        // forever in a log that outlives the account it refers to. The submitted id is whatever
+        // the client sent, so it is sanitised before it can reach the log.
+        String loggedVersion = LogSanitizer.sanitize(submittedVersion);
         if (registry.isKnown(submittedVersion)) {
             log.warn("Registration refused: terms version '{}' is superseded; current is '{}'",
-                    submittedVersion, current.id());
+                    loggedVersion, current.id());
         } else {
             log.warn("Registration refused: terms version '{}' is not one this build has published;"
-                    + " current is '{}'", submittedVersion, current.id());
+                    + " current is '{}'", loggedVersion, current.id());
         }
 
         throw new ConflictException(ErrorCode.TERMS_VERSION_OUTDATED, "error.terms.versionOutdated");

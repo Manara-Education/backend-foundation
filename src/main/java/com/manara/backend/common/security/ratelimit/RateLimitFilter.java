@@ -1,5 +1,6 @@
 package com.manara.backend.common.security.ratelimit;
 
+import com.manara.backend.common.util.LogSanitizer;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -52,7 +53,9 @@ public class RateLimitFilter extends OncePerRequestFilter {
         switch (rateLimiter.tryConsume(rule, clientKey(request))) {
             case ALLOWED -> filterChain.doFilter(request, response);
             case LIMITED -> {
-                log.warn("Rate limit '{}' exceeded for {} {}", rule.name(), request.getMethod(), request.getRequestURI());
+                // The path is whatever the client sent; it is sanitised so it cannot forge a log line.
+                log.warn("Rate limit '{}' exceeded for {} {}", rule.name(),
+                        LogSanitizer.sanitize(request.getMethod()), LogSanitizer.sanitize(request.getRequestURI()));
                 reject(response, rule);
             }
             // Already logged, at most once a minute, by the limiter.

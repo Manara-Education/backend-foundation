@@ -1,5 +1,6 @@
 package com.manara.backend.video.provider;
 
+import com.manara.backend.common.util.LogSanitizer;
 import com.manara.backend.video.model.VideoMetadata;
 import com.manara.backend.video.model.VideoProvider;
 import com.manara.backend.video.model.VideoReference;
@@ -127,7 +128,7 @@ public class YouTubeVideoProviderAdapter implements VideoProviderAdapter {
                     : VideoMetadata.empty();
         } catch (RestClientException | NumberFormatException e) {
             log.warn("Failed to read YouTube metadata for videoId={}: {}",
-                    reference.externalId(), e.getMessage());
+                    LogSanitizer.sanitize(reference.externalId()), LogSanitizer.sanitize(e.getMessage()));
             return VideoMetadata.empty();
         }
     }

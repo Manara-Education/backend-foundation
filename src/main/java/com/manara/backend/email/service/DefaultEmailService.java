@@ -1,5 +1,6 @@
 package com.manara.backend.email.service;
 
+import com.manara.backend.common.util.LogSanitizer;
 import com.manara.backend.email.model.EmailMessage;
 import com.manara.backend.email.model.EmailSendResult;
 import com.manara.backend.email.provider.EmailProvider;
@@ -25,7 +26,7 @@ public class DefaultEmailService implements EmailService {
 
     @Override
     public EmailSendResult send(EmailMessage message) {
-        String recipient = maskRecipient(message.to());
+        String recipient = LogSanitizer.sanitize(maskRecipient(message.to()));
         log.debug("Email send requested to={}", recipient);
 
         try {
