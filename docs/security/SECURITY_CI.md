@@ -276,6 +276,13 @@ and its result is required instead of the stale one.
 The image is then scanned **by immutable digest**, so what was scanned is
 provably what is released — not merely a tag that pointed at it at the time.
 
+Every deployment attempt then records its evidence: one machine-readable
+manifest tying the release's commit and image digest to its Security Gate run,
+verdict, findings register, exceptions and raw reports, to the post-deployment
+checks, and to what the host reported it was running. It is attached to the
+GitHub Release, so it outlives workflow artifacts, and it is re-verified before
+the job ends. See [RELEASE_EVIDENCE.md](RELEASE_EVIDENCE.md).
+
 ## 8. Dependabot
 
 Dependabot PRs run the same gate as human PRs; there is no exemption. The
