@@ -67,12 +67,12 @@ class UniformRegistrationTest extends AbstractPostgresBackedTest {
 
     private static final String DOMAIN = "@uniform-registration.example";
 
-    /** At least fifteen characters: the password policy's floor. */
-    private static final String PASSWORD = "quiet orchard lantern 7";
+    /** Meets the password policy: 15 characters, an upper-case English letter, a digit and a symbol. */
+    private static final String PASSWORD = "Quiet orchard lantern 7!";
 
     /** What a stranger submits for somebody else's address. None of it may reach that account. */
     private static final String INTRUDER_NAME = "Another Person";
-    private static final String INTRUDER_PASSWORD = "copper kettle morning 9";
+    private static final String INTRUDER_PASSWORD = "Copper kettle morning 9!";
 
     private static final int CONTENDERS = 8;
 

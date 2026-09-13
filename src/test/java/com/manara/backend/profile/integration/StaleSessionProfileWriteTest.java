@@ -59,8 +59,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class StaleSessionProfileWriteTest extends AbstractPostgresBackedTest {
 
     private static final String DOMAIN = "@stalesession.example";
-    private static final String ORIGINAL_PASSWORD = "sunlit harbour lantern 42";
-    private static final String NEW_PASSWORD = "quiet orchard kettle 97";
+    private static final String ORIGINAL_PASSWORD = "Sunlit harbour lantern 42!";
+    private static final String NEW_PASSWORD = "Quiet orchard kettle 97!";
 
     private MockMvc mockMvc;
 

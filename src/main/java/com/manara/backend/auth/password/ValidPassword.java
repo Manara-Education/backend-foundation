@@ -10,13 +10,13 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * A new password that meets {@link PasswordPolicy}: at least 15 code points, at most 72 UTF-8
- * bytes, not a short pattern repeated, not on the bundled common-password list, not the service's
- * name. The rules that need the account — its address, its holder's name — are
- * {@link PasswordNotPersonal}'s.
+ * A new password that meets {@link PasswordPolicy}: at least 15 code points with an upper-case
+ * English letter, a digit and a symbol among them, at most 72 UTF-8 bytes, not a short pattern
+ * repeated, not on the bundled common-password list, not the service's name. The rules that need
+ * the account — its address, its holder's name — are {@link PasswordNotPersonal}'s.
  *
  * <p>Each rule reports its own message; the default below only satisfies the annotation contract.
- * For new passwords only: sign-in must keep accepting passwords set under the old rule.
+ * For new passwords only: sign-in must keep accepting passwords set under an earlier rule.
  */
 @Documented
 @Constraint(validatedBy = ValidPasswordValidator.class)

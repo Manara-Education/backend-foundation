@@ -68,8 +68,8 @@ class SessionCeilingTest extends AbstractPostgresBackedTest {
 
     private static final String DOMAIN = "@ceiling.example";
     private static final String EMAIL = "noor" + DOMAIN;
-    private static final String PASSWORD = "ceiling-fixture-passphrase";
-    private static final String NEW_PASSWORD = "ceiling-fixture-rotated-passphrase";
+    private static final String PASSWORD = "Ceiling fixture passphrase 1!";
+    private static final String NEW_PASSWORD = "Ceiling fixture rotated passphrase 2!";
     private static final int CEILING = 5;
     private static final String SESSION_COOKIE = "MANARA_SESSION";
     private static final String CSRF_COOKIE = "XSRF-TOKEN";

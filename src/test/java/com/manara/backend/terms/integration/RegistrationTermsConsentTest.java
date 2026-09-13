@@ -58,7 +58,7 @@ class RegistrationTermsConsentTest extends AbstractPostgresBackedTest {
 
     private static final String DOMAIN = "@termsconsent.example";
     private static final String EMAIL = "consent" + DOMAIN;
-    private static final String PASSWORD = "sunlit harbour lantern 42";
+    private static final String PASSWORD = "Sunlit harbour lantern 42!";
 
     /** Every table a registration writes to. Nothing here may move when one is refused. */
     private static final List<String> WRITTEN_BY_REGISTRATION =
