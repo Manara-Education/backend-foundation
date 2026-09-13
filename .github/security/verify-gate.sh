@@ -20,7 +20,7 @@ run_case() {
   local name="$1" expected="$2" dir="$3"; shift 3
   local out; out="$(python3 "$SHARED/evaluate.py" \
       --reports-dir "$dir" --manifest "$dir/manifest.json" \
-      --policy "$SHARED/policy.yml" --exceptions "${EXC:-$SHARED/exceptions.yml}" \
+      --policy "${POL:-$SHARED/policy.yml}" --exceptions "${EXC:-$SHARED/exceptions.yml}" \
       --event "${EVENT:-push}" --ref "${REF:-develop}" --revision "${REV:-abc1234}" \
       --repository Manara-Education/backend-foundation \
       --workspace "$REPO_ROOT" \
@@ -286,6 +286,137 @@ else
   printf '  \033[31mFAIL\033[0m  %-56s main=%s develop=%s\n' "fix on develop does not clear main" "$still_main" "$gone_dev"; FAIL=$((FAIL+1))
 fi
 
+# 11 — remediation: every finding leaves with an owner and a deadline (TECH-30)
+#
+# policy.yml's `remediation` section turns a finding into work with an owner
+# and a due date. These cases pin the arithmetic, a clock that survives a
+# re-scan, a traceable lifecycle, and the rule that being overdue escalates
+# without changing what blocks.
+check() {  # name, result: "ok" or what went wrong
+  if [ "$2" = "ok" ]; then
+    printf '  \033[32mPASS\033[0m  %-56s\n' "$1"; PASS=$((PASS+1))
+  else
+    printf '  \033[31mFAIL\033[0m  %-56s %s\n' "$1" "$2"; FAIL=$((FAIL+1))
+  fi
+}
+age_register() {  # register, days: move every clock back, as a carried register would be
+  python3 - "$1" "$2" <<'PY'
+import json, sys, datetime as dt
+p, days = sys.argv[1], int(sys.argv[2])
+reg = json.load(open(p))
+old = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)).isoformat()
+for f in reg["findings"]:
+    f["first_seen"] = old
+json.dump(reg, open(p, "w"))
+PY
+}
+
+SLA="$WORK/sla"; mk_clean "$SLA"; cp "$OSV_REAL" "$SLA/deps-osv.osv.json"
+run_case "blocking findings still block with remediation applied" 1 "$SLA"
+check "every finding gets the policy owner and its deadline" "$(python3 - "$SLA/findings.json" "$SHARED/policy.yml" <<'PY'
+import json, sys, datetime as dt, yaml
+reg = json.load(open(sys.argv[1])); pol = yaml.safe_load(open(sys.argv[2]))["remediation"]
+bad = []
+for f in reg["findings"]:
+    days = pol["sla_days"][f["severity"]]
+    if f.get("kev"):
+        days = min(days, pol["kev_days"])
+    want = dt.datetime.fromisoformat(f["first_seen"]) + dt.timedelta(days=days)
+    if f.get("owner") != pol["triage_owner"]:
+        bad.append(f"{f['id']} owner={f.get('owner')!r}")
+    if dt.datetime.fromisoformat(f["remediation_due"]) != want:
+        bad.append(f"{f['id']} due={f['remediation_due']}")
+    if f["sla"]["state"] != "within-sla":
+        bad.append(f"{f['id']} state={f['sla']['state']}")
+    if [h["event"] for h in f.get("history", [])] != ["detected"]:
+        bad.append(f"{f['id']} history={f.get('history')}")
+print("ok" if reg["findings"] and not bad else ("; ".join(bad) or "no findings recorded"))
+PY
+)"
+grep -q '| Owner | Due |' "$SLA/report.md"
+check "  ...and the report shows owner and due date per finding" "$([ $? -eq 0 ] && echo ok || echo 'no Owner/Due columns')"
+
+age_register "$SLA/findings.json" 40
+run_case "re-assessment with a 40-day-old register still blocks" 1 "$SLA"
+check "the clock survives a re-scan; old CRITICALs are overdue" "$(python3 - "$SLA/findings.json" "$SLA/report.md" <<'PY'
+import json, sys, datetime as dt
+reg = json.load(open(sys.argv[1])); report = open(sys.argv[2]).read()
+now = dt.datetime.now(dt.timezone.utc)
+ages = [(now - dt.datetime.fromisoformat(f["first_seen"])).days for f in reg["findings"]]
+states = {f["sla"]["state"] for f in reg["findings"]}
+if min(ages) < 39:
+    print(f"clock restarted: ages {ages}")
+elif states != {"overdue"}:
+    print(f"states {states}")
+elif f"Overdue for remediation ({len(reg['findings'])})" not in report:
+    print("report does not list the overdue findings")
+else:
+    print("ok")
+PY
+)"
+
+MED="$WORK/medium"; mk_clean "$MED"
+python3 - "$MED/deps-osv.osv.json" <<'PY'
+import json, sys
+out = {"results": [{"source": {"path": "pom.xml"}, "packages": [{"package": {"name": "demo", "version": "1.0.0"},
+       "vulnerabilities": [{"id": "GHSA-fixt-ure0-medm", "aliases": ["CVE-2099-00001"], "summary": "medium fixture",
+                            "database_specific": {"severity": "MODERATE"}, "affected": []}]}]}]}
+json.dump(out, open(sys.argv[1], "w"))
+PY
+run_case "a MEDIUM finding does not block" 0 "$MED"
+age_register "$MED/findings.json" 200
+run_case "  ...nor does it block once 200 days overdue" 0 "$MED"
+med_state=$(python3 -c "import json;print(json.load(open('$MED/findings.json'))['findings'][0]['sla']['state'])")
+check "  ...but it is recorded as overdue" "$([ "$med_state" = overdue ] && echo ok || echo "state=$med_state")"
+
+check "a KEV finding gets the KEV deadline, not its label's" "$(python3 - "$KEV/findings.json" "$SHARED/policy.yml" <<'PY'
+import json, sys, yaml
+f = json.load(open(sys.argv[1]))["findings"][0]; pol = yaml.safe_load(open(sys.argv[2]))["remediation"]
+want = min(pol["sla_days"][f["severity"]], pol["kev_days"])
+print("ok" if f.get("kev") and f["sla"]["days"] == want < pol["sla_days"][f["severity"]]
+      else f"kev={f.get('kev')} severity={f['severity']} days={f['sla']['days']} want={want}")
+PY
+)"
+
+LC="$WORK/lifecycle"; mk_clean "$LC"; cp "$OSV_REAL" "$LC/deps-osv.osv.json"
+REF=main REV=main001 run_case "lifecycle: detected on main" 1 "$LC"
+echo '{"results":[]}' > "$LC/deps-osv.osv.json"
+REF=main REV=main002 run_case "lifecycle: the remediated revision passes" 0 "$LC"
+closed=$(python3 -c "import json;print(sorted({f['sla']['state'] for f in json.load(open('$LC/findings.json'))['findings']}))")
+cp "$OSV_REAL" "$LC/deps-osv.osv.json"
+REF=main REV=main003 run_case "lifecycle: the regression blocks again" 1 "$LC"
+check "detection, retest-closure and reappearance traced per revision" "$(python3 - "$LC/findings.json" "$closed" <<'PY'
+import json, sys
+reg = json.load(open(sys.argv[1]))
+seqs = {tuple((h["event"], h["revision"]) for h in f["history"]) for f in reg["findings"]}
+want = (("detected", "main001"), ("resolved", "main002"), ("reappeared", "main003"))
+if sys.argv[2] != "['closed']":
+    print(f"after the fix the states were {sys.argv[2]}, not closed")
+elif seqs != {want}:
+    print(f"histories {seqs}")
+else:
+    print("ok")
+PY
+)"
+
+mutate_policy() {  # out-file, python statement over `p` (the remediation mapping)
+  python3 - "$SHARED/policy.yml" "$1" "$2" <<'PY'
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1])); p = doc["remediation"]
+exec(sys.argv[3])
+yaml.safe_dump(doc, open(sys.argv[2], "w"))
+PY
+}
+BP="$WORK/badpolicy"; mk_clean "$BP"
+mutate_policy "$WORK/pol-no-high.yml" 'del p["sla_days"]["HIGH"]'
+POL="$WORK/pol-no-high.yml" run_case "a remediation policy missing a severity is exit 2" 2 "$BP"
+mutate_policy "$WORK/pol-inverted.yml" 'p["sla_days"]["CRITICAL"] = 90'
+POL="$WORK/pol-inverted.yml" run_case "deadlines that loosen as severity rises are exit 2" 2 "$BP"
+mutate_policy "$WORK/pol-org-owner.yml" 'p["triage_owner"] = "not a login!"'
+POL="$WORK/pol-org-owner.yml" run_case "an owner that is not a GitHub login is exit 2" 2 "$BP"
+mutate_policy "$WORK/pol-none.yml" 'doc.pop("remediation")'
+POL="$WORK/pol-none.yml" run_case "a policy with no remediation section is exit 2" 2 "$BP"
+
 # 10 — the verdict describes the decision and is never absent
 #
 # The notifier's entire job hangs on this file existing. A run that could not be
@@ -362,7 +493,8 @@ rc_with=$?
 # did not exist.
 same_reg=$(python3 -c "
 import json
-VOLATILE = {'updated_at', 'generated_at', 'last_assessed', 'first_seen'}
+VOLATILE = {'updated_at', 'generated_at', 'last_assessed', 'first_seen',
+            'remediation_due', 'sla', 'history'}
 def strip(d):
     out = {k: v for k, v in d.items() if k not in VOLATILE}
     out['findings'] = [{k: v for k, v in f.items() if k not in VOLATILE}

@@ -16,7 +16,7 @@ the exact commit being released.
 | `pull_request` → `develop`/`main` (opened, synchronize, reopened, ready_for_review, edited) | the PR's **head commit** |
 | `push` → `develop`/`main` (including every PR merge) | the pushed commit |
 | `schedule` — `23 3 * * *` UTC | **both** `develop` and `main`, at their current revisions |
-| `workflow_dispatch` | whatever ref you dispatch against |
+| `workflow_dispatch` | `scope: dispatched-ref` (default): the ref you dispatch against. `scope: protected-branches`: **both** `develop` and `main`, exactly as the schedule does |
 
 Two things worth knowing about the schedule. GitHub only ever runs scheduled
 workflows from the **default branch** (`develop`), so a scan of `main` would not
@@ -25,6 +25,33 @@ on `schedule` and records the head SHA of each branch. And GitHub's scheduler is
 best-effort: runs are delayed under load and occasionally dropped, which is why
 the cron sits at `:23` rather than on the hour, and why the daily scan is a
 safety net rather than the only line of defence.
+
+### Tooling comes from the running workflow
+
+Every scanner job checks out the **assessed** revision to scan it, and separately
+fetches `.github/security` from the revision of the workflow that is running
+(`github.workflow_sha`) to install the pinned scanners and refresh intelligence.
+The tooling is copied to the runner's temporary directory and removed from the
+workspace before anything is scanned or built, so it is never mistaken for part
+of the assessed revision.
+
+This is what makes the daily scan of `main` work. The schedule runs `develop`'s
+workflow, and `main` lags `develop` between releases, so it can predate the
+tooling that workflow calls. Until 2026-09-13 each job ran the assessed
+revision's own install script. Every `main` leg of the daily scan therefore died
+with `No such file or directory`. The gate correctly reported COULD NOT BE
+EVALUATED, and `main` went unassessed. Which tools run, at which pinned versions,
+is the workflow's decision; the assessed revision only supplies what is scanned.
+
+The Security Gate's policy and evaluator are not affected by this. On a pull
+request they still come from the base branch, and otherwise from the branch the
+workflow runs on.
+
+To assess both protected branches now instead of waiting for the schedule:
+
+```bash
+gh workflow run security.yml --ref develop -f scope=protected-branches
+```
 
 There are **no workflow-level path filters**. A path filter would stop the
 workflow from running on a PR that only touches, say, `README.md` — and a
@@ -186,11 +213,14 @@ python3 .github/security/evaluate.py \
 
 ### Proving the gate itself still works
 
-`.github/security/verify-gate.sh` runs 23 fixture cases against the evaluator —
+`.github/security/verify-gate.sh` runs 48 checks against the evaluator —
 clean pass, real blocking finding, scanner failure, cancellation, unexpected
 skip, missing/empty/unparseable report, stale and unavailable intelligence,
 stale scanner database, secrets, KEV escalation, expired/invalid/narrow
-exceptions, event applicability, and per-branch resolution. Run it after any
+exceptions, event applicability, per-branch resolution, the verdict file, and
+the remediation policy (owner and deadline per finding, a clock that survives
+re-scans, overdue escalation that does not block, KEV deadlines, a traced
+detect/close/reappear lifecycle, and malformed remediation policies). Run it after any
 change to the policy or the evaluator:
 
 ```bash
@@ -199,11 +229,19 @@ bash .github/security/verify-gate.sh intel/intelligence-manifest.json <an-osv-re
 
 ## 6. Findings, remediation and exceptions
 
-Findings persist in `.github/security/findings.json`. Each carries a stable id
+Findings persist in a **register**, `register/findings.json` inside each run's
+`security-gate-verdict` artifact (retained 90 days). Before evaluating, the gate
+carries it forward from the most recent push, scheduled or dispatched run on
+`develop` or `main`, so history accumulates instead of restarting every run. A
+register from a pull-request run is never carried: a pull request can rewrite
+the workflow that wrote it. Each carries a stable id
 and its aliases (CVE / GHSA / OSV / vendor, deduplicated), severity and how it
 was derived, component and version, the fix version that is actually reachable
 from the installed version, detection method, first-seen and last-assessed
-timestamps, and **which branches it is present on**.
+timestamps, and **which branches it is present on**, plus an **owner**, a **remediation
+deadline** and a lifecycle **history** (detected, resolved per branch,
+reappeared, excepted — each tied to a revision). Deadlines and the triage
+workflow are in [VULNERABILITY_MANAGEMENT.md](VULNERABILITY_MANAGEMENT.md).
 
 That last point matters: a finding is cleared **per branch**, and only because
 the assessed revision no longer contains it. Fixing something on `develop` does
@@ -466,7 +504,7 @@ Locally, against the mock provider — no network, no mail:
 
 ```bash
 bash .github/security/verify-notify.sh     # 65 checks
-bash .github/security/verify-gate.sh <manifest.json> <osv-report.json>   # 31 checks
+bash .github/security/verify-gate.sh <manifest.json> <osv-report.json>   # 48 checks
 ```
 
 ### Activation, and what is not yet proved

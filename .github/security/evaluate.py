@@ -22,6 +22,8 @@ Outputs:
   findings.json         merged register: new findings added, existing findings
                         updated in place, first_seen preserved, resolved findings
                         cleared ONLY for the revision that no longer contains them.
+                        Every entry carries an owner, a remediation deadline
+                        (policy.yml: remediation) and a lifecycle history.
   report.md             human-readable summary for the job summary and the PR.
   verdict.json          the same decision, machine-readable and versioned, for
                         consumers that must not scrape Markdown — today that is
@@ -73,6 +75,12 @@ VERDICT_SCHEMA_VERSION = 1
 
 # Exit code -> verdict word. One table, so the two can never drift.
 STATUS_BY_EXIT = {0: "PASS", 1: "BLOCKED", 2: "ERROR"}
+
+
+# GitHub's login grammar: alphanumerics and single inner hyphens, at most 39.
+LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$")
+SLA_SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO")
+HISTORY_LIMIT = 25
 
 
 def sev_rank(sev: str) -> int:
@@ -608,6 +616,51 @@ class Gate:
         self.report_status: dict[str, dict] = {}
         self.coverage_gaps: list[dict] = []
         self.image_digests: set[str] = set()
+        # Owner and deadline for every finding. Validated here, so a malformed
+        # remediation policy is "could not be evaluated" like any other policy
+        # the gate cannot apply.
+        self.remediation = self._load_remediation(policy.get("remediation"))
+
+    def _load_remediation(self, cfg: Any) -> dict:
+        """policy.yml `remediation`: who triages, and how long each severity may stay open.
+
+        There is no built-in default. A deadline nobody approved is worse than
+        none, so an absent or malformed section fails the gate as "could not be
+        evaluated" rather than inventing one.
+        """
+        if not isinstance(cfg, dict):
+            self.errors.append(
+                "policy.yml has no `remediation` section, so no finding can be given an "
+                "owner or a remediation deadline.")
+            return {}
+        problems: list[str] = []
+        owner = cfg.get("triage_owner")
+        if not isinstance(owner, str) or not LOGIN_RE.match(owner):
+            problems.append(f"remediation.triage_owner must be one GitHub login, not {owner!r}")
+        sla = cfg.get("sla_days")
+        if not isinstance(sla, dict):
+            problems.append("remediation.sla_days must map every severity to a number of days")
+            sla = {}
+        for sev in SLA_SEVERITIES:
+            days = sla.get(sev)
+            if isinstance(days, bool) or not isinstance(days, int) or days <= 0:
+                problems.append(f"remediation.sla_days.{sev} must be a positive whole number "
+                                f"of days, not {days!r}")
+        kev_days = cfg.get("kev_days")
+        if isinstance(kev_days, bool) or not isinstance(kev_days, int) or kev_days <= 0:
+            problems.append(f"remediation.kev_days must be a positive whole number of days, "
+                            f"not {kev_days!r}")
+        if not problems:
+            # A more severe finding may never be given longer than a less severe one.
+            ordered = [sla[s] for s in SLA_SEVERITIES]
+            if ordered != sorted(ordered):
+                problems.append("remediation.sla_days must not give a more severe finding longer "
+                                f"than a less severe one: {dict(zip(SLA_SEVERITIES, ordered))}")
+        if problems:
+            self.errors.extend(f"policy.yml: {p}" for p in problems)
+            return {}
+        return {"triage_owner": owner, "kev_days": kev_days,
+                "sla_days": {s: sla[s] for s in SLA_SEVERITIES}}
 
     def gap(self, kind: str, detail: str, hard: bool = True) -> None:
         """Record a limit on what this run actually covered.
@@ -1067,14 +1120,67 @@ class Gate:
 # Register + report
 # ---------------------------------------------------------------------------
 
-def merge_register(previous: dict, findings: list[Finding], args) -> dict:
+def _record_event(record: dict, event: str, ref: str, revision: str, at: str) -> None:
+    """Append one lifecycle event, keeping the most recent HISTORY_LIMIT."""
+    history = list(record.get("history") or [])
+    history.append({"at": at, "event": event, "ref": ref, "revision": revision})
+    record["history"] = history[-HISTORY_LIMIT:]
+
+
+def _apply_remediation(record: dict, remediation: dict, repository_owner: str,
+                       owner_override: str, now: dt.datetime) -> None:
+    """Owner, deadline and SLA state for one register entry.
+
+    The clock starts at first_seen and a re-scan never restarts it, which is
+    why security.yml carries the register from run to run. A severity that
+    rises later (a KEV listing, a re-scored advisory) re-derives the deadline
+    from the SAME start, so the deadline tightens rather than resets.
+    """
+    owner = record.get("owner") or ""
+    # An organisation is not an accountable person. Registers written before
+    # the remediation policy recorded the org name here.
+    if owner_override and owner_override != repository_owner:
+        owner = owner_override
+    elif not owner or owner == repository_owner:
+        owner = remediation["triage_owner"]
+    record["owner"] = owner
+
+    severity = str(record.get("severity") or "MEDIUM").upper()
+    days = remediation["sla_days"].get(severity, remediation["sla_days"]["MEDIUM"])
+    if record.get("kev"):
+        days = min(days, remediation["kev_days"])
+    started = parse_ts(record.get("first_seen")) or now
+    due = started + dt.timedelta(days=days)
+    record["remediation_due"] = due.isoformat()
+
+    status = record.get("status")
+    if status == "resolved":
+        state = "closed"
+    elif status == "excepted":
+        state = "excepted"
+    elif now > due:
+        state = "overdue"
+    else:
+        state = "within-sla"
+    record["sla"] = {"days": days, "clock_started": started.isoformat(),
+                     "due": due.isoformat(), "state": state}
+
+
+def merge_register(previous: dict, findings: list[Finding], args,
+                   remediation: dict | None = None) -> dict:
     """Update the register in place; never duplicate; never clear another branch.
 
     `branches` maps a branch name to the revision it was last seen at. A fix on
     develop removes develop from that map and leaves main alone, which is what
     keeps "fixed on develop" from being mistaken for "fixed everywhere".
+
+    Every entry also carries its lifecycle: an owner and a deadline from the
+    remediation policy, and a `history` of detection, closure per branch (the
+    re-assessment that no longer finds it IS the retest), reappearance and
+    exception, each tied to the revision that showed it.
     """
-    now = utcnow().isoformat()
+    now_ts = utcnow()
+    now = now_ts.isoformat()
     entries: dict[str, dict] = {e["key"]: e for e in (previous.get("findings") or [])}
     seen_now = {f.key for f in findings}
 
@@ -1089,11 +1195,22 @@ def merge_register(previous: dict, findings: list[Finding], args) -> dict:
             payload["remediation_pr"] = None
             payload["verification"] = "automated-scan"
             entries[f.key] = payload
+            _record_event(payload, "detected", args.ref, args.revision, now)
         else:
             branches = dict(record.get("branches") or {})
+            resolved_on = dict(record.get("resolved_on") or {})
+            if args.ref not in branches and args.ref in resolved_on:
+                # Closed on this branch once, and back. The closure stays in the
+                # history; it is no longer the current state.
+                resolved_on.pop(args.ref)
+                _record_event(record, "reappeared", args.ref, args.revision, now)
             branches[args.ref] = args.revision
             record.update(payload)
             record["branches"] = branches
+            record["resolved_on"] = resolved_on
+        history = entries[f.key].get("history") or []
+        if f.status == "excepted" and (not history or history[-1]["event"] != "excepted"):
+            _record_event(entries[f.key], "excepted", args.ref, args.revision, now)
         entries[f.key]["last_assessed"] = now
         entries[f.key]["last_assessed_revision"] = args.revision
 
@@ -1110,7 +1227,13 @@ def merge_register(previous: dict, findings: list[Finding], args) -> dict:
                 "revision": args.revision, "at": now,
                 "evidence": "absent from the assessed revision's scan",
             }
+            _record_event(record, "resolved", args.ref, args.revision, now)
         record["status"] = "resolved" if not record.get("branches") else record.get("status", "affected")
+
+    if remediation:
+        repository_owner = args.repository.split("/", 1)[0]
+        for record in entries.values():
+            _apply_remediation(record, remediation, repository_owner, args.owner, now_ts)
 
     return {
         "schema": 1,
@@ -1122,7 +1245,8 @@ def merge_register(previous: dict, findings: list[Finding], args) -> dict:
     }
 
 
-def write_report(path: Path, gate: Gate, findings: list[Finding], verdict: str, args) -> None:
+def write_report(path: Path, gate: Gate, findings: list[Finding], verdict: str, args,
+                 register: dict | None = None) -> None:
     blocking = [f for f in findings if f.status == "blocking"]
     tracked = [f for f in findings if f.status == "tracked"]
     excepted = [f for f in findings if f.status == "excepted"]
@@ -1135,6 +1259,11 @@ def write_report(path: Path, gate: Gate, findings: list[Finding], verdict: str, 
         f"- **Blocking threshold** {gate.threshold} and above; CISA KEV blocks at any severity; secrets always block.",
         "",
     ]
+    if gate.remediation:
+        deadlines = ", ".join(f"{s} {d}d" for s, d in gate.remediation["sla_days"].items())
+        lines[-1:-1] = [
+            f"- **Triage owner** @{gate.remediation['triage_owner']} · **Remediation deadlines** "
+            f"{deadlines}; KEV {gate.remediation['kev_days']}d; counted from first detection."]
 
     lines += ["### Intelligence freshness", ""]
     sources = (gate.manifest.get("sources") or {})
@@ -1163,23 +1292,53 @@ def write_report(path: Path, gate: Gate, findings: list[Finding], verdict: str, 
         lines += ["### Blocking", ""]
         lines += [f"- {b}" for b in gate.blocks] + [""]
 
+    by_key = {e.get("key"): e for e in ((register or {}).get("findings") or [])}
+
+    def owner_of(f: Finding) -> str:
+        owner = (by_key.get(f.key) or {}).get("owner")
+        return f"@{owner}" if owner else "—"
+
+    def due_of(f: Finding) -> str:
+        sla = (by_key.get(f.key) or {}).get("sla") or {}
+        if not sla:
+            return "—"
+        return str(sla.get("due", ""))[:10] + (" **OVERDUE**" if sla.get("state") == "overdue" else "")
+
     def table(rows: list[Finding], title: str) -> list[str]:
         if not rows:
             return []
         out = [f"### {title} ({len(rows)})", "",
-               "| Severity | ID | Component | Version | Fixed in | KEV | Where | Detector |",
-               "|---|---|---|---|---|---|---|---|"]
+               "| Severity | ID | Component | Version | Fixed in | KEV | Where | Detector | Owner | Due |",
+               "|---|---|---|---|---|---|---|---|---|---|"]
         for f in sorted(rows, key=lambda x: -sev_rank(x.severity)):
             out.append(
                 f"| {f.severity} | `{f.canonical_id}` | {f.component or '—'} | "
                 f"{f.version or '—'} | "
                 f"{f.fixed_version or ('no verified upgrade available' if f.all_fixed_versions else '—')} | "
-                f"{'yes' if f.kev else 'no'} | `{f.location or '—'}` | {f.detector} |"
+                f"{'yes' if f.kev else 'no'} | `{f.location or '—'}` | {f.detector} | "
+                f"{owner_of(f)} | {due_of(f)} |"
             )
         return out + [""]
 
     lines += table(blocking, "Blocking findings")
     lines += table(tracked, "Tracked findings (visible, not blocking)")
+    overdue = [e for e in by_key.values()
+               if (e.get("sla") or {}).get("state") == "overdue"
+               and args.ref in (e.get("branches") or {})]
+    if overdue:
+        lines += [f"### Overdue for remediation ({len(overdue)})", "",
+                  "Open on this branch past the deadline policy.yml sets for their severity. "
+                  "Being overdue escalates; it does not change what blocks, which only the "
+                  "blocking threshold decides.", "",
+                  "| Severity | ID | Component | Owner | Due | Open since |",
+                  "|---|---|---|---|---|---|"]
+        for e in sorted(overdue, key=lambda e: (-sev_rank(e.get("severity", "MEDIUM")),
+                                                e.get("remediation_due", ""))):
+            lines.append(
+                f"| {e.get('severity')} | `{e.get('id')}` | {e.get('component') or '—'} | "
+                f"@{e.get('owner')} | {str(e.get('remediation_due', ''))[:10]} | "
+                f"{str(e.get('first_seen', ''))[:10]} |")
+        lines.append("")
     if excepted:
         lines += [f"### Approved exceptions ({len(excepted)})", "",
                   "| ID | Component | Exception | Owner | Approval | Expires |", "|---|---|---|---|---|---|"]
@@ -1502,10 +1661,13 @@ def main() -> int:
     # The register is only rewritten when the assessment actually ran. Writing
     # it after a gate that could not be evaluated would record "nothing found"
     # for a scan that never happened.
+    register: dict | None = None
     if code != 2:
-        register_path.write_text(json.dumps(merge_register(previous, findings, args), indent=2) + "\n")
+        register = merge_register(previous, findings, args, gate.remediation)
+        register_path.parent.mkdir(parents=True, exist_ok=True)
+        register_path.write_text(json.dumps(register, indent=2) + "\n")
 
-    write_report(Path(args.report_out), gate, findings, verdict, args)
+    write_report(Path(args.report_out), gate, findings, verdict, args, register)
     # Written for every code, including 2. The register is not, and that
     # asymmetry is deliberate: the register is a claim about the code, and a run
     # that could not be evaluated has no claim to make. The verdict is a claim
