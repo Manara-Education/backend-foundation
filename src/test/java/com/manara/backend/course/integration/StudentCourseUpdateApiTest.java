@@ -22,7 +22,7 @@ import static com.manara.backend.course.integration.CourseAuthoringFixtures.modu
 import static org.hamcrest.Matchers.emptyOrNullString;
 import static org.hamcrest.Matchers.is;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
+import static com.manara.backend.session.security.SignedIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -94,7 +94,7 @@ class StudentCourseUpdateApiTest extends AbstractCourseAuthoringTest {
         User student = learnerWhoMissedTheChange(course.getId());
         addALessonAndEditAnother(course);
 
-        mockMvc.perform(get(DETAILS, course.getId()).param("mode", "ENROLLED").with(user(student)))
+        mockMvc.perform(get(DETAILS, course.getId()).param("mode", "ENROLLED").with(signedIn(student)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.course.hasUpdatesSinceEnrollment", is(true)))
                 .andExpect(jsonPath("$.data.course.latestContentUpdateAt").isNotEmpty())
@@ -113,13 +113,13 @@ class StudentCourseUpdateApiTest extends AbstractCourseAuthoringTest {
         addALessonAndEditAnother(course);
 
         mockMvc.perform(get(DETAILS, course.getId()).param("mode", "ENROLLED")
-                        .header("Accept-Language", "en").with(user(student)))
+                        .header("Accept-Language", "en").with(signedIn(student)))
                 .andExpect(jsonPath("$.data.modules[0].lessons[2].change.summary", is("New lesson added")))
                 .andExpect(jsonPath("$.data.modules[0].lessons[0].change.summary",
                         is("Lesson content updated")));
 
         mockMvc.perform(get(DETAILS, course.getId()).param("mode", "ENROLLED")
-                        .header("Accept-Language", "ar").with(user(student)))
+                        .header("Accept-Language", "ar").with(signedIn(student)))
                 .andExpect(jsonPath("$.data.modules[0].lessons[2].change.state", is("NEW")))
                 .andExpect(jsonPath("$.data.modules[0].lessons[2].change.summary",
                         is("تمت إضافة درس جديد")))
@@ -138,11 +138,11 @@ class StudentCourseUpdateApiTest extends AbstractCourseAuthoringTest {
         enrolledAt(enroll(after, course.getId()).getId(), LONG_AFTER);
 
         // Same URL, same course, no student named anywhere in either request.
-        mockMvc.perform(get(DETAILS, course.getId()).param("mode", "ENROLLED").with(user(before)))
+        mockMvc.perform(get(DETAILS, course.getId()).param("mode", "ENROLLED").with(signedIn(before)))
                 .andExpect(jsonPath("$.data.course.hasUpdatesSinceEnrollment", is(true)))
                 .andExpect(jsonPath("$.data.modules[0].lessons[2].change.state", is("NEW")));
 
-        mockMvc.perform(get(DETAILS, course.getId()).param("mode", "ENROLLED").with(user(after)))
+        mockMvc.perform(get(DETAILS, course.getId()).param("mode", "ENROLLED").with(signedIn(after)))
                 .andExpect(jsonPath("$.data.course.hasUpdatesSinceEnrollment", is(false)))
                 .andExpect(jsonPath("$.data.modules[0].lessons[2].change.state", is("UNCHANGED")))
                 .andExpect(jsonPath("$.data.modules[0].lessons[2].change.summary", is(emptyOrNullString())));
@@ -160,7 +160,7 @@ class StudentCourseUpdateApiTest extends AbstractCourseAuthoringTest {
         courseService.updateCourse(instructorUser, course.getId(), request);
 
         mockMvc.perform(get(DETAILS, course.getId()).param("mode", "ENROLLED")
-                        .header("Accept-Language", "en").with(user(student)))
+                        .header("Accept-Language", "en").with(signedIn(student)))
                 .andExpect(jsonPath("$.data.removedContent[0].entityType", is("LESSON")))
                 .andExpect(jsonPath("$.data.removedContent[0].title", is("L2")))
                 .andExpect(jsonPath("$.data.removedContent[0].summary", is("Lesson removed")));
@@ -175,7 +175,7 @@ class StudentCourseUpdateApiTest extends AbstractCourseAuthoringTest {
 
         User visitor = newStudentUser();
 
-        mockMvc.perform(get(DETAILS, course.getId()).param("mode", "DISCOVER").with(user(visitor)))
+        mockMvc.perform(get(DETAILS, course.getId()).param("mode", "DISCOVER").with(signedIn(visitor)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.course.hasUpdatesSinceEnrollment", is(false)))
                 .andExpect(jsonPath("$.data.course.latestContentUpdateAt", is(emptyOrNullString())))

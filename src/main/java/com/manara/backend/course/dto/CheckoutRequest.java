@@ -23,8 +23,9 @@ import lombok.Setter;
  *       after confirming the plan belongs to this course.</li>
  * </ul>
  *
- * <p>There is deliberately no field for a price, an amount or an expiry date. Every one of those is
- * computed server-side.
+ * <p>There is deliberately no field for a price, an amount, a currency, an expiry date or a payment
+ * status. Every one of those is computed server-side, and a client that sends them anyway has them
+ * dropped as unknown properties rather than read ({@code DemonstrationCheckoutTest}).
  */
 @Getter
 @Setter

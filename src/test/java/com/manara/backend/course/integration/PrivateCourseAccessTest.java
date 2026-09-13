@@ -680,18 +680,20 @@ class PrivateCourseAccessTest extends AbstractCourseAuthoringTest {
     }
 
     @Nested
-    @DisplayName("the platform-wide instructor catalogue")
+    @DisplayName("the instructor catalogue")
     class StaffCatalogue {
 
         /**
          * {@code GET /api/v1/instructor/courses} is the one list that deliberately shows courses no
          * learner may discover. It documented itself as being for instructors and admins and never
          * checked, so any signed-in learner could read it — which for private courses would be the
-         * whole feature leaking through one endpoint.
+         * whole feature leaking through one endpoint. Checking the role was only half of it:
+         * INSTRUCTOR is self-assignable, so another instructor is as much a stranger to this course
+         * as a learner is. {@code InstructorCatalogueIsolationTest} asserts the same over HTTP.
          */
         @Test
-        @DisplayName("a learner is refused; staff still see everything, private courses included")
-        void onlyStaffMayReadIt() {
+        @DisplayName("a learner is refused; an instructor sees only their own; an admin sees everything")
+        void onlyTheOwnerAndAnAdminSeeIt() {
             var course = goPrivate(publicCourseWithALearner());
 
             assertThatThrownBy(() -> courseService.getAllCourses(learner))
@@ -701,6 +703,9 @@ class PrivateCourseAccessTest extends AbstractCourseAuthoringTest {
 
             assertThat(courseService.getAllCourses(instructorUser))
                     .extracting(CourseResponse::getId).contains(course.getId());
+            assertThat(courseService.getAllCourses(otherInstructor))
+                    .as("another instructor owns none of it")
+                    .extracting(CourseResponse::getId).doesNotContain(course.getId());
             assertThat(courseService.getAllCourses(admin))
                     .extracting(CourseResponse::getId).contains(course.getId());
         }

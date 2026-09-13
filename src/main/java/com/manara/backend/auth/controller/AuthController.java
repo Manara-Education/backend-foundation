@@ -73,11 +73,17 @@ public class AuthController {
      * anonymous and carries an emailed OTP, this one authenticates by session and proves the
      * caller knows the account by asking for the current password. Succeeding here also clears
      * a forced-reset requirement, which is what reopens the rest of the API to the account.
+     *
+     * <p>Takes the request and response, as {@code /login} and {@code /verify-otp} already do,
+     * because succeeding here ends every session on the account and issues this caller a new one.
+     * The client sees a rotated session cookie; the account's other devices are signed out.
      */
     @PostMapping("/change-password")
     public ApiResponse<MessageResponse> changePassword(@AuthenticationPrincipal User user,
-                                                       @RequestBody @Valid ChangePasswordRequest request) {
-        return ApiResponse.success(authService.changePassword(user, request));
+                                                       @RequestBody @Valid ChangePasswordRequest request,
+                                                       HttpServletRequest httpRequest,
+                                                       HttpServletResponse httpResponse) {
+        return ApiResponse.success(authService.changePassword(user, request, httpRequest, httpResponse));
     }
 
     @PostMapping("/logout")

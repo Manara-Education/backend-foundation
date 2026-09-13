@@ -45,4 +45,18 @@ public interface BannerRepository extends JpaRepository<Banner, Long> {
 
     @Query("select coalesce(max(b.priority), 0) from Banner b where b.instructor.id = :instructorId")
     int findHighestPriority(@Param("instructorId") Long instructorId);
+
+    /**
+     * How many banners still show this image.
+     *
+     * <p>Banners never delete a file, but they hold references to uploads exactly as courses do —
+     * which is how a banner's image could be destroyed by a course edit somewhere else entirely.
+     * The retention rule counts them for that reason: a holder that is not counted is a holder
+     * whose image can be deleted out from under it.
+     *
+     * <p>Deliberately unfiltered by draft, enabled or schedule. A banner that is switched off or
+     * still being written is a reference all the same, and its owner would find the image gone the
+     * moment they turned it on.
+     */
+    long countByImageUrl(String imageUrl);
 }

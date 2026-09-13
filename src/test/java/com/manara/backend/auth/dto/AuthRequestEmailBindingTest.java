@@ -39,7 +39,7 @@ class AuthRequestEmailBindingTest {
     void registerRequestCanonicalisesEmail(String raw) {
         RegisterRequest request = json.readValue(
                 """
-                {"fullName":"Ali","email":%s,"password":"password123"}
+                {"fullName":"Ali","email":%s,"password":"Sunlit harbour lantern 42!"}
                 """.formatted(quote(raw)), RegisterRequest.class);
 
         assertThat(request.getEmail()).isEqualTo(CANONICAL);
@@ -51,7 +51,7 @@ class AuthRequestEmailBindingTest {
     void loginRequestCanonicalisesEmail(String raw) {
         LoginRequest request = json.readValue(
                 """
-                {"email":%s,"password":"password123"}
+                {"email":%s,"password":"Sunlit harbour lantern 42!"}
                 """.formatted(quote(raw)), LoginRequest.class);
 
         assertThat(request.getEmail()).isEqualTo(CANONICAL);
@@ -69,7 +69,7 @@ class AuthRequestEmailBindingTest {
         assertThat(json.readValue("{\"email\":%s}".formatted(padded),
                 ForgotPasswordRequest.class).getEmail()).isEqualTo(CANONICAL);
         assertThat(json.readValue(
-                "{\"email\":%s,\"code\":\"123456\",\"newPassword\":\"password123\"}".formatted(padded),
+                "{\"email\":%s,\"code\":\"123456\",\"newPassword\":\"Sunlit harbour lantern 42!\"}".formatted(padded),
                 ResetPasswordRequest.class).getEmail()).isEqualTo(CANONICAL);
     }
 
@@ -79,9 +79,15 @@ class AuthRequestEmailBindingTest {
         // The ordering that makes canonicalising at bind time worth doing. Surrounding spaces are
         // not legal in an address, so "  Ali@x.com  " left untrimmed would be reported to the user
         // as an invalid email — for an address that is perfectly valid.
+        //
+        // The terms fields are present only so this asserts what it claims to: without them the
+        // request is invalid for reasons that have nothing to do with the address. Whether the
+        // version is the one in force is not bean validation's question — @NotBlank only asks that
+        // one was sent — so any non-blank value serves here.
         RegisterRequest request = json.readValue(
                 """
-                {"fullName":"Ali","email":"  Ali@x.com  ","password":"password123"}
+                {"fullName":"Ali","email":"  Ali@x.com  ","password":"Sunlit harbour lantern 42!",
+                 "termsAccepted":true,"termsVersion":"1.0"}
                 """, RegisterRequest.class);
 
         assertThat(validator.validate(request))
@@ -94,7 +100,7 @@ class AuthRequestEmailBindingTest {
     void invalidAddressIsStillRejected() {
         RegisterRequest request = json.readValue(
                 """
-                {"fullName":"Ali","email":"  not-an-address  ","password":"password123"}
+                {"fullName":"Ali","email":"  not-an-address  ","password":"Sunlit harbour lantern 42!"}
                 """, RegisterRequest.class);
 
         assertThat(validator.validate(request))
@@ -107,7 +113,7 @@ class AuthRequestEmailBindingTest {
     void blankAddressStaysBlank() {
         RegisterRequest request = json.readValue(
                 """
-                {"fullName":"Ali","email":"   ","password":"password123"}
+                {"fullName":"Ali","email":"   ","password":"Sunlit harbour lantern 42!"}
                 """, RegisterRequest.class);
 
         assertThat(request.getEmail()).isEmpty();

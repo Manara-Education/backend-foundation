@@ -1,6 +1,7 @@
 package com.manara.backend.auth.integration;
 
 import com.manara.backend.db.AbstractPostgresBackedTest;
+import com.manara.backend.terms.service.TermsVersionRegistry;
 import com.manara.backend.user.repository.UserRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -38,7 +39,7 @@ class EmailCaseInsensitiveAuthTest extends AbstractPostgresBackedTest {
 
     private static final String DOMAIN = "@authcase.example";
     private static final String CANONICAL = "ali" + DOMAIN;
-    private static final String PASSWORD = "password123";
+    private static final String PASSWORD = "Sunlit harbour lantern 42!";
 
     private MockMvc mockMvc;
 
@@ -50,6 +51,14 @@ class EmailCaseInsensitiveAuthTest extends AbstractPostgresBackedTest {
 
     @Autowired
     private UserRepository userRepository;
+
+    /**
+     * Asked for the version in force rather than hardcoding one, because registration now refuses
+     * anything else. This test is about email casing; if the terms version is ever bumped it should
+     * keep passing, not start failing for a reason that has nothing to do with what it checks.
+     */
+    @Autowired
+    private TermsVersionRegistry termsVersionRegistry;
 
     /**
      * Built by hand rather than with {@code @AutoConfigureMockMvc}: Spring Boot 4 moved that
@@ -101,20 +110,21 @@ class EmailCaseInsensitiveAuthTest extends AbstractPostgresBackedTest {
     }
 
     @Test
-    @DisplayName("registering the same address in another casing is rejected as a duplicate")
-    void caseVariantRegistrationIsRejected() throws Exception {
-        register("Ali@authcase.example").andExpect(status().isCreated());
+    @DisplayName("registering the same address in another casing creates no second account")
+    void caseVariantRegistrationCreatesNothing() throws Exception {
+        String first = register("Ali@authcase.example").andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
 
-        // The project's standard duplicate-account response — not a 500, and not a PostgreSQL
+        // Answered exactly as the first registration was, because registration no longer says
+        // whether an address was taken (SEC-F05) -- and above all not a 500, and not a PostgreSQL
         // constraint message reaching the client.
-        register("ali@authcase.example")
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.status").value("error"))
-                .andExpect(jsonPath("$.errors[0]").value("Email is already registered"));
+        assertThat(register("ali@authcase.example").andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString())
+                .isEqualTo(first);
 
-        register("ALI@AUTHCASE.EXAMPLE")
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.errors[0]").value("Email is already registered"));
+        assertThat(register("ALI@AUTHCASE.EXAMPLE").andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString())
+                .isEqualTo(first);
 
         assertThat(accountCount())
                 .as("a case variant must not have created a second account")
@@ -127,7 +137,7 @@ class EmailCaseInsensitiveAuthTest extends AbstractPostgresBackedTest {
         register("Ali@authcase.example").andExpect(status().isCreated());
 
         String body = register("ali@authcase.example")
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
 
         assertThat(body)
@@ -152,11 +162,13 @@ class EmailCaseInsensitiveAuthTest extends AbstractPostgresBackedTest {
     // ------------------------------------------------------------ request helpers
 
     private ResultActions register(String email) throws Exception {
+        String termsVersion = termsVersionRegistry.current().orElseThrow().id();
         return mockMvc.perform(post("/api/v1/auth/register").with(csrf())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
-                        {"fullName":"Ali Test","email":"%s","password":"%s","role":"STUDENT"}
-                        """.formatted(email, PASSWORD)));
+                        {"fullName":"Ali Test","email":"%s","password":"%s","role":"STUDENT",
+                         "termsAccepted":true,"termsVersion":"%s"}
+                        """.formatted(email, PASSWORD, termsVersion)));
     }
 
     private ResultActions verifyOtp(String email, String code)

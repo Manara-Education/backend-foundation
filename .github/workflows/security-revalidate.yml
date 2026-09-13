@@ -1,0 +1,236 @@
+# Re-assess open pull requests against today's advisories.
+#
+# The problem this exists for: a pull request that went green yesterday is not
+# green today. Nothing about the branch changed overnight — the advisory
+# database did. security.yml's daily scheduled run assesses develop and main,
+# but it cannot assess an open pull request, and GitHub treats a required check
+# that once passed as passing forever. Without this, a PR could sit open for a
+# week and merge on a week-old assessment.
+#
+# THIS WORKFLOW RUNS IN THE TRUSTED DEFAULT-BRANCH CONTEXT AND NEVER TOUCHES
+# PULL REQUEST CODE. That sentence is the entire security design, so it is worth
+# spelling out why:
+#
+#   * It holds `actions: write`, which is the right to start workflow runs.
+#     Nothing that holds that permission may execute code an outside contributor
+#     wrote — that is a straight privilege escalation.
+#   * So it does not check out a pull request, does not build one, does not run
+#     one, and does not read a file from one. Every operation below is a GitHub
+#     API call.
+#   * What it does instead is ASK GITHUB TO RE-RUN the pull request's own
+#     existing `pull_request` run. That re-run executes in the ordinary
+#     pull_request context — read-only token, base branch's workflow file, no
+#     secrets — which is the sandbox that already exists for untrusted code.
+#     The privileged half orchestrates; the unprivileged half executes. Those
+#     two halves must never be the same job.
+#
+# It deliberately does NOT workflow_dispatch security.yml against a PR branch as
+# a fallback. A workflow_dispatch run uses the workflow file FROM THE DISPATCHED
+# REF, so dispatching a pull request's branch would run that branch's copy of
+# security.yml — which is executing pull request code, the one thing this file
+# must not do. A pull request with no assessable run is reported as such and
+# left for a human, which is the honest answer.
+
+name: Security revalidation
+
+on:
+  schedule:
+    # 30 minutes after security.yml's 03:23 UTC scan, so the intelligence the
+    # re-runs consume is the freshly refreshed data rather than a race with it.
+    - cron: '53 3 * * *'
+  # For the moment an advisory drops and waiting until 03:53 is not acceptable.
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Refresh every open PR regardless of how recent its assessment is"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-revalidate
+  cancel-in-progress: false
+
+jobs:
+  revalidate:
+    name: Revalidate open pull requests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      # The two scopes this needs, and nothing else. No contents: write, no
+      # packages, no deployments, and no environment — so no deployment secret
+      # is reachable from here even by accident.
+      actions: write          # rerun a workflow run
+      pull-requests: read     # list the open pull requests
+      contents: read          # read policy.yml from THIS (default) branch
+    steps:
+      # The default branch's own checkout — trusted by definition, and the only
+      # checkout in this file. It is here solely to read the freshness window
+      # out of policy.yml so that the window is defined in exactly one place.
+      - name: Check out the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Ensure PyYAML is available
+        run: |
+          set -euo pipefail
+          if ! python3 -c 'import yaml' 2>/dev/null; then
+            python3 -m pip install --disable-pip-version-check --quiet 'PyYAML==6.0.3' \
+              || python3 -m pip install --disable-pip-version-check --quiet \
+                   --break-system-packages 'PyYAML==6.0.3'
+          fi
+
+      - name: Refresh stale pull request assessments
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          FORCE: ${{ inputs.force }}
+          # Bounded work per execution. A repository with a hundred stale PRs
+          # should not turn one scheduled tick into a hundred concurrent builds;
+          # the oldest are refreshed first and the rest wait for tomorrow or a
+          # manual dispatch.
+          MAX_RERUNS: '20'
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import datetime as dt
+          import json
+          import os
+          import subprocess
+
+          import yaml
+
+          REPO = os.environ["REPO"]
+          FORCE = os.environ.get("FORCE", "false").lower() == "true"
+          MAX = int(os.environ["MAX_RERUNS"])
+
+          # One definition of "fresh", read from the policy the gate enforces.
+          # Hardcoding 24 here would let the two drift, and the drift would be
+          # invisible until it mattered.
+          policy = yaml.safe_load(open(".github/security/policy.yml")) or {}
+          max_age_h = float((policy.get("intelligence") or {}).get("max_age_hours", 24))
+
+          def api(path, method="GET", fields=None):
+              cmd = ["gh", "api", "--method", method, path]
+              for k, v in (fields or {}).items():
+                  cmd += ["-f", f"{k}={v}"]
+              proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+              if proc.returncode != 0:
+                  raise RuntimeError(proc.stderr.strip()[:400] or f"exit {proc.returncode}")
+              return json.loads(proc.stdout) if proc.stdout.strip() else {}
+
+          def parse(ts):
+              if not ts:
+                  return None
+              return dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+          now = dt.datetime.now(dt.timezone.utc)
+          refreshed, current, unrefreshable = [], [], []
+
+          prs = api(f"repos/{REPO}/pulls?state=open&per_page=100")
+          # Only the branches the gate protects. A PR into some other branch is
+          # not blocked by the Security Gate and does not need refreshing.
+          prs = [p for p in prs if (p.get("base") or {}).get("ref") in ("develop", "main")]
+          print(f"Considering {len(prs)} open pull request(s) into develop/main.\n")
+
+          candidates = []
+          for pr in prs:
+              number = pr["number"]
+              head_sha = (pr.get("head") or {}).get("sha", "")
+              # Titles and branch names are written by whoever opened the PR.
+              # They are only ever printed into a Markdown table below — never
+              # into a shell command, and never into an API path.
+              label = f"#{number} {pr.get('title', '')}"
+              try:
+                  runs = api(
+                      f"repos/{REPO}/actions/workflows/security.yml/runs"
+                      f"?head_sha={head_sha}&per_page=20"
+                  ).get("workflow_runs") or []
+              except RuntimeError as exc:
+                  unrefreshable.append((label, head_sha[:12], f"could not list runs: {exc}"))
+                  continue
+
+              runs = [r for r in runs if r.get("event") == "pull_request"]
+              if not runs:
+                  # Nothing to re-run. Saying so is the honest outcome; the
+                  # alternative would be dispatching this branch's own workflow
+                  # file, which is exactly what this workflow must not do.
+                  unrefreshable.append(
+                      (label, head_sha[:12],
+                       "no security.yml pull_request run exists for the current head — "
+                       "push to the branch, or close and reopen it, to create one"))
+                  continue
+
+              runs.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+              newest = runs[0]
+              if newest.get("status") != "completed":
+                  current.append((label, head_sha[:12], f"already {newest.get('status')}"))
+                  continue
+
+              finished = parse(newest.get("updated_at"))
+              age_h = (now - finished).total_seconds() / 3600.0 if finished else 1e9
+              if age_h <= max_age_h and not FORCE:
+                  current.append((label, head_sha[:12], f"assessed {age_h:.1f}h ago"))
+                  continue
+              candidates.append((age_h, newest["id"], label, head_sha[:12]))
+
+          # Oldest assessment first: the most stale is the most likely to be
+          # hiding something.
+          candidates.sort(reverse=True)
+          for age_h, run_id, label, short_sha in candidates[:MAX]:
+              try:
+                  api(f"repos/{REPO}/actions/runs/{run_id}/rerun", method="POST")
+                  refreshed.append((label, short_sha, f"was {age_h:.1f}h old; re-run started"))
+              except RuntimeError as exc:
+                  unrefreshable.append((label, short_sha, f"re-run refused: {exc}"))
+          for age_h, _run_id, label, short_sha in candidates[MAX:]:
+              unrefreshable.append(
+                  (label, short_sha,
+                   f"{age_h:.1f}h old but over the {MAX}-per-run cap; will be picked up next time"))
+
+          # The step summary is written to its file directly rather than by
+          # redirecting stdout, so that stdout stays the workflow log and the
+          # ::warning:: annotations below are read as annotations instead of
+          # being pasted into the summary as text.
+          summary = open(os.environ["GITHUB_STEP_SUMMARY"], "a")
+
+          def table(title, rows):
+              print(f"### {title} ({len(rows)})\n", file=summary)
+              if not rows:
+                  print("_none_\n", file=summary)
+                  return
+              print("| Pull request | Head | Detail |", file=summary)
+              print("|---|---|---|", file=summary)
+              for label, sha, detail in rows:
+                  # Pipes are escaped so an adversarial PR title cannot forge
+                  # extra columns in this table.
+                  safe = label.replace("|", "\\|")
+                  print(f"| {safe} | `{sha}` | {detail} |", file=summary)
+              print(file=summary)
+
+          print("## Security revalidation\n", file=summary)
+          print(f"Freshness window from policy.yml: **{max_age_h:.0f}h**"
+                + (" (forced refresh)" if FORCE else "") + "\n", file=summary)
+          table("Re-assessment started", refreshed)
+          table("Already current", current)
+          table("Could not be refreshed", unrefreshable)
+          print("> Re-running a pull request's own `pull_request` run is what refreshes it. "
+                "This workflow never checks out, builds or executes pull request code.\n",
+                file=summary)
+          summary.close()
+
+          for group, rows in (("refreshed", refreshed), ("current", current),
+                              ("unrefreshable", unrefreshable)):
+              for label, sha, detail in rows:
+                  print(f"{group:14} {sha}  {label} — {detail}")
+
+          # A PR that cannot be refreshed is reported, loudly, but does not fail
+          # this workflow: it is a condition of the pull request, not a fault in
+          # the revalidation. The Security Gate on that PR is still whatever it
+          # was, and it is the gate — not this file — that decides merges.
+          for label, sha, detail in unrefreshable:
+              print(f"::warning title=Stale security assessment::{label} ({sha}): {detail}")
+          PY
