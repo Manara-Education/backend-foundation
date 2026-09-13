@@ -182,7 +182,7 @@ required_reports:
 register:
   # Findings persist here across runs so that a finding seen yesterday is
   # updated rather than duplicated, and so that first_seen survives.
-  path: .github/security/findings.json
+  path: register/findings.json   # inside the security-gate-verdict artifact; carried forward run to run
 
   # A finding is only cleared when the assessed revision no longer contains it.
   # Clearing is per-branch: a fix on develop does not clear main.
@@ -192,3 +192,41 @@ exceptions:
   path: .github/security/exceptions.yml
   max_duration_days: 90
   require_fields: [id, scope, reason, owner, approval, expires]
+
+# ---------------------------------------------------------------------------
+# Remediation: who owns a finding, and by when it must be closed
+# ---------------------------------------------------------------------------
+# evaluate.py gives every entry in the findings register:
+#   owner            triage_owner below: accountable for triaging the finding
+#                    and getting the fix (or a narrow exception) merged.
+#   remediation_due  first_seen + sla_days[severity], or + kev_days when the
+#                    finding is on the CISA KEV catalogue, whichever is sooner.
+#                    The clock starts at FIRST detection on any assessed branch;
+#                    security.yml carries the register from run to run, so a
+#                    re-scan never restarts it.
+#   sla.state        within-sla | overdue | excepted | closed
+#   history          detected / resolved / reappeared / excepted, each with the
+#                    branch and revision that showed it. "resolved" is written by
+#                    the re-assessment that no longer finds it: that is the retest.
+#
+# HIGH, CRITICAL, KEV and secrets already block every merge and deployment, so
+# for them the deadline governs findings on develop/main and the running
+# release: typically disclosed after a revision merged, and caught by the daily
+# scan. Being overdue ESCALATES (it is listed in every gate report for that
+# branch); it does not change what blocks. Blocking is decided by `blocking:`
+# above and nowhere else. In particular nothing here makes MEDIUM block in a
+# payment environment: that is an open decision for the security owner, see
+# docs/security/VULNERABILITY_MANAGEMENT.md.
+#
+# An absent or malformed section fails the gate as "could not be evaluated".
+# Changing these values is a policy change: a reviewed PR, and the gate always
+# enforces the base branch's copy, never the PR's.
+remediation:
+  triage_owner: Hamed-mohamed-Git
+  kev_days: 7
+  sla_days:
+    CRITICAL: 7
+    HIGH: 30
+    MEDIUM: 90
+    LOW: 180
+    INFO: 365

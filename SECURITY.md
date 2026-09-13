@@ -24,7 +24,7 @@ version or commit you saw it on, and what an attacker could achieve with it.
 |---|---|
 | First response | within 3 working days |
 | Assessment and plan | within 7 working days |
-| Fix for a confirmed critical issue | as quickly as we can, ahead of feature work |
+| Fix for a confirmed issue | ahead of feature work, and within the remediation deadline for its severity — CRITICAL 7 days, HIGH 30 days, counted from confirmation ([docs/security/VULNERABILITY_MANAGEMENT.md](docs/security/VULNERABILITY_MANAGEMENT.md)) |
 
 We will tell you what we found, when it is fixed, and credit you in the release
 notes if you would like that.
