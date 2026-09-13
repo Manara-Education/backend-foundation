@@ -97,8 +97,8 @@ public class HttpSessionManager implements SessionManager {
             releaseSlot(sessionId);
         }
         SecurityContextHolder.clearContext();
-        clearCookie(response, SESSION_COOKIE);
-        clearCookie(response, CSRF_COOKIE);
+        clearCookie(request, response, SESSION_COOKIE);
+        clearCookie(request, response, CSRF_COOKIE);
     }
 
     /**
@@ -113,11 +113,22 @@ public class HttpSessionManager implements SessionManager {
         }
     }
 
-    private void clearCookie(HttpServletResponse response, String name) {
+    /**
+     * Expires a cookie this application issued.
+     *
+     * <p>{@code Secure} whenever the request arrived over HTTPS — the rule
+     * {@code CookieCsrfTokenRepository} applies when it issues {@code XSRF-TOKEN}, and in production
+     * {@code server.forward-headers-strategy=native} makes it the scheme the client used at the proxy.
+     * Not unconditionally: a browser refuses a {@code Secure} cookie from an origin it does not
+     * consider secure, so over plain HTTP in development the expiring cookie would be dropped and the
+     * old one would outlive the sign-out.
+     */
+    private void clearCookie(HttpServletRequest request, HttpServletResponse response, String name) {
         Cookie cookie = new Cookie(name, null);
         cookie.setPath("/");
         cookie.setMaxAge(0);
         cookie.setHttpOnly(true);
+        cookie.setSecure(request.isSecure());
         response.addCookie(cookie);
     }
 }
