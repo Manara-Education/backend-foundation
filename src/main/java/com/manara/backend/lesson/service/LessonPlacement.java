@@ -147,8 +147,10 @@ public class LessonPlacement {
             return size;
         }
         if (requestedIndex < 0 || requestedIndex > size) {
+            // Widened before the addition: Integer.MAX_VALUE is out of range and arrives here, and as
+            // an int sum it would wrap to a negative position in the message.
             throw new BusinessException(ErrorCode.INVALID_LESSON_POSITION,
-                    "error.course.lessonPositionInvalid", size + 1, requestedIndex + 1);
+                    "error.course.lessonPositionInvalid", size + 1, (long) requestedIndex + 1);
         }
         return requestedIndex;
     }
