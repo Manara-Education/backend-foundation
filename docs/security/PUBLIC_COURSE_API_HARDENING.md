@@ -58,7 +58,7 @@ Environments can tune the limit through `app.rate-limit.rules`.
 
 | Check | Result | Test |
 | --- | --- | --- |
-| A course with a video lesson, a rich-content lesson and a quiz with an answer key, an enrolled learner, an instructor bio, plus a private and a draft course, all tagged with one unique marker | The marker, emails, video id, and keys such as `videoUrl`, `richContent`, `quiz`, `correctOption`, `lessons`, `enrol`, `progress`, `email`, `password`, `studentsCount` and `visibility` appear in no list, detail or 404 body | `nothingProtectedIsServed` |
+| A course with a video lesson, a rich-content lesson and a quiz with an answer key, an enrolled learner, an instructor bio, plus a private and a draft course, all tagged with one unique marker | The marker, both emails and the video id appear in no list, detail or 404 body. No property at any depth of the list or detail `data` is named `videoUrl`, `videoProvider`, `richContent`, `lessons`, `modules`, `quiz`, `finalQuiz`, `questions`, `options`, `correctOptionId`, `explanation`, `enrolled`, `enrollment`, `progress`, `access`, `email`, `password`, `bio`, `studentsCount`, `status`, `visibility`, `revision`, `instructorId`, `createdAt`, `updatedAt`, `orderIndex` or `retiredAt`. Property names are checked structurally, so another test's course title can neither trip the check nor hide a real field. | `nothingProtectedIsServed` |
 | Draft, private and private-draft ids compared with an unused id | Same 404 body, differing only in the id sent; titles never appear | `ineligibleAndMissingAreIndistinguishable` (TECH-7) |
 | Error bodies | Exactly `{status, errors}`: no `code`, no trace, no `Exception`, `java.` or `org.` text, no course title | `errorBodiesSayNothingExtra` |
 | Paging limits | `size` from 1 to 50 is allowed. 51, 1000000, −5, 1.5 and non-numeric values are refused. `page` below 0, overflowing `int`, or giving an offset past `Integer.MAX_VALUE` is refused. The largest valid offset returns an empty page. | `pagingBoundaries` |
@@ -95,6 +95,12 @@ applies `LIMIT`/`OFFSET` itself. Hibernate never pages in memory.
 - `./mvnw -B -ntp test -Dtest=PublicCourseApiHardeningTest,PublicCatalogueRateLimitRuleTest,PublicCourseApiTest`
   → 41 run, 0 failures. Before the F1 fix, `malformedIdsAreRefused[0x10]` failed with a 200
   serving course 16, which is how F1 was found.
+- The first CI run of this branch failed `nothingProtectedIsServed`. It searched the response text
+  for words such as "quiz", and the shared test database had put another test class's course,
+  whose title contains that word, on the same page. The check was testing titles, not fields. It
+  now collects property names from the JSON tree. Negative control: adding `accessType`, a key the
+  response does contain inside `offer`, to the forbidden list makes the test fail, which proves
+  nested keys are inspected.
 - `./mvnw -B -ntp verify` results are in the pull request for the exact revision. The PR's CI run is
   authoritative.
 

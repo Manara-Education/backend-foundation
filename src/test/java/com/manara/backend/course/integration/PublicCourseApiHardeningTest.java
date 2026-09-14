@@ -156,29 +156,43 @@ class PublicCourseApiHardeningTest extends AbstractCourseAuthoringTest {
             var draft = courseService.createCourse(instructorUser,
                     flatCourse("Draft " + marker, CourseStatus.DRAFT, CourseVisibility.PUBLIC, lesson("L1")));
 
-            String served = body(get(LIST).param("size", "50"), 200)
-                    + body(get(DETAIL, course.getId()), 200)
+            String list = body(get(LIST).param("size", "50"), 200);
+            String detail = body(get(DETAIL, course.getId()), 200);
+            String served = list + detail
                     + body(get(DETAIL, hidden.getId()), 404)
                     + body(get(DETAIL, draft.getId()), 404);
 
+            // Values: unique to this test, so they can be searched for across every body even though
+            // the shared database puts other test classes' courses on the same page.
             assertThat(served)
                     .doesNotContain(marker)
                     .doesNotContain(learner.getEmail())
                     .doesNotContain(instructorUser.getEmail())
-                    .doesNotContain("dQw4w9WgXcQ")
-                    .doesNotContain("youtube")
-                    .doesNotContainIgnoringCase("videoUrl")
-                    .doesNotContainIgnoringCase("richContent")
-                    .doesNotContainIgnoringCase("quiz")
-                    .doesNotContainIgnoringCase("correctOption")
-                    .doesNotContainIgnoringCase("lessons")
-                    .doesNotContainIgnoringCase("enrol")
-                    .doesNotContainIgnoringCase("progress")
-                    .doesNotContainIgnoringCase("email")
-                    .doesNotContainIgnoringCase("password")
-                    .doesNotContainIgnoringCase("studentsCount")
-                    .doesNotContainIgnoringCase("visibility");
+                    .doesNotContain("dQw4w9WgXcQ");
+            assertThat(detail).doesNotContainIgnoringCase("youtube");
+
+            // Keys: a protected field is a property name, whatever its value. Searched structurally,
+            // because another course's title may legitimately contain a word such as "quiz".
+            List<String> keys = new ArrayList<>();
+            collectKeys(data(list), keys);
+            collectKeys(data(detail), keys);
+            assertThat(keys).doesNotContainAnyElementsOf(List.of(
+                    "videoUrl", "videoProvider", "richContent", "lessons", "modules", "quiz", "finalQuiz",
+                    "questions", "options", "correctOptionId", "explanation", "enrolled", "enrollment",
+                    "progress", "access", "email", "password", "bio", "studentsCount", "status", "visibility",
+                    "revision", "instructorId", "createdAt", "updatedAt", "orderIndex", "retiredAt"));
             assertThat(listedIds()).contains(course.getId()).doesNotContain(hidden.getId(), draft.getId());
+        }
+
+        private void collectKeys(JsonNode node, List<String> keys) {
+            if (node.isObject()) {
+                node.propertyNames().forEach(name -> {
+                    keys.add(name);
+                    collectKeys(node.get(name), keys);
+                });
+            } else if (node.isArray()) {
+                node.forEach(child -> collectKeys(child, keys));
+            }
         }
 
         @Test
