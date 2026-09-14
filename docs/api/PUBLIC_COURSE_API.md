@@ -61,8 +61,10 @@ A page past the end returns `200` with `"items": []` and the real totals.
 
 ### `GET /api/v1/public/courses/{courseId}`
 
-One eligible course. `courseId` is the numeric `id` from the list. Courses have no slug column, so
-the id is the public identifier.
+One eligible course. `courseId` is the numeric `id` from the list, written exactly as the list
+writes it: a positive decimal integer with no sign, no leading zero and no other base (at most 19
+digits). Courses have no slug column, so the id is the public identifier, and each course has exactly
+one address. `0x2a`, `+42` and `042` are not alternative spellings of `42`; they are refused.
 
 `data` is a `PublicCourseDetailResponse`.
 
@@ -73,8 +75,10 @@ the id is the public identifier.
 { "status": "error", "errors": ["Course not found with id: 991"] }
 ```
 
-The response never reveals which case it was. A non-numeric or out-of-range id returns `400`
-(`error.request.parameterInvalid`), which is the same for every id, eligible or not.
+The response never reveals which case it was. Any id that is not canonical (non-numeric, zero,
+negative, signed, zero-padded, hexadecimal or beyond the 64-bit range) returns `400`
+(`error.request.parameterInvalid`) before the database is queried. That answer depends only on the
+id's spelling, never on whether a course exists.
 
 ## Fields
 
