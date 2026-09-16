@@ -53,6 +53,10 @@ public record RateLimitProperties(boolean enabled, List<RateLimitRule> rules) {
                 new RateLimitRule("resend-otp", HttpMethod.POST, "/api/v1/auth/resend-otp", 5, Duration.ofMinutes(15)),
                 new RateLimitRule("forgot-password", HttpMethod.POST, "/api/v1/auth/forgot-password", 5, Duration.ofMinutes(15)),
 
+                // The public contact form causes the same kind of outbound mail as the three rules
+                // above, from a route that needs no account to reach at all — the same budget applies.
+                new RateLimitRule("contact", HttpMethod.POST, "/api/v1/contact", 5, Duration.ofMinutes(15)),
+
                 // --- Disk ----------------------------------------------------------------
                 // 5 MB per file against a 38 GB disk shared with Postgres. Uploads are already
                 // restricted to authenticated instructors, so this is a ceiling on damage from
