@@ -92,12 +92,25 @@ class ContactControllerTest extends AbstractPostgresBackedTest {
     }
 
     @Test
-    @DisplayName("missing CSRF token is refused like every other mutating request")
+    @DisplayName("missing CSRF token is refused before the controller is reached")
     void refusesWithoutCsrfToken() throws Exception {
+        // MockMvc answers 403 here. The running application, over the real port, answers 401 for
+        // the identical request (verified with curl against a live instance): Spring Security
+        // routes an anonymous caller's CSRF rejection through WebSecurityCustomizers'
+        // HttpStatusEntryPoint(UNAUTHORIZED) rather than the access-denied handler, and MockMvc's
+        // simulated dispatch does not reproduce that path. Pre-existing to this endpoint — the
+        // same gap would show on any route under this security configuration — so the assertion
+        // here is deliberately status-agnostic and checks the one thing both environments agree
+        // on: the request is refused and never reaches the service.
         mockMvc.perform(post(ENDPOINT)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body("سارة أحمد", "sara@example.com", "الدورات", "متى تبدأ الدورة القادمة؟")))
-                .andExpect(status().isForbidden());
+                .andExpect(result -> {
+                    int status = result.getResponse().getStatus();
+                    if (status != 401 && status != 403) {
+                        throw new AssertionError("Expected 401 or 403, got " + status);
+                    }
+                });
 
         verifyNoInteractions(emailService);
     }
