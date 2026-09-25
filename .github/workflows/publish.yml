@@ -173,6 +173,12 @@ jobs:
 
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # The runtime stage is rebuilt on every run. Its `apk upgrade` layer
+          # has the same cache key while the base digest stays pinned, so a
+          # cached layer keeps serving yesterday's Alpine packages — libexpat
+          # 2.8.4-r0 stayed in the scanned image after 2.8.5-r0 was published
+          # to 3.24. The build stage (Maven dependencies) stays cached.
+          no-cache-filters: runtime
 
       - name: Summarise what was published
         env:
