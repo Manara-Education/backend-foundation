@@ -9,8 +9,8 @@ Machine-readable state: `orchestration-state.json`. Blockers: `decisions-and-blo
 | P01-FE-01 | partially_blocked | `feat/manara-p01-settings-shell` | `3a1cd39` | — | Appearance blocked (X1) |
 | P02-BE-01 | verified | `feat/manara-p02-profile-api` | `10e0007` | — | V17 |
 | P02-FE-01 | verified | `feat/manara-p02-avatar-ui` | `8422566` | — | stacked on P01 |
-| P03-BE-01 | ready | `feat/manara-p03-email-change` | — | — | V18 |
-| P03-FE-01 | queued | `feat/manara-p03-email-change-ui` | — | — | |
+| P03-BE-01 | verified | `feat/manara-p03-email-change` | `76e5b13` | — | V18, stacked on P02-BE |
+| P03-FE-01 | verified | `feat/manara-p03-email-change-ui` | `b4f68c3` | — | stacked on P02-FE |
 | P04-BE-01 | ready | `feat/manara-p04-public-catalogue` | — | — | V19 |
 | P04-FE-01 | queued | `feat/manara-p04-public-courses-ui` | — | — | |
 | P05-FE-01 | queued | `feat/manara-p05-checkout-sheet` | — | — | |

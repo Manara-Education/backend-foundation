@@ -7,8 +7,8 @@
     "frontend": "d4094cfaa26c7a74758312ae6300d35a90e82d9c"
   },
   "resume": {
-    "next": "P03-BE-01",
-    "note": "P00–P02 committed locally; PRs not opened yet (Codex MCP down; draft PRs to be opened in one batch)."
+    "next": "P04-BE-01",
+    "note": "P00–P03 committed and verified locally; PRs not opened yet."
   },
   "tasks": [
     {
@@ -96,24 +96,41 @@
       "phase": "03",
       "repo": "backend",
       "branch": "feat/manara-p03-email-change",
-      "implementation": "ready",
+      "implementation": "verified",
       "migration": "V18",
       "dependsOn": [
         "P02-BE-01"
       ],
-      "blockers": []
+      "blockers": [],
+      "worktree": "worktrees/figma/be-p03-email",
+      "commit": "76e5b13",
+      "base": "feat/manara-p02-profile-api",
+      "validation": {
+        "verify": "1377 tests, 0 failures, 1 skipped",
+        "live": "browser flow"
+      }
     },
     {
       "id": "P03-FE-01",
       "phase": "03",
       "repo": "frontend",
       "branch": "feat/manara-p03-email-change-ui",
-      "implementation": "queued",
+      "implementation": "verified",
       "dependsOn": [
         "P02-FE-01",
         "P03-BE-01"
       ],
-      "blockers": []
+      "blockers": [
+        "X1: export parity only"
+      ],
+      "worktree": "worktrees/figma/fe-p03-email",
+      "commit": "b4f68c3",
+      "base": "feat/manara-p02-avatar-ui",
+      "validation": {
+        "test": "678/678",
+        "build": "pass",
+        "live": "390px flow"
+      }
     },
     {
       "id": "P04-BE-01",
