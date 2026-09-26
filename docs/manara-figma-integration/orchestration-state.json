@@ -8,7 +8,8 @@
   },
   "resume": {
     "next": "P06-BE-01",
-    "note": "P00–P05 committed and verified locally; PRs not opened yet."
+    "worktree": "worktrees/figma/be-p06-billing (branch feat/manara-p06-billing-ledger, base P04-BE 04ad8a7)",
+    "note": "Uncommitted: pom.xml adds io.github.openhtmltopdf openhtmltopdf-pdfbox + rtl-support 1.1.87 (pdfbox 3.0.7, icu4j 77.1) for Arabic receipt PDFs. Static Cairo Regular/Bold were instantiated from the OFL variable font in the session scratchpad (lost after the session): redo with fonttools varLib.instancer wght=400/700 slnt=0 from github.com/Gue3bara/Cairo fonts/Cairo/variable. Next: Arabic PDF spike, then V20 payment_transactions + payment_receipts (backfill from course_purchases/course_subscriptions with source keys, no receipts for legacy), CheckoutProcessor integration, quote, reads, receipts JSON/PDF; then P06-FE, P11 core. All PRs still unopened (Codex MCP was down): open draft PRs in stack order after the user confirms."
   },
   "tasks": [
     {
