@@ -13,7 +13,7 @@ Machine-readable state: `orchestration-state.json`. Blockers: `decisions-and-blo
 | P03-FE-01 | verified | `feat/manara-p03-email-change-ui` | `b4f68c3` | — | stacked on P02-FE |
 | P04-BE-01 | verified | `feat/manara-p04-public-catalogue` | `04ad8a7` | — | V19; taxonomy X8 |
 | P04-FE-01 | verified | `feat/manara-p04-public-courses-ui` | `8df5f38` | — | |
-| P05-FE-01 | ready | `feat/manara-p05-checkout-sheet` | — | — | |
+| P05-FE-01 | verified | `feat/manara-p05-checkout-sheet` | `9a569b2` | — | stacked on P04-FE |
 | P06-BE-01 | ready | `feat/manara-p06-billing-ledger` | — | — | V20 |
 | P06-FE-01 | queued | `feat/manara-p06-billing-history-ui` | — | — | |
 | P11 core | queued | — | — | — | after P06 |
