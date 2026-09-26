@@ -94,6 +94,16 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.error(message, ex.getErrorCode()));
     }
 
+    @ExceptionHandler(TooManyRequestsException.class)
+    public ResponseEntity<@NonNull ApiResponse<Void>> handleTooManyRequests(TooManyRequestsException ex) {
+        String message = messageService.get(ex.getMessageCode(), ex.getArgs());
+        // Whole seconds, rounded up, so a client that waits exactly this long is not refused again.
+        long seconds = (ex.getRetryAfter().toMillis() + 999) / 1000;
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header(HttpHeaders.RETRY_AFTER, String.valueOf(seconds))
+                .body(ApiResponse.error(message, ex.getErrorCode()));
+    }
+
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<@NonNull ApiResponse<Void>> handleBusiness(BusinessException ex) {
         String message = messageService.get(ex.getMessageCode(), ex.getArgs());

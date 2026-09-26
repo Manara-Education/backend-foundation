@@ -57,6 +57,17 @@ public record RateLimitProperties(boolean enabled, List<RateLimitRule> rules) {
                 // above, from a route that needs no account to reach at all — the same budget applies.
                 new RateLimitRule("contact", HttpMethod.POST, "/api/v1/contact", 5, Duration.ofMinutes(15)),
 
+                // Starting an email change checks the current password and mails a code to an
+                // address the caller chooses: the password-guessing and mail-sending budgets both
+                // apply. The service adds a per-account cooldown and per-request attempt ceiling.
+                new RateLimitRule("email-change", HttpMethod.POST, "/api/v1/profile/email/change-requests", 5,
+                        Duration.ofMinutes(15)),
+                new RateLimitRule("email-change-resend", HttpMethod.POST,
+                        "/api/v1/profile/email/change-requests/resend", 5, Duration.ofMinutes(15)),
+                new RateLimitRule("email-change-verify", HttpMethod.POST,
+                        "/api/v1/profile/email/change-requests/verify", 10, Duration.ofMinutes(10),
+                        RateLimitRule.OutagePolicy.REFUSE),
+
                 // --- Disk ----------------------------------------------------------------
                 // 5 MB per file against a 38 GB disk shared with Postgres. Uploads are already
                 // restricted to authenticated instructors, so this is a ceiling on damage from

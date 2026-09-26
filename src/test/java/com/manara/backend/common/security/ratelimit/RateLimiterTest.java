@@ -123,7 +123,9 @@ class RateLimiterTest {
         assertThat(rules)
                 .filteredOn(rule -> rule.onRedisOutage() == RateLimitRule.OutagePolicy.REFUSE)
                 .extracting(RateLimitRule::name)
-                .containsExactlyInAnyOrder("login", "otp-verify");
+                // The three that end in a new session: with Redis down the session could not be
+                // stored, so the attempt — and for a code, the code itself — would be wasted.
+                .containsExactlyInAnyOrder("login", "otp-verify", "email-change-verify");
         assertThat(rules).extracting(RateLimitRule::onRedisOutage).doesNotContainNull();
     }
 

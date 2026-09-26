@@ -66,5 +66,33 @@ public enum ErrorCode {
      * <p>Reserved for exactly that condition. Reusing it for any other refusal would make the
      * message the client shows a lie.
      */
-    SESSION_REVOKED
+    SESSION_REVOKED,
+
+    /** The current password given to start an email change is wrong. Nothing was created or sent. */
+    EMAIL_CHANGE_PASSWORD_INVALID,
+
+    /** The new address is the account's current one. */
+    EMAIL_CHANGE_SAME_ADDRESS,
+
+    /**
+     * The code does not match, or names no pending request of this account — one code for both, so a
+     * request id cannot be probed. Carries the same meaning for a code already used.
+     */
+    EMAIL_CHANGE_CODE_INVALID,
+
+    /** The code or the request it belongs to has expired, or was replaced by a newer one. */
+    EMAIL_CHANGE_EXPIRED,
+
+    /** Too many wrong codes: the request is locked and a new one must be started. 429. */
+    EMAIL_CHANGE_LOCKED,
+
+    /** A new code or request was asked for before the cooldown elapsed. 429 with Retry-After. */
+    EMAIL_CHANGE_COOLDOWN,
+
+    /**
+     * The change could not be completed for the address, stated neutrally. Answered at verification,
+     * when a code was accepted but the address has meanwhile been taken — never at request time,
+     * which is answered the same whether or not the address is registered.
+     */
+    EMAIL_CHANGE_UNAVAILABLE
 }
