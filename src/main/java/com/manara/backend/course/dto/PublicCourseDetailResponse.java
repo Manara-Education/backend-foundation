@@ -2,6 +2,8 @@ package com.manara.backend.course.dto;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 
+import java.util.List;
+
 /**
  * One public course, as its anonymous detail page shows it: the summary plus the instructor's own
  * description of what the course delivers.
@@ -34,5 +36,8 @@ public record PublicCourseDetailResponse(
         String instructorName,
         Integer durationSeconds,
         Integer lessonCount,
-        PublicCourseOfferResponse offer) {
+        PublicCourseOfferResponse offer,
+        PublicCategoryResponse category,
+        PublicInstructorResponse instructor,
+        List<PublicOutlineModuleResponse> outline) {
 }

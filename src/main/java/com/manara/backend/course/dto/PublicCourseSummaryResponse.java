@@ -36,5 +36,6 @@ public record PublicCourseSummaryResponse(
         String instructorName,
         Integer durationSeconds,
         Integer lessonCount,
-        PublicCourseOfferResponse offer) {
+        PublicCourseOfferResponse offer,
+        PublicCategoryResponse category) {
 }

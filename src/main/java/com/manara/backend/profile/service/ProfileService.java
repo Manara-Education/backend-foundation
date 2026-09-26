@@ -1,9 +1,14 @@
 package com.manara.backend.profile.service;
 
 import com.manara.backend.common.exception.ResourceNotFoundException;
+import com.manara.backend.profile.dto.InstructorProfileResponse;
 import com.manara.backend.profile.dto.ProfileResponse;
+import com.manara.backend.profile.dto.UpdateInstructorProfileRequest;
 import com.manara.backend.profile.dto.UpdateProfileRequest;
 import com.manara.backend.profile.mapper.ProfileMapper;
+import com.manara.backend.profile.model.Instructor;
+import com.manara.backend.profile.repository.InstructorRepository;
+import com.manara.backend.user.model.Role;
 import com.manara.backend.user.model.User;
 import com.manara.backend.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -17,6 +22,7 @@ public class ProfileService {
 
     private final UserRepository userRepository;
     private final ProfileMapper profileMapper;
+    private final InstructorRepository instructorRepository;
 
     public ProfileResponse getProfile(User principal) {
         return profileMapper.toProfileResponse(currentAccount(principal));
@@ -62,5 +68,25 @@ public class ProfileService {
     private User currentAccount(User principal) {
         return userRepository.findById(principal.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("error.user.notFound"));
+    }
+
+    /** The instructor's public fields. Another role has none: answered as not found. */
+    public InstructorProfileResponse getInstructorProfile(User principal) {
+        return profileMapper.toInstructorProfileResponse(ownInstructor(principal));
+    }
+
+    @Transactional
+    public InstructorProfileResponse updateInstructorProfile(User principal, UpdateInstructorProfileRequest request) {
+        Instructor instructor = ownInstructor(principal);
+        instructor.setHeadline(request.getHeadline());
+        return profileMapper.toInstructorProfileResponse(instructor);
+    }
+
+    private Instructor ownInstructor(User principal) {
+        if (principal.getRole() != Role.INSTRUCTOR) {
+            throw new ResourceNotFoundException("error.profile.instructorNotFound", principal.getId().toString());
+        }
+        return instructorRepository.findByUserId(principal.getId())
+                .orElseThrow(() -> new ResourceNotFoundException("error.profile.instructorNotFound", principal.getId().toString()));
     }
 }

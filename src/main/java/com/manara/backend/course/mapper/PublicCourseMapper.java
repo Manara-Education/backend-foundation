@@ -1,20 +1,30 @@
 package com.manara.backend.course.mapper;
 
+import com.manara.backend.course.dto.PublicCategoryResponse;
 import com.manara.backend.course.dto.PublicCourseDetailResponse;
 import com.manara.backend.course.dto.PublicCourseOfferResponse;
 import com.manara.backend.course.dto.PublicCoursePageResponse;
 import com.manara.backend.course.dto.PublicCourseSummaryResponse;
+import com.manara.backend.course.dto.PublicInstructorResponse;
+import com.manara.backend.course.dto.PublicModuleRow;
+import com.manara.backend.course.dto.PublicOutlineLessonResponse;
+import com.manara.backend.course.dto.PublicOutlineModuleResponse;
+import com.manara.backend.course.dto.PublicOutlineRow;
 import com.manara.backend.course.dto.PublicPricingStatus;
 import com.manara.backend.course.dto.PublicSubscriptionPlanResponse;
 import com.manara.backend.course.model.Course;
+import com.manara.backend.course.model.CourseCategory;
 import com.manara.backend.course.model.SubscriptionPlan;
 import com.manara.backend.course.service.PublicOffer;
 import org.springframework.stereotype.Component;
 
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Builds the anonymous catalogue's shapes, field by field.
@@ -46,10 +56,12 @@ public class PublicCourseMapper {
                 instructorName(course),
                 knownDuration(course.getDuration()),
                 course.getLessonCount(),
-                toOffer(offer));
+                toOffer(offer),
+                toCategory(course.getCategory()));
     }
 
-    public PublicCourseDetailResponse toDetail(Course course, PublicOffer offer) {
+    public PublicCourseDetailResponse toDetail(Course course, PublicOffer offer,
+                                               List<PublicOutlineModuleResponse> outline) {
         return new PublicCourseDetailResponse(
                 course.getId(),
                 course.getTitle(),
@@ -59,7 +71,56 @@ public class PublicCourseMapper {
                 instructorName(course),
                 knownDuration(course.getDuration()),
                 course.getLessonCount(),
-                toOffer(offer));
+                toOffer(offer),
+                toCategory(course.getCategory()),
+                toInstructor(course),
+                outline);
+    }
+
+    /** Inactive categories are hidden on public pages, as if the course were uncategorised. */
+    private static PublicCategoryResponse toCategory(CourseCategory category) {
+        if (category == null || !category.isActive()) {
+            return null;
+        }
+        return new PublicCategoryResponse(category.getId(), category.getNameAr(), category.getColorToken());
+    }
+
+    private PublicInstructorResponse toInstructor(Course course) {
+        var instructor = course.getInstructor();
+        if (instructor == null || instructor.getUser() == null) {
+            return null;
+        }
+        return new PublicInstructorResponse(
+                blankToNull(instructor.getUser().getFullName()),
+                safeImageUrl(instructor.getUser().getAvatarUrl()),
+                blankToNull(instructor.getHeadline()));
+    }
+
+    /**
+     * The outline in reading order. A module course lists every module, lessons or not; a flat
+     * course is one untitled group. Lesson lengths follow the course's rule: zero is unknown.
+     */
+    public List<PublicOutlineModuleResponse> toFlatOutline(List<PublicOutlineRow> lessons) {
+        return lessons.isEmpty() ? List.of() : List.of(new PublicOutlineModuleResponse(null, toLessons(lessons)));
+    }
+
+    public List<PublicOutlineModuleResponse> toModuleOutline(List<PublicModuleRow> rows) {
+        Map<Long, List<PublicModuleRow>> byModule = rows.stream()
+                .collect(Collectors.groupingBy(PublicModuleRow::moduleId, LinkedHashMap::new, Collectors.toList()));
+        return byModule.values().stream()
+                .map(moduleRows -> new PublicOutlineModuleResponse(
+                        blankToNull(moduleRows.getFirst().moduleTitle()),
+                        toLessons(moduleRows.stream()
+                                .filter(row -> row.lessonId() != null)
+                                .map(row -> new PublicOutlineRow(row.lessonId(), row.lessonTitle(), row.duration(), row.moduleId()))
+                                .toList())))
+                .toList();
+    }
+
+    private static List<PublicOutlineLessonResponse> toLessons(List<PublicOutlineRow> rows) {
+        return rows.stream()
+                .map(row -> new PublicOutlineLessonResponse(row.lessonId(), row.title(), knownDuration(row.duration()), false))
+                .toList();
     }
 
     public PublicCoursePageResponse toPage(List<PublicCourseSummaryResponse> items, int page, int size,

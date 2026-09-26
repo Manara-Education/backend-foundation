@@ -54,6 +54,11 @@ public class Course implements TrackedContent {
     @org.hibernate.annotations.Formula("(SELECT COUNT(l.id) FROM lessons l WHERE l.course_id = id)")
     private Integer lessonCount;
 
+    /** Nullable: uncategorised. Only an active category may be assigned (CourseService). */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "category_id")
+    private CourseCategory category;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "instructor_id", nullable = false)
     private Instructor instructor;

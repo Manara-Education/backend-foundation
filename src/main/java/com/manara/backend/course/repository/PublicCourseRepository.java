@@ -1,5 +1,7 @@
 package com.manara.backend.course.repository;
 
+import com.manara.backend.course.dto.PublicModuleRow;
+import com.manara.backend.course.dto.PublicOutlineRow;
 import com.manara.backend.course.model.Course;
 import com.manara.backend.course.model.SubscriptionPlan;
 import org.springframework.data.domain.Page;
@@ -40,7 +42,7 @@ public interface PublicCourseRepository extends org.springframework.data.reposit
      * pages are stable and no course appears on two of them.
      */
     @Query(value = """
-            select c from Course c join fetch c.instructor i join fetch i.user
+            select c from Course c join fetch c.instructor i join fetch i.user left join fetch c.category
             where c.status = com.manara.backend.course.model.CourseStatus.PUBLISHED
               and c.visibility = com.manara.backend.course.model.CourseVisibility.PUBLIC
             order by c.id desc
@@ -60,7 +62,7 @@ public interface PublicCourseRepository extends org.springframework.data.reposit
      * and so cannot tell a visitor.
      */
     @Query("""
-            select c from Course c join fetch c.instructor i join fetch i.user
+            select c from Course c join fetch c.instructor i join fetch i.user left join fetch c.category
             where c.id = :courseId
               and c.status = com.manara.backend.course.model.CourseStatus.PUBLISHED
               and c.visibility = com.manara.backend.course.model.CourseVisibility.PUBLIC
@@ -81,4 +83,26 @@ public interface PublicCourseRepository extends org.springframework.data.reposit
             order by p.course.id, p.orderIndex, p.id
             """)
     List<SubscriptionPlan> findActivePlansOfCourses(@Param("courseIds") Collection<Long> courseIds);
+
+    /*
+     * The public outline. Called only for a course already resolved as discoverable, and each
+     * query names its columns, so neither video nor body nor quiz is ever read for it.
+     */
+
+    @Query("""
+            select new com.manara.backend.course.dto.PublicOutlineRow(l.id, l.title, l.duration, null)
+            from Lesson l
+            where l.course.id = :courseId and l.module is null
+            order by l.orderIndex asc, l.id asc
+            """)
+    List<PublicOutlineRow> findOutlineRootLessons(@Param("courseId") Long courseId);
+
+    /** Every module with its lessons, in one statement; a module with no lessons is one row with a null lesson. */
+    @Query("""
+            select new com.manara.backend.course.dto.PublicModuleRow(m.id, m.title, l.id, l.title, l.duration)
+            from CourseModule m left join Lesson l on l.module = m
+            where m.course.id = :courseId
+            order by m.orderIndex asc, m.id asc, l.orderIndex asc, l.id asc
+            """)
+    List<PublicModuleRow> findOutlineModules(@Param("courseId") Long courseId);
 }

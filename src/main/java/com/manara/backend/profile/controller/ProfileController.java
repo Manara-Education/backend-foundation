@@ -1,7 +1,9 @@
 package com.manara.backend.profile.controller;
 
 import com.manara.backend.common.dto.ApiResponse;
+import com.manara.backend.profile.dto.InstructorProfileResponse;
 import com.manara.backend.profile.dto.ProfileResponse;
+import com.manara.backend.profile.dto.UpdateInstructorProfileRequest;
 import com.manara.backend.profile.dto.UpdateProfileRequest;
 import com.manara.backend.profile.service.ProfileAvatarService;
 import com.manara.backend.profile.service.ProfileService;
@@ -54,5 +56,17 @@ public class ProfileController {
     @DeleteMapping("/avatar")
     public ApiResponse<ProfileResponse> removeAvatar(@AuthenticationPrincipal User user) {
         return ApiResponse.success(profileAvatarService.removeAvatar(user));
+    }
+
+    @GetMapping("/instructor")
+    public ApiResponse<InstructorProfileResponse> getInstructorProfile(@AuthenticationPrincipal User user) {
+        return ApiResponse.success(profileService.getInstructorProfile(user));
+    }
+
+    /** The instructor's public headline, shown on their course pages. */
+    @PutMapping("/instructor")
+    public ApiResponse<InstructorProfileResponse> updateInstructorProfile(
+            @AuthenticationPrincipal User user, @RequestBody @Valid UpdateInstructorProfileRequest request) {
+        return ApiResponse.success(profileService.updateInstructorProfile(user, request));
     }
 }

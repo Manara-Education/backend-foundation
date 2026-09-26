@@ -97,6 +97,7 @@ key.
 | `durationSeconds` | integer \| null | Total video duration in seconds. `null` when it is not yet known. The video lookup fills it in, and `0` meant "not looked up" rather than "empty", so the API sends `null`, never `0`. |
 | `lessonCount` | integer | Number of lessons. |
 | `offer` | `PublicCourseOfferResponse` | What the course costs. |
+| `category` | `{id, name, color}` \| null | The catalogue category (added with V19). `name` is Arabic display text; `color` is one of the design tokens `indigo`, `teal`, `amber`, `rose`, `violet`, `emerald`, `sky`, `slate`, never a raw colour. `null` when the course is uncategorised or its category has been retired. |
 
 ### `PublicCourseDetailResponse`
 
@@ -105,6 +106,12 @@ The same fields as the summary, plus:
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `description` | string \| null | The instructor's description of what the course delivers. **Plain text**: render it as text, never as HTML. |
+| `instructor` | `{name, avatarUrl, headline}` \| null | Who teaches it. `avatarUrl` follows the `imageUrl` rule; `headline` is the instructor's own short plain-text line (≤ 120 characters) or `null`. `instructorName` is kept for existing clients and equals `instructor.name`. |
+| `outline` | array | The curriculum as the course currently publishes it, in reading order. A module course has one entry per module (`moduleTitle` set; a module with no lessons has an empty `lessons`); a flat course has one entry with `moduleTitle: null`, or none at all when it has no lessons. |
+| `outline[].lessons[]` | `{id, title, durationSeconds, preview}` | A lesson's title and length only. `durationSeconds` follows the course rule (`null` when unmeasured). `preview` is always `false`: nothing here is playable, and no lesson content is served publicly. |
+
+The outline costs one database statement whatever the course's size, and is read only for a course
+already resolved as published and public.
 
 A course's `offer` is identical in the list and in its detail.
 
@@ -215,7 +222,7 @@ Manara's offers. The real offers come from the TECH-1 inventory once the owner a
 
 ## Never exposed
 
-Lessons, lesson bodies and summaries, video and media URLs, quiz questions and answers, enrolment,
+Lesson bodies and summaries (the outline carries titles and lengths only), video and media URLs, quiz questions and answers, enrolment,
 entitlement and progress state, learner counts, publication status and visibility (every course
 returned is published and public by construction), revision, timestamps, internal instructor and
 user ids, instructor email, bio or any other account data, retired plans, plan `orderIndex`, and

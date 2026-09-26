@@ -94,7 +94,8 @@ class PublicCourseMapperTest {
         var node = summaryJson(course(CourseAccessType.PURCHASE, "450.00"), List.of());
 
         assertThat(fieldNames(node)).containsExactly(
-                "id", "title", "subtitle", "imageUrl", "instructorName", "durationSeconds", "lessonCount", "offer");
+                "id", "title", "subtitle", "imageUrl", "instructorName", "durationSeconds", "lessonCount", "offer",
+                "category");
         assertThat(fieldNames(node.get("offer"))).containsExactly(
                 "accessType", "pricingStatus", "currency", "purchasePrice", "plans");
         assertThat(node.get("id").asLong()).isEqualTo(7L);
@@ -108,12 +109,13 @@ class PublicCourseMapperTest {
     void detailShape() {
         var course = course(CourseAccessType.PURCHASE, "450.00");
         var offer = PublicOffer.of(course, List.of());
-        JsonNode detail = json.valueToTree(mapper.toDetail(course, offer));
+        JsonNode detail = json.valueToTree(mapper.toDetail(course, offer, List.of()));
         JsonNode summary = json.valueToTree(mapper.toSummary(course, offer));
 
         assertThat(fieldNames(detail)).containsExactly(
                 "id", "title", "subtitle", "description", "imageUrl", "instructorName", "durationSeconds",
-                "lessonCount", "offer");
+                "lessonCount", "offer", "category", "instructor", "outline");
+        assertThat(fieldNames(detail.get("instructor"))).containsExactly("name", "avatarUrl", "headline");
         assertThat(detail.get("description").asString()).isEqualTo("What the course covers, in plain text.");
         assertThat(detail.get("offer")).isEqualTo(summary.get("offer"));
     }
@@ -200,7 +202,7 @@ class PublicCourseMapperTest {
     void nothingPrivateIsSerialized() {
         var course = course(CourseAccessType.SUBSCRIPTION, null);
         var offer = PublicOffer.of(course, List.of(plan(9, "Monthly", 0, 1, SubscriptionUnit.MONTH, "120")));
-        String body = json.writeValueAsString(mapper.toDetail(course, offer))
+        String body = json.writeValueAsString(mapper.toDetail(course, offer, List.of()))
                 + json.writeValueAsString(mapper.toSummary(course, offer));
 
         assertThat(body)
@@ -213,7 +215,10 @@ class PublicCourseMapperTest {
                 .doesNotContain("987")
                 .doesNotContain("revision")
                 .doesNotContain("instructorId")
-                .doesNotContain("\"lessons\"")
+                // The outline carries lesson titles and lengths only; no lesson content field.
+                .doesNotContain("richContent")
+                .doesNotContain("\"summary\"")
+                .doesNotContain("\"video\"")
                 .doesNotContain("videoUrl")
                 .doesNotContain("orderIndex")
                 .doesNotContain("retiredAt");
