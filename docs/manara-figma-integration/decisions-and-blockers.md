@@ -17,6 +17,7 @@ something that is not in either repository).
 | X4 | No recorded refund policy. | Phase 10 approval semantics; K8 copy. | Request intake and review state can be built only if a policy exists; otherwise the refund entry point stays unavailable. | Product/legal written refund policy (eligibility window, partial refunds, access effect). |
 | X5 | No recorded recurring-billing policy (consent wording, grace period, retry schedule, cancellation effect). | Phase 09 B3–B5, K6. | Fixed-duration subscription display (phase 06). | Product/legal written recurring policy. |
 | X6 | No approved legal/tax invoice configuration (seller identity, tax registration, numbering obligation). | Phase 06 B8 formal invoices. | Non-fiscal receipts clearly labelled as such. | Finance-approved invoice configuration. |
+| X8 | No approved course-category taxonomy. V19 creates the table empty on purpose. | Category chips (P1) show nothing in production until rows exist. | Mechanism, public field, editor select, tests. | Product supplies the list (Arabic names, order, colour token per category); insert rows by migration or SQL. |
 | X7 | Codex MCP server failed to connect this session (`CONNECTION_CLOSED`). The standing preference is that Codex runs the PR workflow. | Who runs push/PR. | Claude runs implementation, validation and commits directly; PRs are opened as drafts only. | Restart the `codex` MCP server if the Codex hand-off is still wanted. |
 
 ## Environment constraints (observed 2026-09-26)

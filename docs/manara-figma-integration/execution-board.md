@@ -11,9 +11,9 @@ Machine-readable state: `orchestration-state.json`. Blockers: `decisions-and-blo
 | P02-FE-01 | verified | `feat/manara-p02-avatar-ui` | `8422566` | — | stacked on P01 |
 | P03-BE-01 | verified | `feat/manara-p03-email-change` | `76e5b13` | — | V18, stacked on P02-BE |
 | P03-FE-01 | verified | `feat/manara-p03-email-change-ui` | `b4f68c3` | — | stacked on P02-FE |
-| P04-BE-01 | ready | `feat/manara-p04-public-catalogue` | — | — | V19 |
-| P04-FE-01 | queued | `feat/manara-p04-public-courses-ui` | — | — | |
-| P05-FE-01 | queued | `feat/manara-p05-checkout-sheet` | — | — | |
+| P04-BE-01 | verified | `feat/manara-p04-public-catalogue` | `04ad8a7` | — | V19; taxonomy X8 |
+| P04-FE-01 | verified | `feat/manara-p04-public-courses-ui` | `8df5f38` | — | |
+| P05-FE-01 | ready | `feat/manara-p05-checkout-sheet` | — | — | |
 | P06-BE-01 | ready | `feat/manara-p06-billing-ledger` | — | — | V20 |
 | P06-FE-01 | queued | `feat/manara-p06-billing-history-ui` | — | — | |
 | P11 core | queued | — | — | — | after P06 |

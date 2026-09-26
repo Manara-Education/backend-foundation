@@ -7,8 +7,8 @@
     "frontend": "d4094cfaa26c7a74758312ae6300d35a90e82d9c"
   },
   "resume": {
-    "next": "P04-BE-01",
-    "note": "P00–P03 committed and verified locally; PRs not opened yet."
+    "next": "P05-FE-01",
+    "note": "P00–P04 committed and verified locally; PRs not opened yet."
   },
   "tasks": [
     {
@@ -137,32 +137,41 @@
       "phase": "04",
       "repo": "backend",
       "branch": "feat/manara-p04-public-catalogue",
-      "implementation": "ready",
+      "implementation": "verified",
       "migration": "V19",
       "dependsOn": [
         "P02-BE-01"
       ],
-      "blockers": []
+      "blockers": [
+        "X8: taxonomy data"
+      ],
+      "worktree": "worktrees/figma/be-p04-catalogue",
+      "commit": "04ad8a7",
+      "base": "feat/manara-p03-email-change"
     },
     {
       "id": "P04-FE-01",
       "phase": "04",
       "repo": "frontend",
       "branch": "feat/manara-p04-public-courses-ui",
-      "implementation": "queued",
+      "implementation": "verified",
       "dependsOn": [
         "P04-BE-01"
       ],
       "blockers": [
-        "X1: visual fidelity"
-      ]
+        "X1: export parity",
+        "X8: taxonomy data"
+      ],
+      "worktree": "worktrees/figma/fe-p04-public",
+      "commit": "8df5f38",
+      "base": "feat/manara-p03-email-change-ui"
     },
     {
       "id": "P05-FE-01",
       "phase": "05",
       "repo": "frontend",
       "branch": "feat/manara-p05-checkout-sheet",
-      "implementation": "queued",
+      "implementation": "ready",
       "dependsOn": [
         "P04-FE-01"
       ],
