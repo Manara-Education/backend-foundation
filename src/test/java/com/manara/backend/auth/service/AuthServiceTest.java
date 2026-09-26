@@ -33,6 +33,10 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -86,6 +90,10 @@ class AuthServiceTest {
     // Real as well: plain rules over a bundled list. Left out, @InjectMocks would pass null.
     @Spy
     private final PasswordPolicy passwordPolicy = PasswordPolicy.standard();
+
+    // Fixed, so the password timestamp written by change and reset can be asserted exactly.
+    @Spy
+    private final Clock clock = Clock.fixed(Instant.parse("2026-09-20T10:15:30Z"), ZoneOffset.UTC);
 
     @InjectMocks
     private AuthService authService;
@@ -167,6 +175,9 @@ class AuthServiceTest {
         assertThat(savedUser.getValue().getPassword()).isEqualTo(NEW_HASH);
         assertThat(savedUser.getValue().getPassword()).isNotEqualTo(NEW_PASSWORD);
         assertThat(savedUser.getValue().isRequiresPasswordReset()).isFalse();
+        assertThat(savedUser.getValue().getPasswordChangedAt())
+                .as("the account screen's 'last changed' date is written with the hash")
+                .isEqualTo(LocalDateTime.of(2026, 9, 20, 10, 15, 30));
 
         // The epoch moves with the hash, so the account's other devices are refused on their
         // next request, and the caller is re-established on a session stamped with the new value.
@@ -196,6 +207,7 @@ class AuthServiceTest {
         verify(userRepository, never()).save(any());
         assertThat(flagged.getPassword()).isEqualTo(CURRENT_HASH);
         assertThat(flagged.isRequiresPasswordReset()).isTrue();
+        assertThat(flagged.getPasswordChangedAt()).as("a refused change is not a change").isNull();
     }
 
     @Test
@@ -229,6 +241,8 @@ class AuthServiceTest {
         verify(userRepository).save(savedUser.capture());
         assertThat(savedUser.getValue().getPassword()).isEqualTo(NEW_HASH);
         assertThat(savedUser.getValue().isRequiresPasswordReset()).isFalse();
+        assertThat(savedUser.getValue().getPasswordChangedAt())
+                .isEqualTo(LocalDateTime.of(2026, 9, 20, 10, 15, 30));
     }
 
     private ChangePasswordRequest changeRequest(String newPassword) {

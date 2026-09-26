@@ -23,6 +23,9 @@ public class ProfileMapper {
                 .email(user.getEmail())
                 .role(user.getRole().name())
                 .createdAt(user.getCreatedAt())
+                .avatarUrl(user.getAvatarUrl())
+                .emailVerified(user.isEmailVerified())
+                .passwordChangedAt(user.getPasswordChangedAt())
                 .build();
     }
 }
