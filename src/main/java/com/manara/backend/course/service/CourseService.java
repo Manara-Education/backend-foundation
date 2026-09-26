@@ -274,7 +274,7 @@ public class CourseService {
         if (request.carriesImage()) {
             onCourse.metadata(course.getImage(), request.imageValue(), course::setImage);
         }
-        if (request.carriesCategory()) {
+        if (request.carriesCategory() && !keepsCategory(course, request.categoryIdValue())) {
             onCourse.metadata(course.getCategory(), resolveCategory(request.categoryIdValue()), course::setCategory);
         }
         // A structure switch re-parents or discards content, so it is curriculum, not commerce.
@@ -665,6 +665,14 @@ public class CourseService {
             return courseRepository.findAllOwnedByUserWithInstructor(user.getId());
         }
         throw new BusinessException("error.course.onlyInstructor");
+    }
+
+    /**
+     * An editor echoing the course's own category back is not choosing it again. Without this, a
+     * course whose category was retired after it was assigned could not be saved at all.
+     */
+    private static boolean keepsCategory(Course course, Long categoryId) {
+        return categoryId != null && course.getCategory() != null && categoryId.equals(course.getCategory().getId());
     }
 
     /** {@code null} clears; any other id must name a category that is still offered. */

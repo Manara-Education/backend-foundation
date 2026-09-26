@@ -162,6 +162,14 @@ class PublicCatalogueDetailsTest extends AbstractCourseAuthoringTest {
         jdbcTemplate.update("UPDATE course_categories SET active = false WHERE id = ?", active);
 
         assertThat(data(anonymousBody(id)).get("category").isNull()).isTrue();
+
+        // The course can still be saved with its (now retired) category echoed back unchanged.
+        CourseRequest echo = flatCourse("Later retired, renamed", CourseStatus.PUBLISHED, CourseVisibility.PUBLIC);
+        echo.setLessons(null);
+        echo.setExpectedRevision(reload(id).getRevision());
+        echo.setCategoryId(Patch.of(active));
+        courseService.updateCourse(instructorUser, id, echo);
+        assertThat(jdbcTemplate.queryForObject("SELECT category_id FROM courses WHERE id = ?", Long.class, id)).isEqualTo(active);
     }
 
     @Test
