@@ -32,9 +32,9 @@ Current history ends at `V16__one_active_otp_per_user_and_type.sql`.
 
 | Version | Phase/task | Content |
 |---|---|---|
-| V17 | P02-BE-01 | `users.avatar_url`, `users.password_changed_at` (NULL for existing rows), `instructors.headline` |
+| V17 | P02-BE-01 | `users.avatar_url`, `users.password_changed_at` (NULL for existing rows) — **used** (`10e0007`) |
 | V18 | P03-BE-01 | email-change pending address on `otps` (or side table), `EMAIL_CHANGE` otp type |
-| V19 | P04-BE-01 | `course_categories`, `courses.category_id` |
+| V19 | P04-BE-01 | `course_categories`, `courses.category_id`, `instructors.headline` |
 | V20 | P06-BE-01 | `payment_transactions`, `payment_receipts` |
 
 Re-check `origin/develop` before creating each file; if develop moved past a number, shift every

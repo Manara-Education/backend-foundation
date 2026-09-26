@@ -1,23 +1,197 @@
 {
   "schema": 1,
-  "updatedAt": "2026-09-26T00:00:00+03:00",
+  "updatedAt": "2026-09-26T22:10:00+03:00",
   "canonicalLocation": "backend-foundation/docs/manara-figma-integration",
-  "base": { "backend": "ac72672723defd03e160b69b59914c51e6bbd492", "frontend": "d4094cfaa26c7a74758312ae6300d35a90e82d9c" },
-  "resume": { "next": "P02-BE-01", "note": "Phase 00 docs written; start profile API." },
+  "base": {
+    "backend": "ac72672723defd03e160b69b59914c51e6bbd492",
+    "frontend": "d4094cfaa26c7a74758312ae6300d35a90e82d9c"
+  },
+  "resume": {
+    "next": "P03-BE-01",
+    "note": "P00–P02 committed locally; PRs not opened yet (Codex MCP down; draft PRs to be opened in one batch)."
+  },
   "tasks": [
-    { "id": "P00-DOC-01", "phase": "00", "repo": "backend", "branch": "update/manara-figma-integration-plan", "worktree": "worktrees/figma/be-p00-docs", "implementation": "implemented", "commit": null, "pr": null, "validation": "docs-only", "blockers": [] },
-    { "id": "P00-DOC-02", "phase": "00", "repo": "frontend", "branch": "update/manara-figma-integration-link", "worktree": "worktrees/figma/fe-p00-docs", "implementation": "implemented", "commit": null, "pr": null, "validation": "docs-only", "blockers": [] },
-    { "id": "P01-FE-01", "phase": "01", "repo": "frontend", "branch": "feat/manara-p01-settings-shell", "implementation": "ready", "blockers": ["X1: Appearance exact port and visual fidelity"] },
-    { "id": "P02-BE-01", "phase": "02", "repo": "backend", "branch": "feat/manara-p02-profile-api", "implementation": "ready", "migration": "V17", "blockers": [] },
-    { "id": "P02-FE-01", "phase": "02", "repo": "frontend", "branch": "feat/manara-p02-avatar-ui", "implementation": "queued", "dependsOn": ["P01-FE-01", "P02-BE-01"], "blockers": ["X1: photo editor visuals"] },
-    { "id": "P03-BE-01", "phase": "03", "repo": "backend", "branch": "feat/manara-p03-email-change", "implementation": "queued", "migration": "V18", "dependsOn": ["P02-BE-01"], "blockers": [] },
-    { "id": "P03-FE-01", "phase": "03", "repo": "frontend", "branch": "feat/manara-p03-email-change-ui", "implementation": "queued", "dependsOn": ["P02-FE-01", "P03-BE-01"], "blockers": [] },
-    { "id": "P04-BE-01", "phase": "04", "repo": "backend", "branch": "feat/manara-p04-public-catalogue", "implementation": "queued", "migration": "V19", "dependsOn": ["P02-BE-01"], "blockers": [] },
-    { "id": "P04-FE-01", "phase": "04", "repo": "frontend", "branch": "feat/manara-p04-public-courses-ui", "implementation": "queued", "dependsOn": ["P04-BE-01"], "blockers": ["X1: visual fidelity"] },
-    { "id": "P05-FE-01", "phase": "05", "repo": "frontend", "branch": "feat/manara-p05-checkout-sheet", "implementation": "queued", "dependsOn": ["P04-FE-01"], "blockers": ["X1: visual fidelity"] },
-    { "id": "P06-BE-01", "phase": "06", "repo": "backend", "branch": "feat/manara-p06-billing-ledger", "implementation": "queued", "migration": "V20", "dependsOn": ["P02-BE-01"], "blockers": ["X6: formal invoices (receipts only)"] },
-    { "id": "P06-FE-01", "phase": "06", "repo": "frontend", "branch": "feat/manara-p06-billing-history-ui", "implementation": "queued", "dependsOn": ["P05-FE-01", "P06-BE-01"], "blockers": [] },
-    { "id": "P07..P10", "phase": "07-10", "implementation": "blocked", "blockers": ["X3", "X4", "X5"] }
+    {
+      "id": "P00-DOC-01",
+      "phase": "00",
+      "repo": "backend",
+      "branch": "update/manara-figma-integration-plan",
+      "worktree": "worktrees/figma/be-p00-docs",
+      "implementation": "implemented",
+      "commit": "508c0cd",
+      "pr": null,
+      "validation": "docs-only",
+      "blockers": []
+    },
+    {
+      "id": "P00-DOC-02",
+      "phase": "00",
+      "repo": "frontend",
+      "branch": "update/manara-figma-integration-link",
+      "worktree": "worktrees/figma/fe-p00-docs",
+      "implementation": "implemented",
+      "commit": "632a387",
+      "pr": null,
+      "validation": "docs-only",
+      "blockers": []
+    },
+    {
+      "id": "P01-FE-01",
+      "phase": "01",
+      "repo": "frontend",
+      "branch": "feat/manara-p01-settings-shell",
+      "implementation": "partially_blocked",
+      "blockers": [
+        "X1: Appearance port and export parity"
+      ],
+      "worktree": "worktrees/figma/fe-p01-settings",
+      "commit": "3a1cd39",
+      "validation": {
+        "typecheck": "pass",
+        "test": "663/663",
+        "build": "pass",
+        "live": "screenshots 390/1280, live rename"
+      }
+    },
+    {
+      "id": "P02-BE-01",
+      "phase": "02",
+      "repo": "backend",
+      "branch": "feat/manara-p02-profile-api",
+      "implementation": "verified",
+      "migration": "V17",
+      "blockers": [],
+      "worktree": "worktrees/figma/be-p02-profile",
+      "commit": "10e0007",
+      "validation": {
+        "verify": "1365 tests, 0 failures, 1 skipped",
+        "live": "jar 8091"
+      }
+    },
+    {
+      "id": "P02-FE-01",
+      "phase": "02",
+      "repo": "frontend",
+      "branch": "feat/manara-p02-avatar-ui",
+      "implementation": "verified",
+      "dependsOn": [
+        "P01-FE-01",
+        "P02-BE-01"
+      ],
+      "blockers": [
+        "X1: export parity only"
+      ],
+      "worktree": "worktrees/figma/fe-p02-avatar",
+      "commit": "8422566",
+      "base": "feat/manara-p01-settings-shell",
+      "validation": {
+        "typecheck": "pass",
+        "test": "673/673",
+        "build": "pass",
+        "live": "browser upload + remove"
+      }
+    },
+    {
+      "id": "P03-BE-01",
+      "phase": "03",
+      "repo": "backend",
+      "branch": "feat/manara-p03-email-change",
+      "implementation": "ready",
+      "migration": "V18",
+      "dependsOn": [
+        "P02-BE-01"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "P03-FE-01",
+      "phase": "03",
+      "repo": "frontend",
+      "branch": "feat/manara-p03-email-change-ui",
+      "implementation": "queued",
+      "dependsOn": [
+        "P02-FE-01",
+        "P03-BE-01"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "P04-BE-01",
+      "phase": "04",
+      "repo": "backend",
+      "branch": "feat/manara-p04-public-catalogue",
+      "implementation": "ready",
+      "migration": "V19",
+      "dependsOn": [
+        "P02-BE-01"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "P04-FE-01",
+      "phase": "04",
+      "repo": "frontend",
+      "branch": "feat/manara-p04-public-courses-ui",
+      "implementation": "queued",
+      "dependsOn": [
+        "P04-BE-01"
+      ],
+      "blockers": [
+        "X1: visual fidelity"
+      ]
+    },
+    {
+      "id": "P05-FE-01",
+      "phase": "05",
+      "repo": "frontend",
+      "branch": "feat/manara-p05-checkout-sheet",
+      "implementation": "queued",
+      "dependsOn": [
+        "P04-FE-01"
+      ],
+      "blockers": [
+        "X1: visual fidelity"
+      ]
+    },
+    {
+      "id": "P06-BE-01",
+      "phase": "06",
+      "repo": "backend",
+      "branch": "feat/manara-p06-billing-ledger",
+      "implementation": "ready",
+      "migration": "V20",
+      "dependsOn": [
+        "P02-BE-01"
+      ],
+      "blockers": [
+        "X6: formal invoices (receipts only)"
+      ]
+    },
+    {
+      "id": "P06-FE-01",
+      "phase": "06",
+      "repo": "frontend",
+      "branch": "feat/manara-p06-billing-history-ui",
+      "implementation": "queued",
+      "dependsOn": [
+        "P05-FE-01",
+        "P06-BE-01"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "P07..P10",
+      "phase": "07-10",
+      "implementation": "blocked",
+      "blockers": [
+        "X3",
+        "X4",
+        "X5"
+      ]
+    }
   ],
-  "checkpoints": { "core": null, "final": null }
+  "checkpoints": {
+    "core": null,
+    "final": null
+  }
 }

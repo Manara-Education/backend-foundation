@@ -40,3 +40,9 @@ something that is not in either repository).
 | D9 | Historic purchases/subscriptions written before the ledger exists are surfaced as `LEGACY` provenance with only the evidence the row holds (`amount_paid`/`price_paid`, `payment_reference`). No invoice is fabricated for them. | Records need provenance. |
 | D10 | `MANARA_COMMERCE_MODE` semantics are unchanged by this programme. Production activation of any commerce mode is outside this run. | Master prompt §4. |
 | D11 | Flyway versions are allocated serially in `implementation-plan.md` (§Migrations) before a branch writes a file. | Dense versions collide across parallel branches (V1–V16 in use on `ac72672`). |
+
+## Observed defects outside this programme's scope
+
+| ID | Observation | Evidence | Status |
+|---|---|---|---|
+| O1 | A signed-in **student** calling the instructor-only `POST /api/v1/uploads` receives **401** and the session is ended (subsequent requests 401), instead of a 403 that keeps the session. The upload is still refused, so the authorisation invariant holds. MockMvc tests report 403 because they run without Spring Session's filter. | Reproduced 2026-09-26 against a jar built from `develop@ac72672` (negative control) and against `feat/manara-p02-profile-api`: identical. | Pre-existing; not fixed in phase 02. Candidate `fix/` task: investigate the error dispatch for access-denied multipart requests. |
