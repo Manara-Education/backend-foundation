@@ -7,8 +7,8 @@
     "frontend": "d4094cfaa26c7a74758312ae6300d35a90e82d9c"
   },
   "resume": {
-    "next": "P11-CORE",
-    "note": "P00–P06 committed and verified locally; run phase 11 core validation on the stack tops (BE cd90573 incl. P03 via P04? see note), then provider phases. PRs not opened yet."
+    "next": "P07 provider-neutral groundwork (capabilities)",
+    "note": "Core checkpoint done. PRs still not opened."
   },
   "tasks": [
     {
@@ -228,7 +228,12 @@
     }
   ],
   "checkpoints": {
-    "core": null,
+    "core": {
+      "file": "phase-11-core-validation.md",
+      "backend": "cd90573",
+      "frontend": "eb0194f",
+      "result": "verified with limitations (X1)"
+    },
     "final": null
   }
 }
