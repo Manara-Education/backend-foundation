@@ -254,6 +254,23 @@ class BillingFlowTest extends AbstractCourseAuthoringTest {
         assertThat(transactionCount(student)).isZero();
     }
 
+    // ── Capabilities ─────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("Capabilities say what this deployment supports and expose nothing secret")
+    void capabilities() throws Exception {
+        String body = mockMvc.perform(get("/api/v1/student/billing/capabilities").with(signedIn(newStudentUser())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.commerceMode").value("DEMONSTRATION"))
+                .andExpect(jsonPath("$.data.oneTimeCheckout").value(true))
+                .andExpect(jsonPath("$.data.simulated").value(true))
+                .andExpect(jsonPath("$.data.savedMethods").value(false))
+                .andExpect(jsonPath("$.data.methodTypes").isEmpty())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(body).doesNotContainIgnoringCase("secret").doesNotContainIgnoringCase("key");
+        mockMvc.perform(get("/api/v1/student/billing/capabilities")).andExpect(status().isUnauthorized());
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private Long purchaseCourse(String price) {
