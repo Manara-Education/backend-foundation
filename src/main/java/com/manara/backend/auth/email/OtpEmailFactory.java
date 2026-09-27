@@ -41,11 +41,19 @@ public class OtpEmailFactory {
      *                          shown to the user is the same value the OTP service actually applied
      */
     public EmailMessage create(String recipient, String code, OtpType type, int expirationMinutes) {
+        return create(recipient, code, messagePrefix(type), expirationMinutes);
+    }
+
+    /** The code that confirms a signed-in account's new address, sent to that new address. */
+    public EmailMessage createEmailChange(String recipient, String code, int expirationMinutes) {
+        return create(recipient, code, "email.otp.emailChange", expirationMinutes);
+    }
+
+    private EmailMessage create(String recipient, String code, String prefix, int expirationMinutes) {
         if (code == null || !SIX_DIGITS.matcher(code).matches()) {
             throw new IllegalArgumentException("OTP code must be exactly six digits");
         }
 
-        String prefix = messagePrefix(type);
         String title = messageService.get(prefix + ".title");
         String intro = messageService.get(prefix + ".intro");
         String expiryLead = messageService.get("email.otp.expiry.lead");
