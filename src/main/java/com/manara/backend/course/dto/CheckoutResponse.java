@@ -6,6 +6,9 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+
 /**
  * What a checkout produced.
  *
@@ -48,4 +51,22 @@ public class CheckoutResponse {
      * demonstration purchase as one rather than present it as a sale.
      */
     private boolean simulated;
+
+    // ── Ledger (additive; all null when this call charged nothing, e.g. a repeat or a free course) ──
+
+    /** The payment transaction's public reference. */
+    private String transactionId;
+
+    /** The transaction's status, e.g. {@code PAID}. */
+    private String transactionStatus;
+
+    /** What was charged, as recorded — the server's figure, never the client's. */
+    private BigDecimal amount;
+
+    private String currency;
+
+    private LocalDateTime paidAt;
+
+    /** The receipt issued for the charge; {@code DEMO-…} when it was simulated. */
+    private String receiptNumber;
 }

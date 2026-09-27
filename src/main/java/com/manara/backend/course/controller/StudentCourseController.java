@@ -1,6 +1,8 @@
 package com.manara.backend.course.controller;
 
 import com.manara.backend.common.dto.ApiResponse;
+import com.manara.backend.course.dto.CheckoutQuoteRequest;
+import com.manara.backend.course.dto.CheckoutQuoteResponse;
 import com.manara.backend.course.dto.CheckoutRequest;
 import com.manara.backend.course.dto.CheckoutResponse;
 import com.manara.backend.course.dto.CourseDetailsResponse;
@@ -9,8 +11,8 @@ import com.manara.backend.course.dto.CourseViewMode;
 import com.manara.backend.course.service.CourseCheckoutService;
 import com.manara.backend.course.service.CourseService;
 import com.manara.backend.user.model.User;
-import lombok.RequiredArgsConstructor;
 import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -67,5 +69,17 @@ public class StudentCourseController {
             @PathVariable Long courseId,
             @Valid @RequestBody(required = false) CheckoutRequest request) {
         return ApiResponse.success(courseCheckoutService.checkout(user, courseId, request));
+    }
+
+    /**
+     * The server's order summary for a checkout: price, fixed access term and whether it can be
+     * paid now. Charges nothing and authorises nothing — checkout prices the order again itself.
+     */
+    @PostMapping("/{courseId}/checkout/quote")
+    public ApiResponse<CheckoutQuoteResponse> quote(
+            @AuthenticationPrincipal User user,
+            @PathVariable Long courseId,
+            @RequestBody(required = false) CheckoutQuoteRequest request) {
+        return ApiResponse.success(courseCheckoutService.quote(user, courseId, request == null ? null : request.getPlanId()));
     }
 }

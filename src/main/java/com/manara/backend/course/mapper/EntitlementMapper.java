@@ -11,6 +11,7 @@ import com.manara.backend.course.model.SubscriptionStatus;
 import com.manara.backend.course.service.CourseAccess;
 import com.manara.backend.payment.model.PaymentReceipt;
 import com.manara.backend.profile.model.Student;
+import com.manara.backend.billing.service.LedgerEntry;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
@@ -80,7 +81,8 @@ public class EntitlementMapper {
     }
 
     public CheckoutResponse toCheckoutResponse(
-            Course course, Long enrollmentId, CourseAccess access, PaymentReceipt receipt) {
+            Course course, Long enrollmentId, CourseAccess access, PaymentReceipt receipt, LedgerEntry ledger) {
+        var transaction = ledger == null ? null : ledger.transaction();
         return CheckoutResponse.builder()
                 .enrollmentId(enrollmentId)
                 .courseId(course.getId())
@@ -88,6 +90,12 @@ public class EntitlementMapper {
                 .access(toCourseAccessResponse(access))
                 .paymentReference(receipt == null ? null : receipt.reference())
                 .simulated(receipt != null && receipt.simulated())
+                .transactionId(transaction == null ? null : transaction.getReference().toString())
+                .transactionStatus(transaction == null ? null : transaction.getStatus().name())
+                .amount(transaction == null ? null : transaction.getAmount())
+                .currency(transaction == null ? null : transaction.getCurrency())
+                .paidAt(transaction == null ? null : transaction.getPaidAt())
+                .receiptNumber(ledger == null || ledger.receipt() == null ? null : ledger.receipt().getNumber())
                 .build();
     }
 }

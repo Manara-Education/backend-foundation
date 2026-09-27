@@ -121,6 +121,21 @@
 			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
 			<version>3.1.1</version>
 		</dependency>
+		<!--
+			Receipt PDFs. openhtmltopdf renders an HTML template with PDFBox; its rtl-support module
+			brings ICU4J for Arabic shaping and bidirectional layout, which PDFBox alone does not do.
+			Templates and fonts are bundled resources — nothing is fetched while rendering.
+		-->
+		<dependency>
+			<groupId>io.github.openhtmltopdf</groupId>
+			<artifactId>openhtmltopdf-pdfbox</artifactId>
+			<version>1.1.87</version>
+		</dependency>
+		<dependency>
+			<groupId>io.github.openhtmltopdf</groupId>
+			<artifactId>openhtmltopdf-rtl-support</artifactId>
+			<version>1.1.87</version>
+		</dependency>
 		<dependency>
 			<groupId>com.resend</groupId>
 			<artifactId>resend-java</artifactId>

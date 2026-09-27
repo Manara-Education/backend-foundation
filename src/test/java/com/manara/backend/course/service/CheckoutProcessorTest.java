@@ -1,5 +1,6 @@
 package com.manara.backend.course.service;
 
+import com.manara.backend.billing.service.BillingLedger;
 import com.manara.backend.common.exception.BusinessException;
 import com.manara.backend.common.exception.ErrorCode;
 import com.manara.backend.common.exception.ResourceNotFoundException;
@@ -11,14 +12,14 @@ import com.manara.backend.course.model.CourseAccessType;
 import com.manara.backend.course.model.CourseEntitlement;
 import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseSubscription;
-import com.manara.backend.course.model.EntitlementSource;
 import com.manara.backend.course.model.Enrollment;
+import com.manara.backend.course.model.EntitlementSource;
 import com.manara.backend.course.model.SubscriptionPlan;
 import com.manara.backend.course.model.SubscriptionStatus;
 import com.manara.backend.course.model.SubscriptionUnit;
 import com.manara.backend.course.repository.CourseEntitlementRepository;
-import com.manara.backend.course.repository.CourseRepository;
 import com.manara.backend.course.repository.CoursePurchaseRepository;
+import com.manara.backend.course.repository.CourseRepository;
 import com.manara.backend.course.repository.CourseSubscriptionRepository;
 import com.manara.backend.course.repository.EnrollmentRepository;
 import com.manara.backend.course.repository.SubscriptionPlanRepository;
@@ -70,6 +71,9 @@ class CheckoutProcessorTest {
     private static final Long COURSE_ID = 7L;
     private static final Long STUDENT_ID = 20L;
     private static final LocalDateTime NOW = LocalDateTime.of(2026, 8, 21, 12, 0);
+
+    @Mock
+    private BillingLedger billingLedger;
 
     @Mock
     private CourseRepository courseRepository;
@@ -578,14 +582,44 @@ class CheckoutProcessorTest {
         assertThat(response.isSimulated()).isFalse();
     }
 
+    @Test
+    void inFreeOnlyAPaidQuoteIsPricedButNotPayable() {
+        CheckoutProcessor freeOnly = processorIn(CommerceMode.FREE_ONLY);
+        given(studentRepository.findByUserId(2L)).willReturn(Optional.of(student));
+        givenCourse(CourseAccessType.PURCHASE, new BigDecimal("450"));
+
+        var quote = freeOnly.quote(studentUser, COURSE_ID, null);
+
+        assertThat(quote.amount()).isEqualByComparingTo("450.00");
+        assertThat(quote.payable()).isFalse();
+        assertThat(quote.unavailableReason()).isEqualTo("PAYMENTS_UNAVAILABLE");
+        assertThat(quote.simulated()).isFalse();
+        verify(paymentGateway, never()).charge(any(), any());
+    }
+
+    @Test
+    void aPurchaseCourseWithoutAPriceIsNotQuotedAsFree() {
+        CheckoutProcessor demo = processorIn(CommerceMode.DEMONSTRATION);
+        given(studentRepository.findByUserId(2L)).willReturn(Optional.of(student));
+        givenCourse(CourseAccessType.PURCHASE, null);
+
+        assertThatThrownBy(() -> demo.quote(studentUser, COURSE_ID, null))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("error.course.purchasePriceRequired");
+    }
+
     // --- fixtures ------------------------------------------------------------
 
     private CheckoutProcessor processorIn(CommerceMode mode) {
         Clock fixed = Clock.fixed(NOW.toInstant(ZoneOffset.UTC), ZoneId.of("UTC"));
+        // The ledger is covered by its own tests; here a saved row is simply handed back.
+        lenient().when(coursePurchaseRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        lenient().when(courseSubscriptionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         return new CheckoutProcessor(
                 courseRepository, studentRepository, enrollmentRepository, courseEntitlementRepository,
                 coursePurchaseRepository, courseSubscriptionRepository, subscriptionPlanRepository, new CourseMapper(),
-                new EntitlementMapper(), entitlementPolicy, new SubscriptionWindow(), paymentGateway, mode, fixed);
+                new EntitlementMapper(), entitlementPolicy, new SubscriptionWindow(), paymentGateway, billingLedger,
+                mode, fixed);
     }
 
     private Course givenCourse(CourseAccessType accessType, BigDecimal purchasePrice) {
