@@ -1,8 +1,11 @@
 package com.manara.backend.course.service;
 
+import com.manara.backend.billing.service.BillingLedger;
+import com.manara.backend.billing.service.LedgerEntry;
 import com.manara.backend.common.exception.BusinessException;
 import com.manara.backend.common.exception.ErrorCode;
 import com.manara.backend.common.exception.ResourceNotFoundException;
+import com.manara.backend.course.dto.CheckoutQuoteResponse;
 import com.manara.backend.course.dto.CheckoutRequest;
 import com.manara.backend.course.dto.CheckoutResponse;
 import com.manara.backend.course.mapper.CourseMapper;
@@ -14,8 +17,8 @@ import com.manara.backend.course.model.CoursePurchase;
 import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseSubscription;
 import com.manara.backend.course.model.CourseVisibility;
-import com.manara.backend.course.model.EntitlementSource;
 import com.manara.backend.course.model.Enrollment;
+import com.manara.backend.course.model.EntitlementSource;
 import com.manara.backend.course.model.SubscriptionPlan;
 import com.manara.backend.course.model.SubscriptionStatus;
 import com.manara.backend.course.repository.CourseEntitlementRepository;
@@ -39,6 +42,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -88,6 +92,7 @@ public class CheckoutProcessor {
     private final EntitlementPolicy entitlementPolicy;
     private final SubscriptionWindow subscriptionWindow;
     private final PaymentGateway paymentGateway;
+    private final BillingLedger billingLedger;
     /** Published by CommerceConfig; decides whether paid checkout is open and what a simulated receipt may grant. */
     private final CommerceMode commerceMode;
     private final Clock clock;
@@ -110,7 +115,7 @@ public class CheckoutProcessor {
 
         // Already open: this is a repeat of a checkout that succeeded. Same answer, no charge.
         if (entitlement != null && entitlement.isActiveAt(now)) {
-            return respond(course, student, null);
+            return respond(course, student, null, null);
         }
 
         // A deployment that takes no payments refuses a paid course here, before the switch below
@@ -120,26 +125,75 @@ public class CheckoutProcessor {
             throw new BusinessException(ErrorCode.PAYMENTS_UNAVAILABLE, "error.payment.unavailable");
         }
 
-        PaymentReceipt receipt = switch (course.getAccessType()) {
+        Charged charged = switch (course.getAccessType()) {
             case FREE -> grantFree(course, student, entitlement, now);
             case PURCHASE -> grantPurchase(course, student, entitlement, request, now);
             case SUBSCRIPTION -> grantSubscription(course, student, entitlement, request, now);
         };
 
         ensureEnrolled(course, student);
-        return respond(course, student, receipt);
+        return charged == null
+                ? respond(course, student, null, null)
+                : respond(course, student, charged.receipt(), charged.ledger());
     }
 
-    // --- the three paths -----------------------------------------------------
+    /** A charge that was accepted, and the ledger entry recorded for it in the same transaction. */
+    private record Charged(PaymentReceipt receipt, LedgerEntry ledger) {
+    }
 
-    private PaymentReceipt grantFree(
+    /**
+     * The order summary for a checkout, priced exactly as {@link #checkout} would price it and
+     * refused for the same reasons, without charging or writing anything.
+     */
+    public CheckoutQuoteResponse quote(User user, Long courseId, Long planId) {
+        Student student = requireStudent(user);
+        Course course = requireAcquirableCourse(courseId, student);
+        LocalDateTime now = LocalDateTime.now(clock);
+        boolean simulated = commerceMode == CommerceMode.DEMONSTRATION;
+        boolean entitled = courseEntitlementRepository.findByCourseIdAndStudentId(courseId, student.getId())
+                .filter(entitlement -> entitlement.isActiveAt(now))
+                .isPresent();
+
+        return switch (course.getAccessType()) {
+            case FREE -> new CheckoutQuoteResponse(courseId, null, CourseAccessType.FREE,
+                    BigDecimal.ZERO.setScale(2), BigDecimal.ZERO.setScale(2), BigDecimal.ZERO.setScale(2), null,
+                    "PERPETUAL", null, null, null, !entitled, entitled ? "ALREADY_ENTITLED" : null, false);
+            case PURCHASE -> {
+                BigDecimal price = course.getPurchasePrice();
+                if (price == null || price.compareTo(BigDecimal.ZERO) <= 0) {
+                    throw new BusinessException("error.course.purchasePriceRequired");
+                }
+                yield paidQuote(courseId, null, CourseAccessType.PURCHASE, price, "PERPETUAL", null, null, null,
+                        entitled, simulated);
+            }
+            case SUBSCRIPTION -> {
+                SubscriptionPlan plan = requirePlanOfCourse(course, CheckoutRequest.builder().planId(planId).build());
+                yield paidQuote(courseId, plan.getId(), CourseAccessType.SUBSCRIPTION, plan.getPrice(), "FIXED_TERM",
+                        plan.getDuration(), plan.getUnit().name(), "FIXED", entitled, simulated);
+            }
+        };
+    }
+
+    private CheckoutQuoteResponse paidQuote(Long courseId, Long planId, CourseAccessType type, BigDecimal price,
+                                            String kind, Integer duration, String unit, String renewal,
+                                            boolean entitled, boolean simulated) {
+        BigDecimal amount = price.setScale(2, RoundingMode.HALF_UP);
+        String reason = entitled ? "ALREADY_ENTITLED"
+                : commerceMode == CommerceMode.FREE_ONLY ? ErrorCode.PAYMENTS_UNAVAILABLE.name() : null;
+        return new CheckoutQuoteResponse(courseId, planId, type, amount, BigDecimal.ZERO.setScale(2), amount, CURRENCY,
+                kind, duration, unit, renewal, reason == null, reason, simulated);
+    }
+
+        // --- the three paths -----------------------------------------------------
+
+    private Charged grantFree(
             Course course, Student student, CourseEntitlement existing, LocalDateTime now) {
         // No payment, no card, no plan. Enrolling is the whole transaction.
         upsertPerpetual(course, student, existing, EntitlementSource.FREE, now);
         return null;
     }
 
-    private PaymentReceipt grantPurchase(
+    private Charged grantPurchase(
             Course course, Student student, CourseEntitlement existing,
             CheckoutRequest request, LocalDateTime now) {
 
@@ -158,7 +212,7 @@ public class CheckoutProcessor {
         // a receipt for access nobody has. Until this row existed the purchase path kept nothing at
         // all, and repricing the course destroyed the only remaining evidence of what its existing
         // buyers were charged.
-        coursePurchaseRepository.save(CoursePurchase.builder()
+        CoursePurchase purchase = coursePurchaseRepository.save(CoursePurchase.builder()
                 .course(course)
                 .student(student)
                 .listPrice(price)
@@ -168,11 +222,13 @@ public class CheckoutProcessor {
                 .purchasedAt(receipt.paidAt())
                 .build());
 
+        LedgerEntry ledger = billingLedger.recordPurchase(student, course, purchase.getId(), receipt, CURRENCY);
+
         upsertPerpetual(course, student, existing, EntitlementSource.PURCHASE, now);
-        return receipt;
+        return new Charged(receipt, ledger);
     }
 
-    private PaymentReceipt grantSubscription(
+    private Charged grantSubscription(
             Course course, Student student, CourseEntitlement existing,
             CheckoutRequest request, LocalDateTime now) {
 
@@ -190,8 +246,10 @@ public class CheckoutProcessor {
                 paymentMethodOf(request)));
 
         closeOpenTerms(course, student);
-        courseSubscriptionRepository.save(
+        CourseSubscription subscription = courseSubscriptionRepository.save(
                 entitlementMapper.toSubscription(course, student, plan, startsAt, expiresAt, receipt));
+        LedgerEntry ledger = billingLedger.recordSubscription(student, course, subscription.getId(), plan.getId(),
+                course.getTitle() + " - " + plan.getName(), receipt, CURRENCY);
 
         if (existing == null) {
             courseEntitlementRepository.save(entitlementMapper.toSubscriptionEntitlement(
@@ -205,7 +263,7 @@ public class CheckoutProcessor {
             existing.setExpiresAt(expiresAt);
             courseEntitlementRepository.save(existing);
         }
-        return receipt;
+        return new Charged(receipt, ledger);
     }
 
     // --- shared steps --------------------------------------------------------
@@ -250,7 +308,7 @@ public class CheckoutProcessor {
         courseSubscriptionRepository.saveAll(open);
     }
 
-    private CheckoutResponse respond(Course course, Student student, PaymentReceipt receipt) {
+    private CheckoutResponse respond(Course course, Student student, PaymentReceipt receipt, LedgerEntry ledger) {
         // Flushed first so the access read below sees the rows this transaction just wrote.
         courseEntitlementRepository.flush();
         enrollmentRepository.flush();
@@ -263,7 +321,8 @@ public class CheckoutProcessor {
                 course,
                 enrollment == null ? null : enrollment.getId(),
                 entitlementPolicy.accessOf(course.getId(), student),
-                receipt);
+                receipt,
+                ledger);
     }
 
     /**

@@ -8,6 +8,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 
 @Repository
@@ -29,4 +31,7 @@ public interface CourseEntitlementRepository extends JpaRepository<CourseEntitle
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select e from CourseEntitlement e where e.course.id = :courseId and e.student.id = :studentId")
     Optional<CourseEntitlement> findForUpdate(@Param("courseId") Long courseId, @Param("studentId") Long studentId);
+
+    /** One learner's entitlements to any of these courses, for showing access beside billing records. */
+    List<CourseEntitlement> findByStudentIdAndCourseIdIn(Long studentId, Collection<Long> courseIds);
 }

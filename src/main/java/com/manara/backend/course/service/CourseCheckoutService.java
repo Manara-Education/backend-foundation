@@ -1,5 +1,6 @@
 package com.manara.backend.course.service;
 
+import com.manara.backend.course.dto.CheckoutQuoteResponse;
 import com.manara.backend.course.dto.CheckoutRequest;
 import com.manara.backend.course.dto.CheckoutResponse;
 import com.manara.backend.user.model.User;
@@ -40,5 +41,9 @@ public class CourseCheckoutService {
                     concurrentCheckout);
             return checkoutProcessor.checkout(user, courseId, request);
         }
+    }
+
+    public CheckoutQuoteResponse quote(User user, Long courseId, Long planId) {
+        return checkoutProcessor.quote(user, courseId, planId);
     }
 }
