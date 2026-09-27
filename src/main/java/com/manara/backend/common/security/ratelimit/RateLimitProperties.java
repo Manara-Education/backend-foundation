@@ -62,6 +62,10 @@ public record RateLimitProperties(boolean enabled, List<RateLimitRule> rules) {
                 // restricted to authenticated instructors, so this is a ceiling on damage from
                 // one compromised account, not a gate on normal use.
                 new RateLimitRule("upload", HttpMethod.POST, "/api/v1/uploads", 60, Duration.ofMinutes(10)),
+                // Every signed-in account may replace its photo, so this is the one upload a student
+                // can reach. Each replacement releases the previous file, but a loop could still keep
+                // the decoder busy; twenty in ten minutes is ample for someone choosing a picture.
+                new RateLimitRule("avatar", HttpMethod.POST, "/api/v1/profile/avatar", 20, Duration.ofMinutes(10)),
 
                 // --- Anonymous reads -----------------------------------------------------
                 // The public catalogue is the one read of application data that needs no account,

@@ -6,6 +6,8 @@ import com.manara.backend.user.model.User;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDateTime;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -26,9 +28,13 @@ class AuthMapperTest {
                         .email("student@manara.com")
                         .build(),
                 "$2a$10$hash",
-                Role.STUDENT);
+                Role.STUDENT,
+                LocalDateTime.of(2026, 9, 20, 10, 0));
 
         assertThat(user.isRequiresPasswordReset()).isFalse();
+        assertThat(user.getPasswordChangedAt())
+                .as("registration sets the first password, so it is the first change on record")
+                .isEqualTo(LocalDateTime.of(2026, 9, 20, 10, 0));
     }
 
     @Test
@@ -56,7 +62,8 @@ class AuthMapperTest {
                         .email("  Student@Manara.com  ")
                         .build(),
                 "$2a$10$hash",
-                Role.STUDENT);
+                Role.STUDENT,
+                LocalDateTime.of(2026, 9, 20, 10, 0));
 
         assertThat(user.getEmail()).isEqualTo("student@manara.com");
     }

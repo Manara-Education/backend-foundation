@@ -1,8 +1,6 @@
 package com.manara.backend.profile.service;
 
-import com.manara.backend.common.dto.MessageResponse;
 import com.manara.backend.common.exception.ResourceNotFoundException;
-import com.manara.backend.common.service.MessageService;
 import com.manara.backend.profile.dto.ProfileResponse;
 import com.manara.backend.profile.dto.UpdateProfileRequest;
 import com.manara.backend.profile.mapper.ProfileMapper;
@@ -18,7 +16,6 @@ import org.springframework.transaction.annotation.Transactional;
 public class ProfileService {
 
     private final UserRepository userRepository;
-    private final MessageService messageService;
     private final ProfileMapper profileMapper;
 
     public ProfileResponse getProfile(User principal) {
@@ -43,16 +40,17 @@ public class ProfileService {
      * re-read serves {@link #getProfile}, which otherwise answers from the sign-in snapshot and can
      * show a stale name straight after a successful rename.
      *
+     * <p>Answers with the whole profile as it now stands, so a client can refresh every place the
+     * name is shown without a second read.
+     *
      * <p>Read-then-mutate rather than a {@code @Modifying} update on purpose: a bulk update
      * bypasses {@code @PreUpdate}, so {@code updated_at} would quietly stop advancing.
      */
     @Transactional
-    public MessageResponse updateProfile(User principal, UpdateProfileRequest request) {
-        currentAccount(principal).setFullName(request.getFullName());
-
-        return MessageResponse.builder()
-                .message(messageService.get("profile.update.success"))
-                .build();
+    public ProfileResponse updateProfile(User principal, UpdateProfileRequest request) {
+        User account = currentAccount(principal);
+        account.setFullName(request.getFullName());
+        return profileMapper.toProfileResponse(account);
     }
 
     /**

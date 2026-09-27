@@ -4,7 +4,9 @@ import com.manara.backend.common.util.EmailAddress;
 import com.manara.backend.user.model.Role;
 import com.manara.backend.user.model.User;
 import org.jspecify.annotations.NonNull;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -115,4 +117,16 @@ public interface UserRepository extends JpaRepository<@NonNull User, @NonNull Lo
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("update User u set u.authVersion = u.authVersion + 1 where u.id = :id")
     int bumpAuthVersion(@Param("id") Long id);
+
+    /**
+     * The row, locked until the surrounding transaction ends. Used where a write replaces a value
+     * whose previous content must then be cleaned up — the profile photo — so two concurrent
+     * replacements cannot both read the same "previous" value and leave one file unreferenced.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select u from User u where u.id = :id")
+    Optional<User> findForUpdateById(@Param("id") Long id);
+
+    /** How many accounts show this URL as their photo. Keeps a still-used file from being released. */
+    long countByAvatarUrl(String avatarUrl);
 }

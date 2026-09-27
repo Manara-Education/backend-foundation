@@ -7,6 +7,8 @@ import com.manara.backend.user.model.Role;
 import com.manara.backend.user.model.User;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDateTime;
+
 @Component
 public class AuthMapper {
 
@@ -20,12 +22,13 @@ public class AuthMapper {
      * only ever holds the canonical form" true of every row, not merely of rows that came in over
      * HTTP.
      */
-    public User toUser(RegisterRequest request, String encodedPassword, Role role) {
+    public User toUser(RegisterRequest request, String encodedPassword, Role role, LocalDateTime passwordSetAt) {
         return User.builder()
                 .fullName(request.getFullName())
                 .email(EmailAddress.canonical(request.getEmail()))
                 .password(encodedPassword)
                 .role(role)
+                .passwordChangedAt(passwordSetAt)
                 .build();
     }
 
@@ -35,6 +38,7 @@ public class AuthMapper {
                 .email(user.getEmail())
                 .role(user.getRole().name())
                 .requiresPasswordReset(user.isRequiresPasswordReset())
+                .avatarUrl(user.getAvatarUrl())
                 .build();
     }
 }

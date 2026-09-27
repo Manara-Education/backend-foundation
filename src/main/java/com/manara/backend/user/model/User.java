@@ -102,6 +102,21 @@ public class User implements UserDetails {
     @Column(nullable = false)
     private long authVersion = 0L;
 
+    /**
+     * The account's own profile photo: a single-segment {@code /uploads/<name>} URL written only by
+     * {@code ProfileAvatarService}, or {@code null} for none. Never a URL a client supplied.
+     */
+    @Column(name = "avatar_url")
+    private String avatarUrl;
+
+    /**
+     * When the password was last set by registration, change-password or reset-password, in the
+     * same transaction as the hash. {@code null} for accounts created before this was recorded:
+     * unknown, and deliberately not back-filled from {@code createdAt}, which is a different fact.
+     */
+    @Column(name = "password_changed_at")
+    private LocalDateTime passwordChangedAt;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
