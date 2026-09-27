@@ -41,6 +41,9 @@ public class InstructorCourseResponse {
     private Long instructorId;
     private String instructorName;
 
+    /** {@code null} when the course is uncategorised. */
+    private Long categoryId;
+
     private CourseStructure structure;
     private CourseStatus status;
 

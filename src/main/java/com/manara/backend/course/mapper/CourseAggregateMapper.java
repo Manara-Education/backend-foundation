@@ -56,6 +56,7 @@ public class CourseAggregateMapper {
                 .studentsCount(course.getStudentsCount())
                 .instructorId(course.getInstructor().getId())
                 .instructorName(course.getInstructor().getUser().getFullName())
+                .categoryId(course.getCategory() == null ? null : course.getCategory().getId())
                 .structure(course.getStructure())
                 .status(course.getStatus())
                 .visibility(course.getVisibility())

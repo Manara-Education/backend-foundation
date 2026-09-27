@@ -175,10 +175,11 @@ class PublicCourseApiTest extends AbstractCourseAuthoringTest {
 
             assertThat(fieldNames(data(listBody))).containsExactly("items", "page", "size", "totalItems", "totalPages");
             assertThat(fieldNames(listEntry(id))).containsExactly(
-                    "id", "title", "subtitle", "imageUrl", "instructorName", "durationSeconds", "lessonCount", "offer");
+                    "id", "title", "subtitle", "imageUrl", "instructorName", "durationSeconds", "lessonCount", "offer",
+                    "category");
             assertThat(fieldNames(data(detailBody))).containsExactly(
                     "id", "title", "subtitle", "description", "imageUrl", "instructorName", "durationSeconds",
-                    "lessonCount", "offer");
+                    "lessonCount", "offer", "category", "instructor", "outline");
             assertThat(detailBody).contains("\"purchasePrice\":450.00");
             assertThat(json.readTree(detailBody).get("status").asString()).isEqualTo("success");
         }

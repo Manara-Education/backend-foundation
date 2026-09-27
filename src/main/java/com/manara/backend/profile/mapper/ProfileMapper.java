@@ -1,5 +1,6 @@
 package com.manara.backend.profile.mapper;
 
+import com.manara.backend.profile.dto.InstructorProfileResponse;
 import com.manara.backend.profile.dto.ProfileResponse;
 import com.manara.backend.profile.model.Instructor;
 import com.manara.backend.profile.model.Student;
@@ -27,5 +28,9 @@ public class ProfileMapper {
                 .emailVerified(user.isEmailVerified())
                 .passwordChangedAt(user.getPasswordChangedAt())
                 .build();
+    }
+
+    public InstructorProfileResponse toInstructorProfileResponse(Instructor instructor) {
+        return new InstructorProfileResponse(instructor.getHeadline());
     }
 }

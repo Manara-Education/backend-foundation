@@ -24,4 +24,8 @@ public class Instructor {
     private String bio;
 
     private String specialization;
+
+    /** A short public line shown under the name on course pages; plain text, at most 120 characters. */
+    @Column(length = 120)
+    private String headline;
 }

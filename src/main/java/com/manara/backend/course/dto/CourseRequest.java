@@ -1,5 +1,6 @@
 package com.manara.backend.course.dto;
 
+import com.manara.backend.common.json.LongPatchDeserializer;
 import com.manara.backend.common.json.Patch;
 import com.manara.backend.common.json.PatchDeserializer;
 import com.manara.backend.course.model.CourseAccessType;
@@ -75,6 +76,13 @@ public class CourseRequest {
 
     @NotBlank(message = "{validation.course.description.required}")
     private String description;
+
+    /**
+     * The catalogue category, presence-tracked like {@link #subtitle}: omitted leaves it alone and
+     * {@code null} uncategorises the course. Must name an active category.
+     */
+    @JsonDeserialize(using = LongPatchDeserializer.class)
+    private Patch<Long> categoryId;
 
     /**
      * Accepted, and then ignored on update.
@@ -175,6 +183,16 @@ public class CourseRequest {
         return Patch.valueOf(subtitle);
     }
 
+    /** Whether the payload mentioned {@code categoryId}, whatever value it gave it. */
+    public boolean carriesCategory() {
+        return Patch.isPresent(categoryId);
+    }
+
+    /** The category id the payload asked for, or {@code null} to clear or when not mentioned. */
+    public Long categoryIdValue() {
+        return Patch.valueOf(categoryId);
+    }
+
     /** Whether the payload mentioned {@code image}, whatever value it gave it. */
     public boolean carriesImage() {
         return Patch.isPresent(image);
@@ -214,6 +232,11 @@ public class CourseRequest {
 
         public CourseRequestBuilder image(String image) {
             this.image = Patch.of(image);
+            return this;
+        }
+
+        public CourseRequestBuilder categoryId(Long categoryId) {
+            this.categoryId = Patch.of(categoryId);
             return this;
         }
     }

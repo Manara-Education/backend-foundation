@@ -12,16 +12,18 @@ import com.manara.backend.course.dto.CourseViewMode;
 import com.manara.backend.course.dto.InstructorCourseResponse;
 import com.manara.backend.course.dto.LessonOrderRequest;
 import com.manara.backend.course.dto.ModuleOrderRequest;
-import com.manara.backend.course.model.CourseModule;
-import com.manara.backend.course.model.TrackedContent;
-import com.manara.backend.course.repository.CourseModuleRepository;
 import com.manara.backend.course.mapper.CourseAggregateMapper;
 import com.manara.backend.course.mapper.CourseMapper;
 import com.manara.backend.course.mapper.EntitlementMapper;
 import com.manara.backend.course.model.Course;
+import com.manara.backend.course.model.CourseCategory;
+import com.manara.backend.course.model.CourseModule;
 import com.manara.backend.course.model.CourseStatus;
 import com.manara.backend.course.model.CourseStructure;
 import com.manara.backend.course.model.CourseVisibility;
+import com.manara.backend.course.model.TrackedContent;
+import com.manara.backend.course.repository.CourseCategoryRepository;
+import com.manara.backend.course.repository.CourseModuleRepository;
 import com.manara.backend.course.repository.CourseRepository;
 import com.manara.backend.course.service.view.CourseDetailsViewRegistry;
 import com.manara.backend.lesson.model.Lesson;
@@ -97,6 +99,7 @@ import java.util.stream.Collectors;
 @Transactional(readOnly = true)
 public class CourseService {
 
+    private final CourseCategoryRepository courseCategoryRepository;
     private final CourseRepository courseRepository;
     private final LessonRepository lessonRepository;
     private final InstructorRepository instructorRepository;
@@ -199,7 +202,11 @@ public class CourseService {
         var instructor = requireInstructor(user);
         var settings = courseValidator.resolveAndValidate(request, null, () -> 0, LessonVideoBaseline.none());
 
-        var course = courseRepository.save(courseMapper.toCourse(request, instructor, settings));
+        var course = courseMapper.toCourse(request, instructor, settings);
+        if (request.carriesCategory()) {
+            course.setCategory(resolveCategory(request.categoryIdValue()));
+        }
+        course = courseRepository.save(course);
 
         // A brand-new course is entirely new content, so the recorder's answer is a foregone
         // conclusion; it is threaded through anyway so there is one synchronization path, not two.
@@ -266,6 +273,9 @@ public class CourseService {
         }
         if (request.carriesImage()) {
             onCourse.metadata(course.getImage(), request.imageValue(), course::setImage);
+        }
+        if (request.carriesCategory() && !keepsCategory(course, request.categoryIdValue())) {
+            onCourse.metadata(course.getCategory(), resolveCategory(request.categoryIdValue()), course::setCategory);
         }
         // A structure switch re-parents or discards content, so it is curriculum, not commerce.
         onCourse.content(course.getStructure(), settings.structure(), course::setStructure);
@@ -655,6 +665,23 @@ public class CourseService {
             return courseRepository.findAllOwnedByUserWithInstructor(user.getId());
         }
         throw new BusinessException("error.course.onlyInstructor");
+    }
+
+    /**
+     * An editor echoing the course's own category back is not choosing it again. Without this, a
+     * course whose category was retired after it was assigned could not be saved at all.
+     */
+    private static boolean keepsCategory(Course course, Long categoryId) {
+        return categoryId != null && course.getCategory() != null && categoryId.equals(course.getCategory().getId());
+    }
+
+    /** {@code null} clears; any other id must name a category that is still offered. */
+    private CourseCategory resolveCategory(Long categoryId) {
+        if (categoryId == null) {
+            return null;
+        }
+        return courseCategoryRepository.findByIdAndActiveTrue(categoryId)
+                .orElseThrow(() -> new BusinessException("error.course.categoryInvalid", categoryId.toString()));
     }
 
     private Instructor requireInstructor(User user) {

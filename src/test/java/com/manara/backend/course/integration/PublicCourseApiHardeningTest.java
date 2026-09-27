@@ -34,6 +34,8 @@ import static com.manara.backend.course.integration.CourseAuthoringFixtures.echo
 import static com.manara.backend.course.integration.CourseAuthoringFixtures.flatCourse;
 import static com.manara.backend.course.integration.CourseAuthoringFixtures.lesson;
 import static com.manara.backend.course.integration.CourseAuthoringFixtures.lessonWithQuiz;
+import static com.manara.backend.course.integration.CourseAuthoringFixtures.modularCourse;
+import static com.manara.backend.course.integration.CourseAuthoringFixtures.module;
 import static com.manara.backend.course.integration.CourseAuthoringFixtures.plan;
 import static com.manara.backend.course.integration.CourseAuthoringFixtures.quiz;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -143,9 +145,11 @@ class PublicCourseApiHardeningTest extends AbstractCourseAuthoringTest {
             instructorProfile.setBio("Bio " + marker);
             instructorRepository.save(instructorProfile);
             var request = flatCourse("Public " + marker.substring(0, 4), CourseStatus.PUBLISHED, CourseVisibility.PUBLIC,
-                    lesson("Video lesson " + marker),
-                    contentLesson("Content lesson " + marker, "Body " + marker),
-                    lessonWithQuiz("Quiz lesson " + marker, quiz("Quiz " + marker)));
+                    // Lesson titles are public since the course outline (phase 04, P2): they carry no
+                    // marker. Everything inside the lessons still does.
+                    lesson("Video lesson"),
+                    contentLesson("Content lesson", "Body " + marker),
+                    lessonWithQuiz("Quiz lesson", quiz("Quiz " + marker)));
             request.setAccessType(CourseAccessType.PURCHASE);
             request.setPurchasePrice(new BigDecimal("100.00"));
             var course = courseService.createCourse(instructorUser, request);
@@ -164,6 +168,7 @@ class PublicCourseApiHardeningTest extends AbstractCourseAuthoringTest {
 
             // Values: unique to this test, so they can be searched for across every body even though
             // the shared database puts other test classes' courses on the same page.
+            assertThat(detail).contains("\"title\":\"Video lesson\"", "\"title\":\"Content lesson\"");
             assertThat(served)
                     .doesNotContain(marker)
                     .doesNotContain(learner.getEmail())
@@ -176,8 +181,12 @@ class PublicCourseApiHardeningTest extends AbstractCourseAuthoringTest {
             List<String> keys = new ArrayList<>();
             collectKeys(data(list), keys);
             collectKeys(data(detail), keys);
+            // "lessons" is the one content-shaped key allowed, as the outline's list — and each entry in
+            // it is held to exactly the four whitelisted fields below.
+            data(detail).get("outline").forEach(group -> group.get("lessons").forEach(entry ->
+                    assertThat(entry.propertyNames()).containsExactly("id", "title", "durationSeconds", "preview")));
             assertThat(keys).doesNotContainAnyElementsOf(List.of(
-                    "videoUrl", "videoProvider", "richContent", "lessons", "modules", "quiz", "finalQuiz",
+                    "videoUrl", "videoProvider", "richContent", "modules", "quiz", "finalQuiz",
                     "questions", "options", "correctOptionId", "explanation", "enrolled", "enrollment",
                     "progress", "access", "email", "password", "bio", "studentsCount", "status", "visibility",
                     "revision", "instructorId", "createdAt", "updatedAt", "orderIndex", "retiredAt"));
@@ -414,7 +423,7 @@ class PublicCourseApiHardeningTest extends AbstractCourseAuthoringTest {
         }
 
         @Test
-        @DisplayName("a detail costs one statement, or two when it has plans")
+        @DisplayName("a detail costs two statements (course, outline), or three with plans, whatever its size")
         void detailCostIsConstant() throws Exception {
             var purchase = flatCourse("One statement", CourseStatus.PUBLISHED, CourseVisibility.PUBLIC, lesson("L1"));
             purchase.setAccessType(CourseAccessType.PURCHASE);
@@ -425,8 +434,13 @@ class PublicCourseApiHardeningTest extends AbstractCourseAuthoringTest {
             subscription.setSubscriptionPlans(List.of(plan("Monthly", 1, SubscriptionUnit.MONTH, "100.00")));
             var subscribed = courseService.createCourse(instructorUser, subscription);
 
-            assertThat(statementsFor(get(DETAIL, bought.getId()))).isEqualTo(1);
-            assertThat(statementsFor(get(DETAIL, subscribed.getId()))).isEqualTo(2);
+            var large = modularCourse("Many modules", CourseStatus.PUBLISHED, CourseVisibility.PUBLIC,
+                    module("M1", lesson("a"), lesson("b"), lesson("c")), module("M2"), module("M3", lesson("d")));
+            var modular = courseService.createCourse(instructorUser, large);
+
+            assertThat(statementsFor(get(DETAIL, bought.getId()))).isEqualTo(2);
+            assertThat(statementsFor(get(DETAIL, subscribed.getId()))).isEqualTo(3);
+            assertThat(statementsFor(get(DETAIL, modular.getId()))).isEqualTo(2);
         }
     }
 }

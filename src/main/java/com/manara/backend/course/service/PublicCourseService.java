@@ -5,9 +5,11 @@ import com.manara.backend.common.exception.ResourceNotFoundException;
 import com.manara.backend.course.dto.PublicCourseDetailResponse;
 import com.manara.backend.course.dto.PublicCoursePageResponse;
 import com.manara.backend.course.dto.PublicCourseSummaryResponse;
+import com.manara.backend.course.dto.PublicOutlineModuleResponse;
 import com.manara.backend.course.mapper.PublicCourseMapper;
 import com.manara.backend.course.model.Course;
 import com.manara.backend.course.model.CourseAccessType;
+import com.manara.backend.course.model.CourseStructure;
 import com.manara.backend.course.model.SubscriptionPlan;
 import com.manara.backend.course.repository.PublicCourseRepository;
 import lombok.RequiredArgsConstructor;
@@ -85,7 +87,15 @@ public class PublicCourseService {
     public PublicCourseDetailResponse getCourse(Long courseId) {
         Course course = publicCourseRepository.findDiscoverableById(courseId)
                 .orElseThrow(() -> new ResourceNotFoundException("error.course.notFound", String.valueOf(courseId)));
-        return publicCourseMapper.toDetail(course, offerOf(course, activePlansOf(List.of(course))));
+        return publicCourseMapper.toDetail(course, offerOf(course, activePlansOf(List.of(course))), outlineOf(course));
+    }
+
+    /** One statement whatever the course's size, and only for a course already found discoverable. */
+    private List<PublicOutlineModuleResponse> outlineOf(Course course) {
+        if (course.getStructure() == CourseStructure.MODULES) {
+            return publicCourseMapper.toModuleOutline(publicCourseRepository.findOutlineModules(course.getId()));
+        }
+        return publicCourseMapper.toFlatOutline(publicCourseRepository.findOutlineRootLessons(course.getId()));
     }
 
     private static PublicOffer offerOf(Course course, Map<Long, List<SubscriptionPlan>> plans) {
