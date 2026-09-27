@@ -231,7 +231,8 @@ class BillingFlowTest extends AbstractCourseAuthoringTest {
         Long purchase = purchaseCourse("450.00");
         Long subscription = subscriptionCourse();
         Long planId = jdbcTemplate.queryForObject("SELECT id FROM subscription_plans WHERE course_id = ?", Long.class, subscription);
-        Long otherPlan = jdbcTemplate.queryForObject("SELECT id FROM subscription_plans WHERE course_id <> ? LIMIT 1", Long.class, subscription);
+        Long otherCourse = subscriptionCourse();
+        Long otherPlan = jdbcTemplate.queryForObject("SELECT id FROM subscription_plans WHERE course_id = ?", Long.class, otherCourse);
         User student = newStudentUser();
 
         quote(student, purchase, "{}")
@@ -248,7 +249,8 @@ class BillingFlowTest extends AbstractCourseAuthoringTest {
                 .andExpect(jsonPath("$.data.accessUnit").value("MONTH"))
                 .andExpect(jsonPath("$.data.renewalMode").value("FIXED"));
         quote(student, subscription, "{}").andExpect(status().isBadRequest());
-        if (otherPlan != null) quote(student, subscription, "{\"planId\":" + otherPlan + "}").andExpect(status().isBadRequest());
+        // A plan of another course is refused, not quoted.
+        quote(student, subscription, "{\"planId\":" + otherPlan + "}").andExpect(status().isBadRequest());
         assertThat(transactionCount(student)).isZero();
     }
 
