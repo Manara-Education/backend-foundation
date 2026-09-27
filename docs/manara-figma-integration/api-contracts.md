@@ -73,12 +73,26 @@ Transaction status wire values: `PAID`, `AWAITING_PAYMENT`, `PROCESSING`, `FAILE
 **unknown/processing is never shown as failed.** Payment status, refund status, entitlement
 (`courseAccess`) and renewal state are separate fields.
 
-## Phases 07–10 — provider-dependent (proposed, outline only)
+## Phase 07 — capabilities (implemented, `f4c4c1d`; `refundRequests` added in `012b4b9`)
 
-- `GET /student/billing/capabilities` → `{commerceMode, provider: null\|name, methods: [], savedMethods: false, recurring: false, refunds: false}`; with no provider every capability is `false`.
-- `POST /student/payment-methods/setup`, `GET/POST /student/payment-methods`, `PUT /{id}/default`, `DELETE /{id}` (409 when linked to a renewal without replacement). Provider tokens only; never PAN/CVV.
-- Checkout `paymentMethodId`; `GET /student/transactions/{id}`; `POST …/refresh-status`; `POST …/retry` (only after a definitive retryable outcome); authenticated, deduplicated provider webhook.
+| Method & path | Status | Contract |
+|---|---|---|
+| `GET /student/billing/capabilities` | implemented | `{commerceMode, provider: null\|name, oneTimeCheckout, simulated, methodTypes: [], savedMethods, recurringCharges, statusRefresh, refunds, refundRequests}`. With no provider every provider-backed flag is `false`. |
+
+## Phase 10 — refund requests (implemented, `012b4b9`; intake off by default)
+
+| Method & path | Status | Contract |
+|---|---|---|
+| `POST /student/transactions/{reference}/refund-requests` | implemented | `{reason?, note? ≤ 1000}` → 201. No amount accepted. `400 REFUND_REQUESTS_UNAVAILABLE` / `400 REFUND_NOT_ELIGIBLE` / `409 REFUND_REQUEST_OPEN` / 404 for others. |
+| `GET /student/transactions/{reference}/refund-requests` | implemented | Owner's requests, newest first; `status` SUBMITTED/APPROVED/REJECTED is review state only. |
+| `GET /student/transactions/{reference}` | extended | `refundEligibility`. |
+| Staff review queue and decisions | blocked (X4) | Needs a named reviewer authority and surface. |
+
+## Phases 07–10 — still provider-dependent (proposed, outline only)
+
+- `POST /student/payment-methods/setup`, `GET/POST /student/payment-methods`, `PUT /{id}/default`, `DELETE /{id}` (409 when linked to a renewal without replacement). Provider tokens only; never PAN/CVV. (D12)
+- Checkout `paymentMethodId`; `POST …/refresh-status`; `POST …/retry` (only after a definitive retryable outcome); authenticated, deduplicated provider webhook.
 - `POST /student/subscriptions/{id}/cancel-renewal`, `…/reactivate-renewal`, `PUT …/renewal-method`.
-- `POST /student/transactions/{id}/refund-requests {reason}` and a role-scoped staff review.
+- Provider refund operations and settlement.
 
-These stay unimplemented as live features until X3–X5 are resolved; see `decisions-and-blockers.md`.
+These stay unimplemented until X3–X5 are resolved; see `decisions-and-blockers.md`.

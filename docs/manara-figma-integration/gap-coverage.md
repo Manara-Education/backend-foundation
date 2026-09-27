@@ -20,11 +20,11 @@ tree to `d4094cf`, so no unmerged frontend work exists there.
 | B3 Cancel/reactivate | none | hidden until capability | proposed | agreement state | 09 | — | Yes |
 | B4 Change renewal method | none | hidden | proposed | method link | 07, 09 | — | Yes |
 | B5 Renewal processing | none | — | job | periods | 09 | — | Yes |
-| B6 Saved methods | none; `PaymentMethodRequest.token` placeholder | Methods tab shows "unavailable" honestly | proposed capability + methods | payment_method | 07 | capability=false in tests | Yes |
+| B6 Saved methods | none; `PaymentMethodRequest.token` placeholder | Methods tab shows "unavailable" honestly | proposed capability + methods | payment_method | 07 | capability endpoint + honest tab (`f4c4c1d`, `040d968`); schema deferred (D12) | Yes |
 | B7 Ledger | only `payment_reference` on purchase/subscription rows | Invoices & payments list/detail | `GET /student/transactions[/{id}]` | `payment_transactions` | 06 (+08, 10) | provenance separation tests | No (read-only) |
 | B8 Receipts/invoices | none | Receipt drawer + PDF | `GET /student/receipts/{n}[.pdf]` | `payment_receipts` | 06 | non-fiscal marking for simulated | Formal invoice: X6 |
 | B9 Refresh/retry | none | hidden | proposed | attempt state | 08 | — | Yes |
-| B10 Refund requests | none | hidden | proposed | refund_requests | 10 | — | Yes (X4) |
+| B10 Refund requests | none | drawer section for LIVE rows | implemented | refund_requests (V21) | 10 | intake off by default (`012b4b9`, `9218168`); review X4, money X3 | Yes (X3, X4) |
 | B11 Access vs payment | `CourseEntitlement` implicit | separate access pill | `courseAccess` field | none | 06 | field present, separate from status | No |
 | C1 Appearance | none | Exact port of `AppearanceSettings.tsx`, no persistence | none | none | 01 | blocked on X1 | No |
 | P1 Category chip | no `Course.category` | chip on card + hero | category on public DTOs; editor field | `course_categories`, `courses.category_id` | 04 | public DTO + editor tests | No |
@@ -38,8 +38,10 @@ tree to `d4094cf`, so no unmerged frontend work exists there.
 | K5 Uncertain / idempotency | idempotency key per (course, student, purpose); active entitlement short-circuits | "uncertain" state for network loss, no automatic retry | later refresh-status | — | 05, 08 | FE test for lost response | 08: Yes |
 | K6 Recurring eligibility | plans fixed-term | no cadence copy | — | — | 09 | — | Yes (X5) |
 | K7 Invoice download at checkout | none | receipt link after success | reuse receipts | — | 06 | — | No |
-| K8 Refund-guarantee copy | line at `payment-cta-section.tsx:225` | remove | none | none | 05 | copy gone (test) | policy X4 |
+| K8 Refund-guarantee copy | line at `payment-cta-section.tsx:225` | remove | none | none | 05 | copy gone (test); card links the published policy (`4d7fd2a`) | No — policy is Terms §6–§7 |
 
 Figma-only behaviours with no real counterpart (not built as specified): demo OTP `123456`, mock
 timers, seeded cards/invoices, Unsplash images, `PaymentStore` local store, "illustrative" curriculum
 placeholder, renewal cadence derived from plan days, "30 minutes" hard-coded wallet expiry.
+
+Final status per ID: `phase-11-final-validation.md` § Final gap matrix.

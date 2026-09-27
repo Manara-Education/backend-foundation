@@ -10,3 +10,4 @@ Canonical record for the Settings / public-courses / billing programme driven by
 - `design-source-map.md` — Figma export files → target code
 - `decisions-and-blockers.md` — decisions and external prerequisites
 - `phase-NN-handoff.md`, `phase-11-*-validation.md` — per-phase evidence
+- `release-readiness.md` — readiness by scope, merge order, rollout and rollback

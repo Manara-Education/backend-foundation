@@ -5,7 +5,7 @@
 | Item | Backend | Frontend |
 |---|---|---|
 | Branch | `feat/manara-p06-billing-ledger` (stacked on P04-BE) | `feat/manara-p06-billing-history-ui` (stacked on P05-FE) |
-| Commit | `cd90573` | `a9d85d9` |
+| Commit | `cd90573`, then `dcb32dd` (quote test made order-independent) | `a9d85d9` |
 | Migration | `V20__payment_transactions_and_receipts.sql` | — |
 | New dependencies | `io.github.openhtmltopdf:openhtmltopdf-pdfbox` + `-rtl-support` 1.1.87 (pdfbox 3.0.7, icu4j 77.1); Cairo static TTFs (OFL) under `src/main/resources/fonts/cairo` | — |
 

@@ -1,14 +1,14 @@
 {
   "schema": 1,
-  "updatedAt": "2026-09-26T22:10:00+03:00",
+  "updatedAt": "2026-09-27T13:45:00+03:00",
   "canonicalLocation": "backend-foundation/docs/manara-figma-integration",
   "base": {
     "backend": "ac72672723defd03e160b69b59914c51e6bbd492",
     "frontend": "d4094cfaa26c7a74758312ae6300d35a90e82d9c"
   },
   "resume": {
-    "next": "P07 provider-neutral groundwork (capabilities)",
-    "note": "Core checkpoint done. PRs still not opened."
+    "next": "Open draft PRs in merge order (release-readiness.md); then owner review",
+    "note": "All executable phases done; P11 final verified. Blocked: X1, X3, X4 (reviewer surface), X5, X6, X8."
   },
   "tasks": [
     {
@@ -196,7 +196,7 @@
         "X6: formal invoices (receipts shipped)"
       ],
       "worktree": "worktrees/figma/be-p06-billing",
-      "commit": "cd90573",
+      "commit": "dcb32dd",
       "base": "feat/manara-p04-public-catalogue"
     },
     {
@@ -217,14 +217,91 @@
       "base": "feat/manara-p05-checkout-sheet"
     },
     {
-      "id": "P07..P10",
-      "phase": "07-10",
+      "id": "P07-BE-01",
+      "phase": "07",
+      "repo": "backend",
+      "branch": "feat/manara-p07-billing-capabilities",
+      "implementation": "verified",
+      "dependsOn": [
+        "P06-BE-01"
+      ],
+      "blockers": [
+        "X3: saved methods (D12)"
+      ],
+      "worktree": "worktrees/figma/be-p07-capabilities",
+      "commit": "f4c4c1d",
+      "base": "feat/manara-p06-billing-ledger"
+    },
+    {
+      "id": "P07-FE-01",
+      "phase": "07",
+      "repo": "frontend",
+      "branch": "feat/manara-p07-payment-methods-ui",
+      "implementation": "verified",
+      "dependsOn": [
+        "P07-BE-01"
+      ],
+      "blockers": [
+        "X3: saved methods"
+      ],
+      "worktree": "worktrees/figma/fe-p07-methods",
+      "commit": "040d968",
+      "base": "fix/manara-p11-core-integration"
+    },
+    {
+      "id": "P08",
+      "phase": "08",
       "implementation": "blocked",
       "blockers": [
+        "X3"
+      ],
+      "handoff": "phase-08-handoff.md"
+    },
+    {
+      "id": "P09",
+      "phase": "09",
+      "implementation": "fallback-done",
+      "blockers": [
         "X3",
-        "X4",
         "X5"
-      ]
+      ],
+      "handoff": "phase-09-handoff.md"
+    },
+    {
+      "id": "P10-BE-01",
+      "phase": "10",
+      "repo": "backend",
+      "branch": "feat/manara-p10-refund-requests",
+      "implementation": "verified",
+      "migration": "V21",
+      "config": {
+        "app.refund-requests.enabled": false
+      },
+      "dependsOn": [
+        "P07-BE-01"
+      ],
+      "blockers": [
+        "X4: reviewer surface",
+        "X3: provider refunds"
+      ],
+      "worktree": "worktrees/figma/be-p10-refunds",
+      "commit": "012b4b9",
+      "base": "feat/manara-p07-billing-capabilities"
+    },
+    {
+      "id": "P10-FE-01",
+      "phase": "10",
+      "repo": "frontend",
+      "branch": "feat/manara-p10-refund-request-ui",
+      "implementation": "verified",
+      "dependsOn": [
+        "P07-FE-01",
+        "P10-BE-01"
+      ],
+      "blockers": [],
+      "worktree": "worktrees/figma/fe-p10-refunds",
+      "commit": "9218168",
+      "base": "feat/manara-p07-payment-methods-ui"
     }
   ],
   "checkpoints": {
@@ -234,6 +311,11 @@
       "frontend": "eb0194f",
       "result": "verified with limitations (X1)"
     },
-    "final": null
+    "final": {
+      "file": "phase-11-final-validation.md",
+      "backend": "012b4b9",
+      "frontend": "9218168",
+      "result": "verified with limitations (X1, X3, X4, X5, X6, X8)"
+    }
   }
 }
