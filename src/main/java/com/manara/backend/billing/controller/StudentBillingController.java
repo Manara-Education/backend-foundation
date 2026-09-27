@@ -1,9 +1,11 @@
 package com.manara.backend.billing.controller;
 
+import com.manara.backend.billing.dto.BillingCapabilitiesResponse;
 import com.manara.backend.billing.dto.ReceiptResponse;
 import com.manara.backend.billing.dto.SubscriptionPageResponse;
 import com.manara.backend.billing.dto.TransactionDetailResponse;
 import com.manara.backend.billing.dto.TransactionPageResponse;
+import com.manara.backend.billing.service.BillingCapabilities;
 import com.manara.backend.billing.service.StudentBillingService;
 import com.manara.backend.common.dto.ApiResponse;
 import com.manara.backend.user.model.User;
@@ -29,6 +31,13 @@ import java.time.LocalDate;
 public class StudentBillingController {
 
     private final StudentBillingService billingService;
+    private final BillingCapabilities billingCapabilities;
+
+    /** What this deployment supports; see {@link BillingCapabilities}. */
+    @GetMapping("/billing/capabilities")
+    public ApiResponse<BillingCapabilitiesResponse> capabilities() {
+        return ApiResponse.success(billingCapabilities.current());
+    }
 
     @GetMapping("/subscriptions")
     public ApiResponse<SubscriptionPageResponse> subscriptions(@AuthenticationPrincipal User user,
