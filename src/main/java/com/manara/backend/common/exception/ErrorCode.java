@@ -94,5 +94,17 @@ public enum ErrorCode {
      * when a code was accepted but the address has meanwhile been taken — never at request time,
      * which is answered the same whether or not the address is registered.
      */
-    EMAIL_CHANGE_UNAVAILABLE
+    EMAIL_CHANGE_UNAVAILABLE,
+
+    /** This deployment does not accept refund requests (app.refund-requests.enabled is off). Nothing was created. */
+    REFUND_REQUESTS_UNAVAILABLE,
+
+    /**
+     * The transaction cannot be the subject of a refund request: not a live payment, not paid, nothing
+     * refundable, or outside the policy window. The message says which. Nothing was created.
+     */
+    REFUND_NOT_ELIGIBLE,
+
+    /** A refund request for this transaction is already open. 409. */
+    REFUND_REQUEST_OPEN
 }

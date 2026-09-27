@@ -9,6 +9,9 @@ import java.util.List;
 /**
  * One transaction in full. Money fields are {@code null} when the amount is unknown. {@code discount}
  * is zero only because no discount exists in the product today; it is not a claim about the past.
+ *
+ * <p>{@code refundEligibility} says whether a refund request can be made for it now, or the first
+ * reason it cannot (see {@code RefundEligibility}); it is not a statement that a refund is owed.
  */
 @JsonInclude(JsonInclude.Include.ALWAYS)
 public record TransactionDetailResponse(
@@ -19,7 +22,8 @@ public record TransactionDetailResponse(
         BigDecimal total,
         BigDecimal refundedAmount,
         String gatewayReference,
-        SubscriptionTermResponse subscriptionTerm) {
+        SubscriptionTermResponse subscriptionTerm,
+        String refundEligibility) {
 
     public record LineResponse(String description, BigDecimal amount) {
     }

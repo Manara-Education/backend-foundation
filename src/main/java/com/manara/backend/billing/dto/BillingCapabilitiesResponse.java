@@ -15,6 +15,9 @@ import java.util.List;
  * @param oneTimeCheckout whether paid checkout is accepted at all (simulated in DEMONSTRATION)
  * @param simulated       whether an accepted checkout moves no money
  * @param methodTypes     payment method types a learner can choose; empty with no provider
+ * @param refunds         whether a provider can return money for a transaction
+ * @param refundRequests  whether a student may submit a refund request for review; a request is not
+ *                        a refund, and this can be true while {@code refunds} is false
  */
 @JsonInclude(JsonInclude.Include.ALWAYS)
 public record BillingCapabilitiesResponse(
@@ -26,5 +29,6 @@ public record BillingCapabilitiesResponse(
         boolean savedMethods,
         boolean recurringCharges,
         boolean statusRefresh,
-        boolean refunds) {
+        boolean refunds,
+        boolean refundRequests) {
 }

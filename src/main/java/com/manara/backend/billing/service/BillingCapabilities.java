@@ -24,6 +24,7 @@ public class BillingCapabilities {
 
     private final CommerceMode commerceMode;
     private final PaymentGateway paymentGateway;
+    private final RefundPolicy refundPolicy;
 
     public BillingCapabilitiesResponse current() {
         boolean realProvider = !(paymentGateway instanceof SimulatedPaymentGateway)
@@ -42,6 +43,7 @@ public class BillingCapabilities {
                 false,
                 false,
                 false,
-                false);
+                false,
+                refundPolicy.acceptingRequests());
     }
 }

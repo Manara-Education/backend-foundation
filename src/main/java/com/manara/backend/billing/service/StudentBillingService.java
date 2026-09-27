@@ -69,6 +69,7 @@ public class StudentBillingService {
     private final CourseEntitlementRepository entitlementRepository;
     private final BillingMapper billingMapper;
     private final ReceiptPdfRenderer receiptPdfRenderer;
+    private final RefundPolicy refundPolicy;
     private final Clock clock;
 
     public TransactionPageResponse transactions(User user, String q, String status, LocalDate from, LocalDate to,
@@ -106,15 +107,19 @@ public class StudentBillingService {
 
     public TransactionDetailResponse transaction(User user, String reference) {
         Student student = requireStudent(user);
-        PaymentTransaction t = transactionRepository.findOwned(parseReference(reference), student.getId())
-                .orElseThrow(TransactionNotFound::new);
+        PaymentTransaction t = owned(student, reference);
         BillingReceipt receipt = receiptRepository.findByTransactionId(t.getId()).orElse(null);
         boolean access = accessibleCourses(student, List.of(t.getCourse().getId())).contains(t.getCourse().getId());
         TransactionDetailResponse.SubscriptionTermResponse term = t.getSubscriptionId() == null ? null
                 : subscriptionRepository.findById(t.getSubscriptionId())
                         .map(s -> new TransactionDetailResponse.SubscriptionTermResponse(s.getId(), s.getStartsAt(), s.getExpiresAt()))
                         .orElse(null);
-        return billingMapper.toDetail(t, receipt, access, term);
+        return billingMapper.toDetail(t, receipt, access, term, refundPolicy.eligibility(t));
+    }
+
+    /** The student's own transaction, or not found — the same answer for another student's. */
+    public PaymentTransaction ownedTransaction(User user, String reference) {
+        return owned(requireStudent(user), reference);
     }
 
     public ReceiptResponse receipt(User user, String number) {
@@ -145,6 +150,11 @@ public class StudentBillingService {
     }
 
     // ── helpers ────────────────────────────────────────────────────────────────
+
+    private PaymentTransaction owned(Student student, String reference) {
+        return transactionRepository.findOwned(parseReference(reference), student.getId())
+                .orElseThrow(TransactionNotFound::new);
+    }
 
     private BillingReceipt ownedReceipt(User user, String number) {
         Student student = requireStudent(user);

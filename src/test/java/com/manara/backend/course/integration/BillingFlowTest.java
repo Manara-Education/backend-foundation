@@ -271,6 +271,26 @@ class BillingFlowTest extends AbstractCourseAuthoringTest {
         mockMvc.perform(get("/api/v1/student/billing/capabilities")).andExpect(status().isUnauthorized());
     }
 
+    @Test
+    @DisplayName("Refund requests are off by default: the transaction says so and a request is refused, creating nothing")
+    void refundRequestsOffByDefault() throws Exception {
+        Long course = purchaseCourse("450.00");
+        User student = newStudentUser();
+        String reference = JsonPath.read(checkout(student, course, "{\"paymentMethod\":{\"name\":\"سارة\"}}")
+                .andReturn().getResponse().getContentAsString(), "$.data.transactionId");
+
+        mockMvc.perform(get("/api/v1/student/transactions/{ref}", reference).with(signedIn(student)))
+                .andExpect(jsonPath("$.data.refundEligibility").value("UNAVAILABLE"));
+        mockMvc.perform(get("/api/v1/student/billing/capabilities").with(signedIn(student)))
+                .andExpect(jsonPath("$.data.refundRequests").value(false));
+        mockMvc.perform(post("/api/v1/student/transactions/{ref}/refund-requests", reference).with(csrf()).with(signedIn(student))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"OTHER\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("REFUND_REQUESTS_UNAVAILABLE"));
+        assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM refund_requests WHERE student_id = ?", Integer.class,
+                studentProfileOf(student).getId())).isZero();
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private Long purchaseCourse(String price) {

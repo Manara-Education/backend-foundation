@@ -56,7 +56,11 @@ access now (`ACTIVE`/`NONE`), independent of payment status.
 
 ## `GET /api/v1/student/transactions/{reference}`
 
-`{ summary, lines:[{description, amount}], subtotal, discount, total, refundedAmount, gatewayReference, subscriptionTerm }`.
+`{ summary, lines:[{description, amount}], subtotal, discount, total, refundedAmount, gatewayReference, subscriptionTerm, refundEligibility }`.
+
+`refundEligibility` is whether a refund request can be made now, or the first reason it cannot:
+`ELIGIBLE`, `UNAVAILABLE` (requests are off), `NOT_LIVE` (simulated or legacy), `NOT_PAID`,
+`NO_REFUNDABLE_AMOUNT`, `WINDOW_CLOSED`, `REQUEST_OPEN`. It is not a statement that a refund is owed.
 
 ## `GET /api/v1/student/subscriptions`
 
@@ -76,3 +80,36 @@ term runs, `EXPIRED` after), `renewalMode: "FIXED"` (nothing renews), `courseAcc
 Receipts exist only for PAID transactions recorded at checkout. Simulated ones are numbered
 `DEMO-YYYY-NNNNNN` and say "محاكاة دفع — لم تُحصَّل أي أموال"; numbers are unique but may have gaps and
 are not a tax-invoice series. History from before the ledger has no receipt.
+
+## `GET /api/v1/student/billing/capabilities`
+
+What this deployment can do with money, from configuration and the wired payment adapter:
+`{ commerceMode, provider, oneTimeCheckout, simulated, methodTypes, savedMethods, recurringCharges,
+statusRefresh, refunds, refundRequests }`. With no provider integrated, `provider` is `null`,
+`methodTypes` is empty and every provider-backed flag is `false`. `refundRequests` follows
+`app.refund-requests.enabled` (env `MANARA_REFUND_REQUESTS_ENABLED`, default `false`); `refunds` is
+whether a provider can return money, and stays `false`. The server enforces each value itself.
+
+## Refund requests
+
+A request for review — not a refund. It changes neither the transaction's status, the paid totals,
+nor course access, and moves no money. Off by default, because no staff review surface exists yet.
+
+- `POST /api/v1/student/transactions/{reference}/refund-requests` — body
+  `{ reason?: ACCESS_PROBLEM|NOT_AS_DESCRIBED|DUPLICATE_CHARGE|CHANGED_MIND|OTHER, note?: string ≤ 1000 }`.
+  The reason is optional: the Terms grant the refund without one.
+  No amount is accepted: the request is for what remains on the transaction
+  (`amount − refundedAmount`). `201` with the request. Refusals, creating nothing:
+  `400 REFUND_REQUESTS_UNAVAILABLE` (switch off), `400 REFUND_NOT_ELIGIBLE` (message names the
+  reason), `409 REFUND_REQUEST_OPEN` (one open — `SUBMITTED` or `APPROVED` — per transaction, held by
+  a partial unique index under concurrency), `404` for another student's transaction, `400` for an
+  invalid body.
+- `GET /api/v1/student/transactions/{reference}/refund-requests` — the owner's requests, newest first:
+  `[{ reference, transactionReference, reason, note, amount, currency, status, createdAt, decidedAt,
+  decisionNote }]`. `status` is `SUBMITTED`, `APPROVED` or `REJECTED` — review state only.
+
+Eligible: a `LIVE` transaction in `PAID` state, with a known amount and currency and something left
+to refund, requested no later than the `app.refund-requests.window-days`th calendar day after the
+purchase date (default 14, per the published Terms 1.0, section 6; server time). Review decisions and
+provider refunds are not implemented, and Terms section 7 commits to processing a request within 7
+days — which is why the switch stays off until both exist.
