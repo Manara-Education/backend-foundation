@@ -2,11 +2,14 @@ package com.manara.backend.billing.mapper;
 
 import com.manara.backend.billing.dto.BillingCourseResponse;
 import com.manara.backend.billing.dto.ReceiptResponse;
+import com.manara.backend.billing.dto.RefundRequestResponse;
 import com.manara.backend.billing.dto.SubscriptionRecordResponse;
 import com.manara.backend.billing.dto.TransactionDetailResponse;
 import com.manara.backend.billing.dto.TransactionSummaryResponse;
 import com.manara.backend.billing.model.BillingReceipt;
 import com.manara.backend.billing.model.PaymentTransaction;
+import com.manara.backend.billing.model.RefundEligibility;
+import com.manara.backend.billing.model.RefundRequest;
 import com.manara.backend.billing.model.TransactionProvenance;
 import com.manara.backend.billing.model.TransactionPurpose;
 import com.manara.backend.billing.model.TransactionStatus;
@@ -94,7 +97,8 @@ public class BillingMapper {
     }
 
     public TransactionDetailResponse toDetail(PaymentTransaction t, BillingReceipt receipt, boolean accessActive,
-                                              TransactionDetailResponse.SubscriptionTermResponse term) {
+                                              TransactionDetailResponse.SubscriptionTermResponse term,
+                                              RefundEligibility refundEligibility) {
         BigDecimal amount = t.getAmount();
         return new TransactionDetailResponse(
                 toSummary(t, receipt, accessActive),
@@ -104,7 +108,14 @@ public class BillingMapper {
                 amount,
                 t.getRefundedAmount(),
                 t.getGatewayReference(),
-                term);
+                term,
+                refundEligibility.name());
+    }
+
+    public RefundRequestResponse toRefundRequest(RefundRequest r) {
+        return new RefundRequestResponse(r.getReference().toString(), r.getTransaction().getReference().toString(),
+                r.getReason() == null ? null : r.getReason().name(), r.getNote(), r.getAmount(), r.getCurrency(), r.getStatus().name(),
+                r.getCreatedAt(), r.getDecidedAt(), r.getDecisionNote());
     }
 
     public ReceiptResponse toReceiptResponse(BillingReceipt r) {

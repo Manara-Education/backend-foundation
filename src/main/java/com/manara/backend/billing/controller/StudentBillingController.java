@@ -2,27 +2,36 @@ package com.manara.backend.billing.controller;
 
 import com.manara.backend.billing.dto.BillingCapabilitiesResponse;
 import com.manara.backend.billing.dto.ReceiptResponse;
+import com.manara.backend.billing.dto.RefundRequestCreateRequest;
+import com.manara.backend.billing.dto.RefundRequestResponse;
 import com.manara.backend.billing.dto.SubscriptionPageResponse;
 import com.manara.backend.billing.dto.TransactionDetailResponse;
 import com.manara.backend.billing.dto.TransactionPageResponse;
 import com.manara.backend.billing.service.BillingCapabilities;
+import com.manara.backend.billing.service.RefundRequestService;
 import com.manara.backend.billing.service.StudentBillingService;
 import com.manara.backend.common.dto.ApiResponse;
 import com.manara.backend.user.model.User;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDate;
+import java.util.List;
 
 /** The signed-in student's billing records. Owner-scoped; see {@link StudentBillingService}. */
 @RestController
@@ -32,6 +41,7 @@ public class StudentBillingController {
 
     private final StudentBillingService billingService;
     private final BillingCapabilities billingCapabilities;
+    private final RefundRequestService refundRequestService;
 
     /** What this deployment supports; see {@link BillingCapabilities}. */
     @GetMapping("/billing/capabilities")
@@ -67,6 +77,25 @@ public class StudentBillingController {
     public ApiResponse<TransactionDetailResponse> transaction(@AuthenticationPrincipal User user,
                                                               @PathVariable String reference) {
         return ApiResponse.success(billingService.transaction(user, reference));
+    }
+
+    /** The student's refund requests for one of their transactions, newest first. */
+    @GetMapping("/transactions/{reference}/refund-requests")
+    public ApiResponse<List<RefundRequestResponse>> refundRequests(@AuthenticationPrincipal User user,
+                                                                   @PathVariable String reference) {
+        return ApiResponse.success(refundRequestService.requests(user, reference));
+    }
+
+    /**
+     * Asks for a refund of what remains on the transaction. Creates a request for review only: no money
+     * moves and course access is unchanged. See {@link RefundRequestService}.
+     */
+    @PostMapping("/transactions/{reference}/refund-requests")
+    @ResponseStatus(HttpStatus.CREATED)
+    public ApiResponse<RefundRequestResponse> requestRefund(@AuthenticationPrincipal User user,
+                                                            @PathVariable String reference,
+                                                            @Valid @RequestBody RefundRequestCreateRequest request) {
+        return ApiResponse.success(refundRequestService.submit(user, reference, request));
     }
 
     @GetMapping("/receipts/{number}")
