@@ -20,23 +20,23 @@ refund intake on, and production email are owner decisions outside this run (mas
 
 ## Merge order
 
-Every PR is a draft stacked on its parent branch; review bottom-up, merge in this order.
+Every PR is a draft stacked on its parent branch; review bottom-up, merge in this order. Backend #107–#113, frontend #131–#140.
 
 **Backend** (`backend-foundation`)
-1. `update/manara-figma-integration-plan` → `develop` (docs; independent)
-2. `feat/manara-p02-profile-api` → `develop` (V17)
-3. `feat/manara-p03-email-change` (V18)
-4. `feat/manara-p04-public-catalogue` (V19)
-5. `feat/manara-p06-billing-ledger` (V20, backfill)
-6. `feat/manara-p07-billing-capabilities`
-7. `feat/manara-p10-refund-requests` (V21)
+1. `update/manara-figma-integration-plan` (#107) → `develop` (docs; independent)
+2. `feat/manara-p02-profile-api` (#108) → `develop` (V17)
+3. `feat/manara-p03-email-change` #109 (V18)
+4. `feat/manara-p04-public-catalogue` #110 (V19)
+5. `feat/manara-p06-billing-ledger` #111 (V20, backfill)
+6. `feat/manara-p07-billing-capabilities` #112
+7. `feat/manara-p10-refund-requests` #113 (V21)
 
 **Frontend** (`frontend-foundation`)
-1. `update/manara-figma-integration-link` → `develop` (independent)
-2. `feat/manara-p01-settings-shell` → `develop`
-3. `feat/manara-p02-avatar-ui` · 4. `feat/manara-p03-email-change-ui` · 5. `feat/manara-p04-public-courses-ui`
-6. `feat/manara-p05-checkout-sheet` · 7. `feat/manara-p06-billing-history-ui`
-8. `fix/manara-p11-core-integration` · 9. `feat/manara-p07-payment-methods-ui` · 10. `feat/manara-p10-refund-request-ui`
+1. `update/manara-figma-integration-link` (#131) → `develop` (independent)
+2. `feat/manara-p01-settings-shell` (#132) → `develop`
+3. `feat/manara-p02-avatar-ui` #133 · 4. `feat/manara-p03-email-change-ui` #134 · 5. `feat/manara-p04-public-courses-ui` #135
+6. `feat/manara-p05-checkout-sheet` #136 · 7. `feat/manara-p06-billing-history-ui` #137
+8. `fix/manara-p11-core-integration` #138 · 9. `feat/manara-p07-payment-methods-ui` #139 · 10. `feat/manara-p10-refund-request-ui` #140
 
 Cross-repo: each frontend phase calls the backend phase of the same number. Deploy backend first.
 The frontend degrades safely if it is ahead: missing `refundEligibility` reads as UNAVAILABLE and the

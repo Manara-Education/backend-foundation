@@ -7,8 +7,8 @@
     "frontend": "d4094cfaa26c7a74758312ae6300d35a90e82d9c"
   },
   "resume": {
-    "next": "Open draft PRs in merge order (release-readiness.md); then owner review",
-    "note": "All executable phases done; P11 final verified. Blocked: X1, X3, X4 (reviewer surface), X5, X6, X8."
+    "next": "Owner review of the 17 draft PRs, bottom-up (release-readiness.md)",
+    "note": "All PRs opened 2026-09-27 as drafts: backend #107–#113, frontend #131–#140. Nothing merged or deployed."
   },
   "tasks": [
     {
@@ -19,7 +19,7 @@
       "worktree": "worktrees/figma/be-p00-docs",
       "implementation": "implemented",
       "commit": "508c0cd",
-      "pr": null,
+      "pr": "BE#107 (draft)",
       "validation": "docs-only",
       "blockers": []
     },
@@ -31,7 +31,7 @@
       "worktree": "worktrees/figma/fe-p00-docs",
       "implementation": "implemented",
       "commit": "632a387",
-      "pr": null,
+      "pr": "FE#131 (draft)",
       "validation": "docs-only",
       "blockers": []
     },
@@ -51,7 +51,8 @@
         "test": "663/663",
         "build": "pass",
         "live": "screenshots 390/1280, live rename"
-      }
+      },
+      "pr": "FE#132 (draft)"
     },
     {
       "id": "P02-BE-01",
@@ -66,7 +67,8 @@
       "validation": {
         "verify": "1365 tests, 0 failures, 1 skipped",
         "live": "jar 8091"
-      }
+      },
+      "pr": "BE#108 (draft)"
     },
     {
       "id": "P02-FE-01",
@@ -89,7 +91,8 @@
         "test": "673/673",
         "build": "pass",
         "live": "browser upload + remove"
-      }
+      },
+      "pr": "FE#133 (draft)"
     },
     {
       "id": "P03-BE-01",
@@ -108,7 +111,8 @@
       "validation": {
         "verify": "1377 tests, 0 failures, 1 skipped",
         "live": "browser flow"
-      }
+      },
+      "pr": "BE#109 (draft)"
     },
     {
       "id": "P03-FE-01",
@@ -130,7 +134,8 @@
         "test": "678/678",
         "build": "pass",
         "live": "390px flow"
-      }
+      },
+      "pr": "FE#134 (draft)"
     },
     {
       "id": "P04-BE-01",
@@ -147,7 +152,8 @@
       ],
       "worktree": "worktrees/figma/be-p04-catalogue",
       "commit": "04ad8a7",
-      "base": "feat/manara-p03-email-change"
+      "base": "feat/manara-p03-email-change",
+      "pr": "BE#110 (draft)"
     },
     {
       "id": "P04-FE-01",
@@ -164,7 +170,8 @@
       ],
       "worktree": "worktrees/figma/fe-p04-public",
       "commit": "8df5f38",
-      "base": "feat/manara-p03-email-change-ui"
+      "base": "feat/manara-p03-email-change-ui",
+      "pr": "FE#135 (draft)"
     },
     {
       "id": "P05-FE-01",
@@ -180,7 +187,8 @@
       ],
       "worktree": "worktrees/figma/fe-p05-checkout",
       "commit": "9a569b2",
-      "base": "feat/manara-p04-public-courses-ui"
+      "base": "feat/manara-p04-public-courses-ui",
+      "pr": "FE#136 (draft)"
     },
     {
       "id": "P06-BE-01",
@@ -197,7 +205,8 @@
       ],
       "worktree": "worktrees/figma/be-p06-billing",
       "commit": "dcb32dd",
-      "base": "feat/manara-p04-public-catalogue"
+      "base": "feat/manara-p04-public-catalogue",
+      "pr": "BE#111 (draft)"
     },
     {
       "id": "P06-FE-01",
@@ -214,7 +223,8 @@
       ],
       "worktree": "worktrees/figma/fe-p06-billing",
       "commit": "a9d85d9",
-      "base": "feat/manara-p05-checkout-sheet"
+      "base": "feat/manara-p05-checkout-sheet",
+      "pr": "FE#137 (draft)"
     },
     {
       "id": "P07-BE-01",
@@ -230,7 +240,8 @@
       ],
       "worktree": "worktrees/figma/be-p07-capabilities",
       "commit": "f4c4c1d",
-      "base": "feat/manara-p06-billing-ledger"
+      "base": "feat/manara-p06-billing-ledger",
+      "pr": "BE#112 (draft)"
     },
     {
       "id": "P07-FE-01",
@@ -246,7 +257,8 @@
       ],
       "worktree": "worktrees/figma/fe-p07-methods",
       "commit": "040d968",
-      "base": "fix/manara-p11-core-integration"
+      "base": "fix/manara-p11-core-integration",
+      "pr": "FE#139 (draft)"
     },
     {
       "id": "P08",
@@ -286,7 +298,8 @@
       ],
       "worktree": "worktrees/figma/be-p10-refunds",
       "commit": "012b4b9",
-      "base": "feat/manara-p07-billing-capabilities"
+      "base": "feat/manara-p07-billing-capabilities",
+      "pr": "BE#113 (draft)"
     },
     {
       "id": "P10-FE-01",
@@ -301,7 +314,8 @@
       "blockers": [],
       "worktree": "worktrees/figma/fe-p10-refunds",
       "commit": "9218168",
-      "base": "feat/manara-p07-payment-methods-ui"
+      "base": "feat/manara-p07-payment-methods-ui",
+      "pr": "FE#140 (draft)"
     }
   ],
   "checkpoints": {
