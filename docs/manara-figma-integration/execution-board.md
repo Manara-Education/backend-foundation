@@ -14,8 +14,8 @@ Machine-readable state: `orchestration-state.json`. Blockers: `decisions-and-blo
 | P04-BE-01 | verified | `feat/manara-p04-public-catalogue` | `04ad8a7` | — | V19; taxonomy X8 |
 | P04-FE-01 | verified | `feat/manara-p04-public-courses-ui` | `8df5f38` | — | |
 | P05-FE-01 | verified | `feat/manara-p05-checkout-sheet` | `9a569b2` | — | stacked on P04-FE |
-| P06-BE-01 | ready | `feat/manara-p06-billing-ledger` | — | — | V20 |
-| P06-FE-01 | queued | `feat/manara-p06-billing-history-ui` | — | — | |
+| P06-BE-01 | verified | `feat/manara-p06-billing-ledger` | `cd90573` | — | V20 |
+| P06-FE-01 | verified | `feat/manara-p06-billing-history-ui` | `a9d85d9` | — | |
 | P11 core | queued | — | — | — | after P06 |
 | P07–P10 | blocked | — | — | — | X3–X5 |
 | P11 final | queued | — | — | — | |

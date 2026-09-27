@@ -7,9 +7,8 @@
     "frontend": "d4094cfaa26c7a74758312ae6300d35a90e82d9c"
   },
   "resume": {
-    "next": "P06-BE-01",
-    "worktree": "worktrees/figma/be-p06-billing (branch feat/manara-p06-billing-ledger, base P04-BE 04ad8a7)",
-    "note": "Uncommitted: pom.xml adds io.github.openhtmltopdf openhtmltopdf-pdfbox + rtl-support 1.1.87 (pdfbox 3.0.7, icu4j 77.1) for Arabic receipt PDFs. Static Cairo Regular/Bold were instantiated from the OFL variable font in the session scratchpad (lost after the session): redo with fonttools varLib.instancer wght=400/700 slnt=0 from github.com/Gue3bara/Cairo fonts/Cairo/variable. Next: Arabic PDF spike, then V20 payment_transactions + payment_receipts (backfill from course_purchases/course_subscriptions with source keys, no receipts for legacy), CheckoutProcessor integration, quote, reads, receipts JSON/PDF; then P06-FE, P11 core. All PRs still unopened (Codex MCP was down): open draft PRs in stack order after the user confirms."
+    "next": "P11-CORE",
+    "note": "P00–P06 committed and verified locally; run phase 11 core validation on the stack tops (BE cd90573 incl. P03 via P04? see note), then provider phases. PRs not opened yet."
   },
   "tasks": [
     {
@@ -188,26 +187,34 @@
       "phase": "06",
       "repo": "backend",
       "branch": "feat/manara-p06-billing-ledger",
-      "implementation": "ready",
+      "implementation": "verified",
       "migration": "V20",
       "dependsOn": [
         "P02-BE-01"
       ],
       "blockers": [
-        "X6: formal invoices (receipts only)"
-      ]
+        "X6: formal invoices (receipts shipped)"
+      ],
+      "worktree": "worktrees/figma/be-p06-billing",
+      "commit": "cd90573",
+      "base": "feat/manara-p04-public-catalogue"
     },
     {
       "id": "P06-FE-01",
       "phase": "06",
       "repo": "frontend",
       "branch": "feat/manara-p06-billing-history-ui",
-      "implementation": "queued",
+      "implementation": "verified",
       "dependsOn": [
         "P05-FE-01",
         "P06-BE-01"
       ],
-      "blockers": []
+      "blockers": [
+        "X1: export parity only"
+      ],
+      "worktree": "worktrees/figma/fe-p06-billing",
+      "commit": "a9d85d9",
+      "base": "feat/manara-p05-checkout-sheet"
     },
     {
       "id": "P07..P10",
