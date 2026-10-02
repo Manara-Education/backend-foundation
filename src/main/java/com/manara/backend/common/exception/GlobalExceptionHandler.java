@@ -3,6 +3,7 @@ package com.manara.backend.common.exception;
 import com.manara.backend.common.dto.ApiResponse;
 import com.manara.backend.common.service.MessageService;
 import com.manara.backend.email.exception.EmailDeliveryException;
+import com.manara.backend.privacy.exception.PrivacyPolicyNotPublishedException;
 import com.manara.backend.terms.exception.TermsUnavailableException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -136,6 +137,14 @@ public class GlobalExceptionHandler {
         String message = messageService.get(ex.getMessageCode(), ex.getArgs());
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                 .body(ApiResponse.error(message, ErrorCode.TERMS_UNAVAILABLE));
+    }
+
+    /** No published privacy policy is in force yet. A plain 404, with a code the client can branch on. */
+    @ExceptionHandler(PrivacyPolicyNotPublishedException.class)
+    public ResponseEntity<@NonNull ApiResponse<Void>> handlePrivacyPolicyNotPublished(PrivacyPolicyNotPublishedException ex) {
+        String message = messageService.get(ex.getMessageCode());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ApiResponse.error(message, ErrorCode.PRIVACY_POLICY_NOT_PUBLISHED));
     }
 
     /**
