@@ -41,6 +41,30 @@
 			managed version is not silently held back by an override nobody rereads.
 		-->
 		<tomcat.version>11.0.25</tomcat.version>
+		<!--
+			Overrides the Jackson BOMs that spring-boot-starter-parent 4.1.1 pins
+			(2.21.5 and 3.1.5). Both lines are affected by HIGH advisories published
+			from 2026-10-01 in jackson-core and jackson-databind:
+
+			  CVE-2026-89425 / GHSA-7hhh-6rmp-j9qf  jackson-core      fixed in 2.21.7 / 3.1.7
+			  CVE-2026-89407                         jackson-core      fixed in 2.21.7 / 3.1.7
+			  CVE-2026-91777                         jackson-databind  fixed in 2.21.7 / 3.1.7
+			  CVE-2026-91776                         jackson-databind  fixed in 2.21.7 / 3.1.7
+			  CVE-2026-68497                         jackson-databind  fixed in 2.21.6 / 3.1.6
+
+			Both lines ship: Spring Boot 4 serialises with Jackson 3 (tools.jackson),
+			and Jackson 2 (com.fasterxml.jackson) is still on the classpath through
+			the annotations and libraries that use it. `jackson-2-bom.version` and
+			`jackson-bom.version` are the properties spring-boot-dependencies uses to
+			import each BOM, so every module of a line moves together.
+
+			A property override, not a parent upgrade: there is no Spring Boot 4.1.x
+			release carrying these versions (4.1.1 is the newest; 4.2.0 is a milestone).
+
+			REMOVE THIS once the Spring Boot parent pins 2.21.7 / 3.1.7 or later.
+		-->
+		<jackson-2-bom.version>2.21.7</jackson-2-bom.version>
+		<jackson-bom.version>3.1.7</jackson-bom.version>
 	</properties>
 	<dependencies>
 		<dependency>
