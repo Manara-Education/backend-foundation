@@ -1,0 +1,11 @@
+{
+  "policyId": "privacy-policy",
+  "version": "9.1",
+  "language": "ar",
+  "title": "نسخة مرشحة لم تُنشر",
+  "summary": "نص لم يُعتمد.",
+  "operator": { "name": "Fixture Operator", "owner": "Fixture Owner", "privacyEmail": "privacy@example.com" },
+  "sections": [
+    { "id": "first", "number": "1", "title": "قسم", "blocks": [ { "type": "paragraph", "text": "نص لم يُنشر." } ] }
+  ]
+}
