@@ -332,7 +332,7 @@ jobs:
 
       - name: Upload the intelligence snapshot
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: intel-${{ matrix.target.slug }}
           path: intel/
@@ -344,7 +344,7 @@ jobs:
       # advisory lands, and it should not require re-running a pipeline.
       - name: Upload the SBOM as the release inventory
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sbom-${{ matrix.target.slug }}
           path: target/sbom.cdx.json
@@ -398,13 +398,13 @@ jobs:
           echo "${RUNNER_TEMP}/security-tools" >> "$GITHUB_PATH"
 
       - name: Download the recorded intelligence snapshot
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: intel-${{ matrix.target.slug }}
           path: intel
 
       - name: Download the SBOM
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sbom-${{ matrix.target.slug }}
           path: sbom
@@ -460,7 +460,7 @@ jobs:
 
       - name: Upload the report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: report-${{ matrix.target.slug }}-deps-osv
           path: reports/
@@ -559,7 +559,7 @@ jobs:
       # anything, and ANY non-zero exit is a genuine scanner failure that fails
       # this job.
       - name: Download the SBOM produced by the intelligence job
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sbom-${{ matrix.target.slug }}
           path: sbom
@@ -581,7 +581,7 @@ jobs:
 
       - name: Upload the report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: report-${{ matrix.target.slug }}-deps-trivy
           path: reports/
@@ -687,7 +687,7 @@ jobs:
 
       - name: Upload the report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: report-${{ matrix.target.slug }}-config-trivy
           path: reports/
@@ -792,7 +792,7 @@ jobs:
 
       - name: Upload the report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: report-${{ matrix.target.slug }}-image-trivy
           path: reports/
@@ -926,7 +926,7 @@ jobs:
 
       - name: Upload the report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: report-${{ matrix.target.slug }}-sast-codeql
           path: reports/
@@ -1052,7 +1052,7 @@ jobs:
 
       - name: Upload the report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: report-${{ matrix.target.slug }}-secrets-gitleaks
           path: reports/
@@ -1148,7 +1148,7 @@ jobs:
 
       - name: Upload the report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: report-${{ matrix.target.slug }}-deps-diff-review
           path: reports/
@@ -1258,7 +1258,7 @@ jobs:
       # evaluator an empty directory, which it reports as missing reports and
       # blocks on — the same answer, with a usable explanation.
       - name: Download every report
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: _artifacts
         continue-on-error: true
@@ -1560,7 +1560,7 @@ jobs:
 
       - name: Upload the verdict and the findings register
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: security-gate-verdict
           path: |
