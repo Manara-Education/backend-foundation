@@ -143,3 +143,45 @@ jobs:
           docker logs ci-smoke 2>&1 | tail -50
           docker rm -f ci-smoke >/dev/null
           exit 1
+
+  # The vendored Cloudflare security-audit agent skill (.claude/skills/security-audit/).
+  # It is a byte-for-byte copy of an upstream commit pinned in
+  # .github/skills/security-audit.lock. This job re-fetches that commit with the
+  # same script used to bump the pin and fails on any difference, so a local edit
+  # to the skill, or a lock that no longer matches the tree, cannot merge quietly.
+  # It then runs the skill's own tests for the two validators that every audit's
+  # findings.json and coverage-ledger.json are checked against.
+  #
+  # The audit itself is not run here: it needs a model and a Claude token, and its
+  # output varies from run to run. That lives in security-audit.yml, on a
+  # schedule, and never blocks a merge.
+  skill:
+    name: Verify the security-audit skill
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Compare the vendored skill with its pinned upstream commit
+        run: |
+          set -euo pipefail
+          .github/skills/sync-security-audit.sh --dest "$RUNNER_TEMP/security-audit-upstream"
+          if ! diff -r "$RUNNER_TEMP/security-audit-upstream" .claude/skills/security-audit; then
+            echo "::error::.claude/skills/security-audit/ differs from the commit pinned in .github/skills/security-audit.lock. Re-vendor it with .github/skills/sync-security-audit.sh instead of editing it."
+            exit 1
+          fi
+
+      - name: Run the skill's validator tests
+        working-directory: .claude/skills/security-audit
+        run: |
+          set -euo pipefail
+          node --test validate-findings.test.cjs validate-coverage-ledger.test.cjs
