@@ -592,7 +592,9 @@ outside the repository. Never commit audit output: this repository is public.
 | `ci.yml` → `Verify the security-audit skill` | Re-fetches the upstream commit pinned in `.github/skills/security-audit.lock` and `diff -r`s it against the vendored copy, then runs the validators' own test suites. | Fails CI; not a ruleset-required check |
 | `security-audit.yml` (Mondays 04:41 UTC, or manual dispatch with a `ref`) | Runs the full audit with `anthropics/claude-code-action`, re-validates `findings.json` and `coverage-ledger.json` from a trusted step, and uploads the output **encrypted with `age`**. | Never |
 
-The audit needs the `ANTHROPIC_API_KEY` Actions secret. It also needs at least
+The audit needs the `CLAUDE_CODE_OAUTH_TOKEN` Actions secret, created with
+`claude setup-token` from a Claude Pro/Max subscription. Each run counts against
+that subscription's usage limits. It also needs at least
 one `age1…` public key in `.github/skills/security-audit-recipients.txt`, and it
 refuses to start until one is there. Logs and artifacts of a public repository are
 readable by anyone, so the step summary reports only completion, and validator

@@ -152,7 +152,7 @@ jobs:
   # It then runs the skill's own tests for the two validators that every audit's
   # findings.json and coverage-ledger.json are checked against.
   #
-  # The audit itself is not run here: it needs a model and an API key, and its
+  # The audit itself is not run here: it needs a model and a Claude token, and its
   # output varies from run to run. That lives in security-audit.yml, on a
   # schedule, and never blocks a merge.
   skill:

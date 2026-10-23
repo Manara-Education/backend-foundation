@@ -34,14 +34,14 @@
 # -------------------
 # `schedule` (which GitHub only ever runs on the default branch) and
 # `workflow_dispatch` by someone with write access. Never `pull_request`: this job
-# holds ANTHROPIC_API_KEY, and fork content must never reach a job with a secret.
+# holds CLAUDE_CODE_OAUTH_TOKEN, and fork content must never reach a job with a secret.
 
 name: Security Audit
 
 on:
   schedule:
-    # Mondays 04:41 UTC. Weekly rather than daily: a full audit is an API spend,
-    # and the code changes far more slowly than the advisory feeds that the daily
+    # Mondays 04:41 UTC. Weekly rather than daily: a full audit draws heavily on
+    # the Claude subscription behind CLAUDE_CODE_OAUTH_TOKEN, and the code changes far more slowly than the advisory feeds that the daily
     # Security Gate run exists for. Odd minute: GitHub drops runs on the hour.
     - cron: '41 4 * * 1'
   workflow_dispatch:
@@ -55,7 +55,7 @@ permissions:
   contents: read
 
 # One audit per ref at a time, and never cancel one in flight: a cancelled audit
-# is paid for and produces nothing.
+# has used up subscription quota and produces nothing.
 concurrency:
   group: security-audit-${{ inputs.ref || 'develop' }}
   cancel-in-progress: false
@@ -76,9 +76,15 @@ jobs:
           # to target recently changed code.
           fetch-depth: 0
 
-      - name: Refuse to run without a decryption key
+      - name: Refuse to run without a decryption key or a Claude token
+        env:
+          HAS_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
         run: |
           set -euo pipefail
+          if [ "$HAS_TOKEN" != "true" ]; then
+            echo "::error::The CLAUDE_CODE_OAUTH_TOKEN Actions secret is not set (create one with 'claude setup-token'), so the audit was not started."
+            exit 1
+          fi
           if ! grep -Eq '^age1[0-9a-z]+$' .github/skills/security-audit-recipients.txt; then
             echo "::error::.github/skills/security-audit-recipients.txt has no age public key. The report cannot be uploaded safely from a public repository, so the audit was not started."
             exit 1
@@ -105,7 +111,7 @@ jobs:
       - name: Run the audit
         uses: anthropics/claude-code-action@v1
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
           prompt: |
             Security audit this codebase in full audit mode, using the skill at
