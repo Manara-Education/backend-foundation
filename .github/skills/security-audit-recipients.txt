@@ -9,3 +9,6 @@
 # the public key is printed and stored in the file's comment). Never commit the
 # private key. Decrypt a downloaded bundle with:
 #   age -d -i key.txt security-audit.tar.gz.age | tar -xzf -
+
+# Hamed-mohamed-Git — added 2026-10-23
+age15g488ahdhw27tfe2v6k37zl8pssqcjl58uytjak887u8y7hj8gpqq7anyg
