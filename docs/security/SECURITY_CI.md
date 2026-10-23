@@ -563,3 +563,55 @@ what registered the workflow and made `workflow_run` fire.
 
 Keeping the copy on `main` is harmless and is left in place, so that a future
 change of default branch does not silently switch the alerts off again.
+
+## 13. The security-audit agent skill
+
+[Cloudflare's `security-audit` skill](https://github.com/cloudflare/security-audit-skill)
+(MIT) is vendored at `.claude/skills/security-audit/`, so Claude Code in this
+repository can run a source-first security audit. The audit has six phases:
+reconnaissance, coverage-led hunting, adversarial validation of every candidate,
+a schema-checked `findings.json`, independent re-verification, and `REPORT.md`.
+
+It is **advisory**. It is not part of the Security Gate (§3), not a required
+check, and nothing it finds blocks a merge or a deploy. An LLM audit's output
+varies from run to run, and only `evaluate.py` reading `policy.yml` decides what
+blocks. Triage a confirmed finding like any other report. If it is real, fix it
+in a PR. If it should block, express it as a scanner rule or test.
+
+### Running it locally
+
+Ask Claude Code `security audit this codebase` for the full workflow. A narrower
+question ("is this endpoint vulnerable to IDOR?") uses guidance mode and writes
+no files. Full-audit output goes to `~/security-audit-skill/<repo>/run-<N>`,
+outside the repository. Never commit audit output: this repository is public.
+
+### What CI does with it
+
+| Where | What | Blocks? |
+|---|---|---|
+| `ci.yml` → `Verify the security-audit skill` | Re-fetches the upstream commit pinned in `.github/skills/security-audit.lock` and `diff -r`s it against the vendored copy, then runs the validators' own test suites. | Fails CI; not a ruleset-required check |
+| `security-audit.yml` (Mondays 04:41 UTC, or manual dispatch with a `ref`) | Runs the full audit with `anthropics/claude-code-action`, re-validates `findings.json` and `coverage-ledger.json` from a trusted step, and uploads the output **encrypted with `age`**. | Never |
+
+The audit needs the `ANTHROPIC_API_KEY` Actions secret. It also needs at least
+one `age1…` public key in `.github/skills/security-audit-recipients.txt`, and it
+refuses to start until one is there. Logs and artifacts of a public repository are
+readable by anyone, so the step summary reports only completion, and validator
+output goes into the encrypted bundle instead of the log. To read a report,
+download the `security-audit-<sha>` artifact and run
+`age -d -i key.txt security-audit.tar.gz.age | tar -xzf -`.
+
+The CI run is source-only. A runner has no OS-enforced sandbox of the kind the
+skill requires before executing target code. Leads that need execution therefore
+stay `needs_validation` and should be confirmed locally in a sandbox.
+
+### Bumping the pin
+
+```bash
+.github/skills/sync-security-audit.sh <full-40-char-upstream-sha>
+```
+
+The script re-vendors that commit and rewrites the lock. Review the upstream
+diff, then commit both together. Never edit files under
+`.claude/skills/security-audit/` by hand: CI rejects any difference from the
+pinned commit. `.gitignore` re-includes only this one skill; every other file
+under `.claude/` stays local.

@@ -1,0 +1,185 @@
+# Scheduled AI security audit using the vendored Cloudflare security-audit skill.
+#
+# WHAT THIS IS — AND IS NOT
+# -------------------------
+# Claude Code runs the skill's full six-phase audit (reconnaissance, coverage-led
+# hunting, adversarial validation, findings.json, independent re-verification,
+# REPORT.md) against one revision of this repository, source-only.
+#
+# It is ADVISORY. It is not part of the Security Gate, it is not a required
+# check, and a confirmed finding does not fail the run. Model output varies from
+# run to run, and the gate's rule is that only evaluate.py, reading policy.yml,
+# decides whether something may merge or ship. Findings are triaged by a human
+# and, if real, fixed through the normal PR process.
+#
+# The run fails only when the audit cannot be trusted as an audit: the model step
+# errored, or findings.json / coverage-ledger.json do not pass the skill's own
+# validators.
+#
+# THIS REPOSITORY IS PUBLIC
+# -------------------------
+# Logs, step summaries and artifacts of a public repository are readable by
+# anyone. A report of unfixed vulnerabilities must not end up in any of them, so:
+#
+#   * the whole output directory is encrypted with `age` to the public keys in
+#     .github/skills/security-audit-recipients.txt before it is uploaded, and the
+#     run refuses to start — before spending anything — while that file has no key;
+#   * the step summary says only whether the audit completed and validated: no
+#     counts, no severities, no titles;
+#   * validator output can quote finding fields, so it is written into the
+#     encrypted bundle and never to the log;
+#   * show_full_output and display_report stay at their default `false`.
+#
+# WHAT CAN TRIGGER IT
+# -------------------
+# `schedule` (which GitHub only ever runs on the default branch) and
+# `workflow_dispatch` by someone with write access. Never `pull_request`: this job
+# holds ANTHROPIC_API_KEY, and fork content must never reach a job with a secret.
+
+name: Security Audit
+
+on:
+  schedule:
+    # Mondays 04:41 UTC. Weekly rather than daily: a full audit is an API spend,
+    # and the code changes far more slowly than the advisory feeds that the daily
+    # Security Gate run exists for. Odd minute: GitHub drops runs on the hour.
+    - cron: '41 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or SHA to audit.
+        type: string
+        default: develop
+
+permissions:
+  contents: read
+
+# One audit per ref at a time, and never cancel one in flight: a cancelled audit
+# is paid for and produces nothing.
+concurrency:
+  group: security-audit-${{ inputs.ref || 'develop' }}
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Security audit (${{ inputs.ref || 'develop' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out the audited revision
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || 'develop' }}
+          persist-credentials: false
+          # Full history: the skill records the reviewed commit and uses git log
+          # to target recently changed code.
+          fetch-depth: 0
+
+      - name: Refuse to run without a decryption key
+        run: |
+          set -euo pipefail
+          if ! grep -Eq '^age1[0-9a-z]+$' .github/skills/security-audit-recipients.txt; then
+            echo "::error::.github/skills/security-audit-recipients.txt has no age public key. The report cannot be uploaded safely from a public repository, so the audit was not started."
+            exit 1
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq age
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Prepare the output directory
+        id: out
+        run: |
+          set -euo pipefail
+          # Outside the checkout, as the skill requires for an output directory
+          # that version control does not ignore.
+          dir="$RUNNER_TEMP/security-audit/run-1"
+          mkdir -p "$dir"
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Run the audit
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ github.token }}
+          prompt: |
+            Security audit this codebase in full audit mode, using the skill at
+            .claude/skills/security-audit (read its SKILL.md first and follow it exactly).
+
+            - Target: the repository root (the current directory), commit ${{ steps.out.outputs.sha }}.
+            - Output directory: ${{ steps.out.outputs.dir }} (already created, outside the target).
+            - This is a CI runner. No OS-enforced sandbox is available, so do not build,
+              test or execute target code; keep any lead that needs execution as
+              needs_validation with that blocker. Do not access the network.
+            - Run the skill's validators as it instructs, and finish all six phases.
+            - Do not print findings, titles or severities in your final message: this
+              log is public. End with one line saying whether all phases completed.
+          claude_args: >-
+            --model claude-opus-5-5
+            --max-turns 400
+            --add-dir ${{ steps.out.outputs.dir }}
+            --allowedTools "Read,Grep,Glob,Task,Write,Edit,Bash(node:*),Bash(git log:*),Bash(git show:*),Bash(git rev-parse:*),Bash(git status:*),Bash(git diff:*),Bash(mkdir:*),Bash(ls:*)"
+            --disallowedTools "WebFetch,WebSearch"
+
+      # Re-validate from a trusted step instead of taking the model's word that it
+      # did. Output goes into the bundle, not the public log.
+      - name: Validate the audit records
+        if: always() && steps.out.outcome == 'success'
+        env:
+          OUT: ${{ steps.out.outputs.dir }}
+        run: |
+          set -uo pipefail
+          skill=.claude/skills/security-audit
+          status=0
+          for pair in "findings.json:validate-findings.cjs" "coverage-ledger.json:validate-coverage-ledger.cjs"; do
+            file="${pair%%:*}"; validator="${pair##*:}"
+            if [ ! -f "$OUT/$file" ]; then
+              echo "::error::The audit did not produce $file."
+              status=1
+            elif node "$skill/$validator" "$OUT/$file" > "$OUT/ci-validate-$file.log" 2>&1; then
+              echo "$file: valid"
+            else
+              echo "::error::$file failed $validator (details are in the encrypted bundle)."
+              status=1
+            fi
+          done
+          exit "$status"
+
+      - name: Encrypt the report bundle
+        if: always() && steps.out.outcome == 'success'
+        env:
+          OUT: ${{ steps.out.outputs.dir }}
+        run: |
+          set -euo pipefail
+          tar -C "$OUT" -czf - . \
+            | age -R .github/skills/security-audit-recipients.txt -o "$RUNNER_TEMP/security-audit.tar.gz.age"
+          # The runner is discarded after the job; this only narrows the window.
+          rm -rf "$OUT"
+
+      - name: Upload the encrypted bundle
+        if: always() && steps.out.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: security-audit-${{ steps.out.outputs.sha }}
+          path: ${{ runner.temp }}/security-audit.tar.gz.age
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Summarise
+        if: always() && steps.out.outcome == 'success'
+        env:
+          REF: ${{ inputs.ref || 'develop' }}
+          SHA: ${{ steps.out.outputs.sha }}
+        run: |
+          {
+            echo "## Security audit: \`$REF\` @ \`${SHA:0:12}\`"
+            echo
+            echo "The report is in the encrypted artifact \`security-audit-$SHA\`."
+            echo "Decrypt with \`age -d -i key.txt security-audit.tar.gz.age | tar -xzf -\`."
+            echo "Findings are deliberately not summarised here: this repository is public."
+          } >> "$GITHUB_STEP_SUMMARY"

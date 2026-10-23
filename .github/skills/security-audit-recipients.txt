@@ -1,0 +1,11 @@
+# age public keys that can decrypt the scheduled security-audit report.
+#
+# This repository is PUBLIC: its Actions logs, step summaries and artifacts are
+# readable by anyone. An audit report lists vulnerabilities that may not be fixed
+# yet, so security-audit.yml encrypts the whole bundle to the keys below before
+# uploading it, and refuses to run at all while this file holds no key.
+#
+# Add one `age1...` public key per line (generate with `age-keygen -o key.txt`;
+# the public key is printed and stored in the file's comment). Never commit the
+# private key. Decrypt a downloaded bundle with:
+#   age -d -i key.txt security-audit.tar.gz.age | tar -xzf -

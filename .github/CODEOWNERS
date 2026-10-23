@@ -21,6 +21,8 @@
 # A mistake in these files does not fail a test — it fails a deployment.
 # ---------------------------------------------------------------------------
 /.github/workflows/     @Mohamed-Hamza @Hamed-mohamed-Git
+/.github/skills/        @Mohamed-Hamza @Hamed-mohamed-Git
+/.claude/skills/        @Mohamed-Hamza @Hamed-mohamed-Git
 /Dockerfile             @Mohamed-Hamza @Hamed-mohamed-Git
 /.dockerignore          @Mohamed-Hamza @Hamed-mohamed-Git
 /docker-compose.yml     @Mohamed-Hamza @Hamed-mohamed-Git
