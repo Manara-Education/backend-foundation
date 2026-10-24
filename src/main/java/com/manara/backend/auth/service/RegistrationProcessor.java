@@ -14,6 +14,10 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
+import java.time.LocalDateTime;
+
+
 /**
  * The transactional half of registration, and the part {@link AuthService#register} has to be able
  * to call again in a fresh transaction.
@@ -36,6 +40,7 @@ public class RegistrationProcessor {
     private final TermsService termsService;
     private final OtpService otpService;
     private final AccountExistsNotifier accountExistsNotifier;
+    private final Clock clock;
 
     /**
      * Creates the account, its consent row, its profile and its first code. If the address already
@@ -53,7 +58,7 @@ public class RegistrationProcessor {
             return;
         }
 
-        var user = userRepository.save(authMapper.toUser(request, encodedPassword, role));
+        var user = userRepository.save(authMapper.toUser(request, encodedPassword, role, LocalDateTime.now(clock)));
 
         termsService.recordAcceptance(user, acceptedTermsVersion);
 
