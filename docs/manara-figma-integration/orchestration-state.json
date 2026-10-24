@@ -1,0 +1,335 @@
+{
+  "schema": 1,
+  "updatedAt": "2026-09-27T13:45:00+03:00",
+  "canonicalLocation": "backend-foundation/docs/manara-figma-integration",
+  "base": {
+    "backend": "ac72672723defd03e160b69b59914c51e6bbd492",
+    "frontend": "d4094cfaa26c7a74758312ae6300d35a90e82d9c"
+  },
+  "resume": {
+    "next": "Owner review of the 17 draft PRs, bottom-up (release-readiness.md)",
+    "note": "All PRs opened 2026-09-27 as drafts: backend #107–#113, frontend #131–#140. Nothing merged or deployed."
+  },
+  "tasks": [
+    {
+      "id": "P00-DOC-01",
+      "phase": "00",
+      "repo": "backend",
+      "branch": "update/manara-figma-integration-plan",
+      "worktree": "worktrees/figma/be-p00-docs",
+      "implementation": "implemented",
+      "commit": "508c0cd",
+      "pr": "BE#107 (draft)",
+      "validation": "docs-only",
+      "blockers": []
+    },
+    {
+      "id": "P00-DOC-02",
+      "phase": "00",
+      "repo": "frontend",
+      "branch": "update/manara-figma-integration-link",
+      "worktree": "worktrees/figma/fe-p00-docs",
+      "implementation": "implemented",
+      "commit": "632a387",
+      "pr": "FE#131 (draft)",
+      "validation": "docs-only",
+      "blockers": []
+    },
+    {
+      "id": "P01-FE-01",
+      "phase": "01",
+      "repo": "frontend",
+      "branch": "feat/manara-p01-settings-shell",
+      "implementation": "partially_blocked",
+      "blockers": [
+        "X1: Appearance port and export parity"
+      ],
+      "worktree": "worktrees/figma/fe-p01-settings",
+      "commit": "3a1cd39",
+      "validation": {
+        "typecheck": "pass",
+        "test": "663/663",
+        "build": "pass",
+        "live": "screenshots 390/1280, live rename"
+      },
+      "pr": "FE#132 (draft)"
+    },
+    {
+      "id": "P02-BE-01",
+      "phase": "02",
+      "repo": "backend",
+      "branch": "feat/manara-p02-profile-api",
+      "implementation": "verified",
+      "migration": "V17",
+      "blockers": [],
+      "worktree": "worktrees/figma/be-p02-profile",
+      "commit": "10e0007",
+      "validation": {
+        "verify": "1365 tests, 0 failures, 1 skipped",
+        "live": "jar 8091"
+      },
+      "pr": "BE#108 (draft)"
+    },
+    {
+      "id": "P02-FE-01",
+      "phase": "02",
+      "repo": "frontend",
+      "branch": "feat/manara-p02-avatar-ui",
+      "implementation": "verified",
+      "dependsOn": [
+        "P01-FE-01",
+        "P02-BE-01"
+      ],
+      "blockers": [
+        "X1: export parity only"
+      ],
+      "worktree": "worktrees/figma/fe-p02-avatar",
+      "commit": "8422566",
+      "base": "feat/manara-p01-settings-shell",
+      "validation": {
+        "typecheck": "pass",
+        "test": "673/673",
+        "build": "pass",
+        "live": "browser upload + remove"
+      },
+      "pr": "FE#133 (draft)"
+    },
+    {
+      "id": "P03-BE-01",
+      "phase": "03",
+      "repo": "backend",
+      "branch": "feat/manara-p03-email-change",
+      "implementation": "verified",
+      "migration": "V18",
+      "dependsOn": [
+        "P02-BE-01"
+      ],
+      "blockers": [],
+      "worktree": "worktrees/figma/be-p03-email",
+      "commit": "76e5b13",
+      "base": "feat/manara-p02-profile-api",
+      "validation": {
+        "verify": "1377 tests, 0 failures, 1 skipped",
+        "live": "browser flow"
+      },
+      "pr": "BE#109 (draft)"
+    },
+    {
+      "id": "P03-FE-01",
+      "phase": "03",
+      "repo": "frontend",
+      "branch": "feat/manara-p03-email-change-ui",
+      "implementation": "verified",
+      "dependsOn": [
+        "P02-FE-01",
+        "P03-BE-01"
+      ],
+      "blockers": [
+        "X1: export parity only"
+      ],
+      "worktree": "worktrees/figma/fe-p03-email",
+      "commit": "b4f68c3",
+      "base": "feat/manara-p02-avatar-ui",
+      "validation": {
+        "test": "678/678",
+        "build": "pass",
+        "live": "390px flow"
+      },
+      "pr": "FE#134 (draft)"
+    },
+    {
+      "id": "P04-BE-01",
+      "phase": "04",
+      "repo": "backend",
+      "branch": "feat/manara-p04-public-catalogue",
+      "implementation": "verified",
+      "migration": "V19",
+      "dependsOn": [
+        "P02-BE-01"
+      ],
+      "blockers": [
+        "X8: taxonomy data"
+      ],
+      "worktree": "worktrees/figma/be-p04-catalogue",
+      "commit": "04ad8a7",
+      "base": "feat/manara-p03-email-change",
+      "pr": "BE#110 (draft)"
+    },
+    {
+      "id": "P04-FE-01",
+      "phase": "04",
+      "repo": "frontend",
+      "branch": "feat/manara-p04-public-courses-ui",
+      "implementation": "verified",
+      "dependsOn": [
+        "P04-BE-01"
+      ],
+      "blockers": [
+        "X1: export parity",
+        "X8: taxonomy data"
+      ],
+      "worktree": "worktrees/figma/fe-p04-public",
+      "commit": "8df5f38",
+      "base": "feat/manara-p03-email-change-ui",
+      "pr": "FE#135 (draft)"
+    },
+    {
+      "id": "P05-FE-01",
+      "phase": "05",
+      "repo": "frontend",
+      "branch": "feat/manara-p05-checkout-sheet",
+      "implementation": "verified",
+      "dependsOn": [
+        "P04-FE-01"
+      ],
+      "blockers": [
+        "X1: export parity only"
+      ],
+      "worktree": "worktrees/figma/fe-p05-checkout",
+      "commit": "9a569b2",
+      "base": "feat/manara-p04-public-courses-ui",
+      "pr": "FE#136 (draft)"
+    },
+    {
+      "id": "P06-BE-01",
+      "phase": "06",
+      "repo": "backend",
+      "branch": "feat/manara-p06-billing-ledger",
+      "implementation": "verified",
+      "migration": "V20",
+      "dependsOn": [
+        "P02-BE-01"
+      ],
+      "blockers": [
+        "X6: formal invoices (receipts shipped)"
+      ],
+      "worktree": "worktrees/figma/be-p06-billing",
+      "commit": "dcb32dd",
+      "base": "feat/manara-p04-public-catalogue",
+      "pr": "BE#111 (draft)"
+    },
+    {
+      "id": "P06-FE-01",
+      "phase": "06",
+      "repo": "frontend",
+      "branch": "feat/manara-p06-billing-history-ui",
+      "implementation": "verified",
+      "dependsOn": [
+        "P05-FE-01",
+        "P06-BE-01"
+      ],
+      "blockers": [
+        "X1: export parity only"
+      ],
+      "worktree": "worktrees/figma/fe-p06-billing",
+      "commit": "a9d85d9",
+      "base": "feat/manara-p05-checkout-sheet",
+      "pr": "FE#137 (draft)"
+    },
+    {
+      "id": "P07-BE-01",
+      "phase": "07",
+      "repo": "backend",
+      "branch": "feat/manara-p07-billing-capabilities",
+      "implementation": "verified",
+      "dependsOn": [
+        "P06-BE-01"
+      ],
+      "blockers": [
+        "X3: saved methods (D12)"
+      ],
+      "worktree": "worktrees/figma/be-p07-capabilities",
+      "commit": "f4c4c1d",
+      "base": "feat/manara-p06-billing-ledger",
+      "pr": "BE#112 (draft)"
+    },
+    {
+      "id": "P07-FE-01",
+      "phase": "07",
+      "repo": "frontend",
+      "branch": "feat/manara-p07-payment-methods-ui",
+      "implementation": "verified",
+      "dependsOn": [
+        "P07-BE-01"
+      ],
+      "blockers": [
+        "X3: saved methods"
+      ],
+      "worktree": "worktrees/figma/fe-p07-methods",
+      "commit": "040d968",
+      "base": "fix/manara-p11-core-integration",
+      "pr": "FE#139 (draft)"
+    },
+    {
+      "id": "P08",
+      "phase": "08",
+      "implementation": "blocked",
+      "blockers": [
+        "X3"
+      ],
+      "handoff": "phase-08-handoff.md"
+    },
+    {
+      "id": "P09",
+      "phase": "09",
+      "implementation": "fallback-done",
+      "blockers": [
+        "X3",
+        "X5"
+      ],
+      "handoff": "phase-09-handoff.md"
+    },
+    {
+      "id": "P10-BE-01",
+      "phase": "10",
+      "repo": "backend",
+      "branch": "feat/manara-p10-refund-requests",
+      "implementation": "verified",
+      "migration": "V21",
+      "config": {
+        "app.refund-requests.enabled": false
+      },
+      "dependsOn": [
+        "P07-BE-01"
+      ],
+      "blockers": [
+        "X4: reviewer surface",
+        "X3: provider refunds"
+      ],
+      "worktree": "worktrees/figma/be-p10-refunds",
+      "commit": "012b4b9",
+      "base": "feat/manara-p07-billing-capabilities",
+      "pr": "BE#113 (draft)"
+    },
+    {
+      "id": "P10-FE-01",
+      "phase": "10",
+      "repo": "frontend",
+      "branch": "feat/manara-p10-refund-request-ui",
+      "implementation": "verified",
+      "dependsOn": [
+        "P07-FE-01",
+        "P10-BE-01"
+      ],
+      "blockers": [],
+      "worktree": "worktrees/figma/fe-p10-refunds",
+      "commit": "9218168",
+      "base": "feat/manara-p07-payment-methods-ui",
+      "pr": "FE#140 (draft)"
+    }
+  ],
+  "checkpoints": {
+    "core": {
+      "file": "phase-11-core-validation.md",
+      "backend": "cd90573",
+      "frontend": "eb0194f",
+      "result": "verified with limitations (X1)"
+    },
+    "final": {
+      "file": "phase-11-final-validation.md",
+      "backend": "012b4b9",
+      "frontend": "9218168",
+      "result": "verified with limitations (X1, X3, X4, X5, X6, X8)"
+    }
+  }
+}
