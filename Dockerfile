@@ -13,7 +13,7 @@
 # a base that cannot change underneath a rebuild without a reviewed diff.
 # .github/dependabot.yml carries a `docker` ecosystem that proposes the bump —
 # a digest pin discovers nothing on its own, not even with --pull.
-FROM eclipse-temurin:25-jdk-alpine@sha256:3fd2d245c4e0eba615fe366a71b8bd25f5db7104f53e4026b24bf508b880bd2a AS build
+FROM eclipse-temurin:25-jdk-alpine@sha256:1e20ead9eec7234db293f1913438090d533ed47c0b9e12dc8c7627a802a44ed6 AS build
 
 # The wrapper's only-script distribution downloads and unpacks Maven itself.
 # Alpine's busybox provides wget but not unzip, so unzip is the one build-only
@@ -56,7 +56,7 @@ RUN set -eu; \
 # A JRE, not a JDK. The previous runtime stage shipped the full JDK — compiler,
 # javac, jlink, debugging tools — into production for no reason. Every one of
 # those is attack surface that the running application never uses.
-FROM eclipse-temurin:25-jre-alpine@sha256:3c0a9084927a221ccd1d007fcaf614465672c0af37aaa834c5184483afe56d61 AS runtime
+FROM eclipse-temurin:25-jre-alpine@sha256:b7528962e65d43064d8a8b67ba175367896bc948363ea2d3fcd7f10d34e1f048 AS runtime
 
 # --- OS packages -----------------------------------------------------------
 # Every blocking finding against this image is an Alpine package, not anything
