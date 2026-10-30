@@ -21,4 +21,7 @@ public class AuthResponse {
      * session restore, that this account must change its password before going anywhere else.
      */
     private boolean requiresPasswordReset;
+
+    /** Served URL of the account's photo, or {@code null}; lets the shell show it without a profile read. */
+    private String avatarUrl;
 }
