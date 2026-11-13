@@ -2,6 +2,7 @@ package com.manara.backend.common.file;
 
 import com.manara.backend.banner.repository.BannerRepository;
 import com.manara.backend.course.repository.CourseRepository;
+import com.manara.backend.user.repository.UserRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -69,6 +70,7 @@ public class UploadRetentionService {
     private final UploadOwnershipRegistry uploadOwnershipRegistry;
     private final CourseRepository courseRepository;
     private final BannerRepository bannerRepository;
+    private final UserRepository userRepository;
     private final FileUploadService fileUploadService;
 
     /**
@@ -87,11 +89,13 @@ public class UploadRetentionService {
     public UploadRetentionService(UploadOwnershipRegistry uploadOwnershipRegistry,
                                   CourseRepository courseRepository,
                                   BannerRepository bannerRepository,
+                                  UserRepository userRepository,
                                   FileUploadService fileUploadService,
                                   PlatformTransactionManager transactionManager) {
         this.uploadOwnershipRegistry = uploadOwnershipRegistry;
         this.courseRepository = courseRepository;
         this.bannerRepository = bannerRepository;
+        this.userRepository = userRepository;
         this.fileUploadService = fileUploadService;
         this.afterCommitTransaction = new TransactionTemplate(transactionManager);
         this.afterCommitTransaction.setPropagationBehavior(
@@ -189,6 +193,8 @@ public class UploadRetentionService {
      * answering a narrower question than its name promises.
      */
     private long remainingReferences(String fileUrl) {
-        return courseRepository.countByImage(fileUrl) + bannerRepository.countByImageUrl(fileUrl);
+        return courseRepository.countByImage(fileUrl)
+                + bannerRepository.countByImageUrl(fileUrl)
+                + userRepository.countByAvatarUrl(fileUrl);
     }
 }

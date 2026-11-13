@@ -120,6 +120,29 @@ class UploadedImageReencoder {
      * @throws IOException       if the output could not be written
      */
     StoredFormat reencode(byte[] source, Path destination) throws IOException {
+        return reencode(source, destination, null);
+    }
+
+    /**
+     * Decodes {@code source}, crops its centre square and writes it afresh at {@code side}×{@code side}.
+     *
+     * <p>For profile photos. The client crops before uploading, but nothing it sends is trusted to be
+     * square or of any particular size: the server makes the square itself, so a client that skips
+     * its crop gets a centred one rather than a stretched or oversized file. Only still JPEG and PNG
+     * sources are accepted, and neither side may be shorter than {@code minimumSide}.
+     *
+     * @throws BusinessException if the bytes are not an acceptable image for a photo
+     * @throws IOException       if the output could not be written
+     */
+    StoredFormat reencodeSquare(byte[] source, Path destination, int side, int minimumSide) throws IOException {
+        return reencode(source, destination, new SquareOutput(side, minimumSide));
+    }
+
+    /** The shape a profile photo is stored in. */
+    private record SquareOutput(int side, int minimumSide) {
+    }
+
+    private StoredFormat reencode(byte[] source, Path destination, SquareOutput square) throws IOException {
         ImageReader reader = null;
         int reserved = 0;
         try (ImageInputStream input = new MemoryCacheImageInputStream(new ByteArrayInputStream(source))) {
@@ -138,6 +161,16 @@ class UploadedImageReencoder {
                 int width = reader.getWidth(0);
                 int height = reader.getHeight(0);
                 checkDimensions(width, height);
+                if (square != null) {
+                    // A photo is a JPEG or a PNG. GIF is accepted for covers only because covers
+                    // always accepted it; a profile photo has no such history to keep.
+                    if (!"jpeg".equals(format) && !"png".equals(format)) {
+                        throw new BusinessException("error.file.typeNotAllowed");
+                    }
+                    if (width < square.minimumSide() || height < square.minimumSide()) {
+                        throw new BusinessException("error.file.imageTooSmall");
+                    }
+                }
                 if (isAnimated(reader, format, source)) {
                     throw new BusinessException("error.file.animated");
                 }
@@ -155,6 +188,9 @@ class UploadedImageReencoder {
                         : StoredFormat.PNG;
                 int orientation = "jpeg".equals(format) ? exifOrientation(source) : 1;
                 output = prepareForWriting(decoded, orientation, target);
+                if (square != null) {
+                    output = centreSquare(output, square.side());
+                }
             } catch (IOException | RuntimeException ex) {
                 if (ex instanceof BusinessException refusal) {
                     throw refusal;
@@ -303,6 +339,31 @@ class UploadedImageReencoder {
             case 8 -> new AffineTransform(0, -1, 1, 0, 0, width);       // turned 90° anticlockwise
             default -> new AffineTransform();
         };
+    }
+
+    /**
+     * The largest centred square of an upright image, scaled to {@code side}. Drawn into a fresh
+     * 8-bit raster of the same alpha-ness, which both writers can encode.
+     */
+    private static BufferedImage centreSquare(BufferedImage upright, int side) {
+        int width = upright.getWidth();
+        int height = upright.getHeight();
+        int edge = Math.min(width, height);
+        int x = (width - edge) / 2;
+        int y = (height - edge) / 2;
+        BufferedImage square = new BufferedImage(side, side,
+                upright.getColorModel().hasAlpha() ? BufferedImage.TYPE_INT_ARGB : BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = square.createGraphics();
+        try {
+            graphics.setComposite(AlphaComposite.Src);
+            graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+            graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+            graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            graphics.drawImage(upright, 0, 0, side, side, x, y, x + edge, y + edge, null);
+        } finally {
+            graphics.dispose();
+        }
+        return square;
     }
 
     private static void write(BufferedImage image, StoredFormat format, Path destination) throws IOException {

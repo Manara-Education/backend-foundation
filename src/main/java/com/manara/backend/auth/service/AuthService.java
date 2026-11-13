@@ -25,6 +25,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
+import java.time.LocalDateTime;
 import java.util.EnumSet;
 import java.util.Set;
 
@@ -43,6 +45,7 @@ public class AuthService {
     private final AuthMapper authMapper;
     private final TermsService termsService;
     private final RegistrationProcessor registrationProcessor;
+    private final Clock clock;
 
     /**
      * The roles a stranger may give themselves by filling in the public registration form.
@@ -288,6 +291,7 @@ public class AuthService {
         }
 
         user.setPassword(passwordEncoder.encode(request.getNewPassword()));
+        user.setPasswordChangedAt(LocalDateTime.now(clock));
         user.setRequiresPasswordReset(false);
         userRepository.save(user);
 
@@ -320,6 +324,7 @@ public class AuthService {
 
         var user = findUserByEmail(request.getEmail());
         user.setPassword(passwordEncoder.encode(request.getNewPassword()));
+        user.setPasswordChangedAt(LocalDateTime.now(clock));
         // Clears a forced-reset requirement too. The emailed code proves the account, and a
         // password just chosen through it is a password the account has moved off of -- leaving
         // the flag set here would strand the user: new password, still locked out.

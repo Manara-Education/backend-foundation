@@ -8,6 +8,7 @@ import com.manara.backend.common.json.StrictBooleanDeserializer;
 import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -24,6 +25,7 @@ import tools.jackson.databind.annotation.JsonDeserialize;
 public class RegisterRequest implements PasswordOwner {
 
     @NotBlank(message = "{validation.fullName.required}")
+    @Size(max = 70, message = "{validation.fullName.size}")
     private String fullName;
 
     // Canonicalised as it is parsed, so every downstream layer — validation included — sees the

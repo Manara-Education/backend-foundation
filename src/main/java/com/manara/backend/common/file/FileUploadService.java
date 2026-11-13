@@ -20,6 +20,12 @@ import java.util.UUID;
 @Service
 public class FileUploadService {
 
+    /** The stored photo's side, in pixels. */
+    public static final int AVATAR_SIDE = 512;
+
+    /** The shortest side a photo may have before it is too small to show sharply. */
+    public static final int AVATAR_MINIMUM_SIDE = 100;
+
     private final UploadProperties properties;
     private final UploadedImageReencoder reencoder;
     private final Path fileStorageLocation;
@@ -65,6 +71,22 @@ public class FileUploadService {
             throw new BusinessException("error.file.onlyInstructor");
         }
 
+        return store(file, reencoder::reencode);
+    }
+
+    /**
+     * Stores the caller's profile photo: the centre square of the image, re-encoded at
+     * {@value #AVATAR_SIDE}×{@value #AVATAR_SIDE}. Open to every signed-in role — it writes only
+     * a photo, never a file of the caller's choosing — and the only caller is the profile's own
+     * avatar endpoint, which binds the result to the caller's account.
+     */
+    public String storeAvatar(MultipartFile file) {
+        return store(file, (source, destination) ->
+                reencoder.reencodeSquare(source, destination, AVATAR_SIDE, AVATAR_MINIMUM_SIDE));
+    }
+
+    /** Writes a validated, re-encoded file into the served directory and returns its URL. */
+    private String store(MultipartFile file, Encoder encoder) {
         if (file == null || file.isEmpty()) {
             throw new BusinessException("error.file.empty");
         }
@@ -89,7 +111,7 @@ public class FileUploadService {
             // mode survives the move; this takes the default permissions Files.copy used to.
             temporary = Files.createFile(
                     this.fileStorageLocation.resolve(".upload-" + UUID.randomUUID() + ".tmp"));
-            UploadedImageReencoder.StoredFormat format = reencoder.reencode(source, temporary);
+            UploadedImageReencoder.StoredFormat format = encoder.encode(source, temporary);
 
             // The stored name is a fresh UUID, never anything derived from the client's
             // filename. That removes path traversal ("../../etc/passwd"), null bytes, control
@@ -116,6 +138,12 @@ public class FileUploadService {
                 deleteTemporary(temporary);
             }
         }
+    }
+
+    /** How the uploaded bytes become the stored file. */
+    @FunctionalInterface
+    private interface Encoder {
+        UploadedImageReencoder.StoredFormat encode(byte[] source, Path destination) throws IOException;
     }
 
     /** The extension must be present and on the allow-list. */
