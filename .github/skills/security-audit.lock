@@ -1,0 +1,9 @@
+# Pin for the vendored Cloudflare security-audit agent skill.
+#
+# .claude/skills/security-audit/ must be a byte-for-byte copy of UPSTREAM_PATH
+# at UPSTREAM_SHA (plus the upstream LICENSE). CI re-fetches this exact commit
+# and fails on any difference. Change this file only through
+# .github/skills/sync-security-audit.sh — never by hand.
+UPSTREAM_REPO=https://github.com/cloudflare/security-audit-skill
+UPSTREAM_SHA=c1c8a8c1471069fb0e188eeaff69b8e8db6564a8
+UPSTREAM_PATH=skills/security-audit

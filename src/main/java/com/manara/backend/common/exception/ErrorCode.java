@@ -44,6 +44,8 @@ public enum ErrorCode {
      */
     TERMS_UNAVAILABLE,
 
+    PRIVACY_POLICY_NOT_PUBLISHED,
+
     /**
      * Paid checkout is not available on this deployment: it takes no payments (FREE_ONLY), or a
      * payment could not be accepted as real. Nothing was charged or granted, and retrying will not

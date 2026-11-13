@@ -1,0 +1,9 @@
+{
+  "policyId": "privacy-policy",
+  "version": "9.2",
+  "language": "ar",
+  "title": "عنوان",
+  "summary": "ملخص",
+  "operator": { "name": "Fixture Operator", "owner": "Fixture Owner", "privacyEmail": "privacy@example.com" },
+  "sections": [ { "id": "first", "number": "1", "title": "قسم", "blocks": [ { "type": "list", "itmes": ["x"] } ] } ]
+}

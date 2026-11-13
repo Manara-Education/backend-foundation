@@ -1,0 +1,27 @@
+{
+  "policyId": "privacy-policy",
+  "version": "9.0",
+  "language": "ar",
+  "title": "سياسة اختبارية",
+  "summary": "ملخص اختباري.",
+  "operator": { "name": "Fixture Operator", "owner": "Fixture Owner", "privacyEmail": "privacy@example.com" },
+  "sections": [
+    {
+      "id": "first",
+      "number": "1",
+      "title": "القسم الأول",
+      "blocks": [
+        { "type": "paragraph", "text": "فقرة <script>alert(1)</script> تبقى نصًا." },
+        { "type": "list", "items": ["بند أول", "بند ثانٍ"] }
+      ]
+    },
+    {
+      "id": "contact",
+      "number": "2",
+      "title": "التواصل",
+      "blocks": [
+        { "type": "email", "label": "البريد", "address": "privacy@example.com" }
+      ]
+    }
+  ]
+}

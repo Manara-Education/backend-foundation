@@ -53,10 +53,23 @@ public record RateLimitProperties(boolean enabled, List<RateLimitRule> rules) {
                 new RateLimitRule("resend-otp", HttpMethod.POST, "/api/v1/auth/resend-otp", 5, Duration.ofMinutes(15)),
                 new RateLimitRule("forgot-password", HttpMethod.POST, "/api/v1/auth/forgot-password", 5, Duration.ofMinutes(15)),
 
+                // The public contact form causes the same kind of outbound mail as the three rules
+                // above, from a route that needs no account to reach at all — the same budget applies.
+                new RateLimitRule("contact", HttpMethod.POST, "/api/v1/contact", 5, Duration.ofMinutes(15)),
+
                 // --- Disk ----------------------------------------------------------------
                 // 5 MB per file against a 38 GB disk shared with Postgres. Uploads are already
                 // restricted to authenticated instructors, so this is a ceiling on damage from
                 // one compromised account, not a gate on normal use.
-                new RateLimitRule("upload", HttpMethod.POST, "/api/v1/uploads", 60, Duration.ofMinutes(10)));
+                new RateLimitRule("upload", HttpMethod.POST, "/api/v1/uploads", 60, Duration.ofMinutes(10)),
+
+                // --- Anonymous reads -----------------------------------------------------
+                // The public catalogue is the one read of application data that needs no account,
+                // so it is the one a scraper can repeat without signing up first. A visitor makes
+                // one list call per landing page and one per course they open; five a second,
+                // sustained, is far beyond any person — including a classroom sharing one address —
+                // and still stops a loop from becoming database load. Covers both routes.
+                new RateLimitRule("public-catalogue", HttpMethod.GET, "/api/v1/public/courses/**", 300,
+                        Duration.ofMinutes(1)));
     }
 }

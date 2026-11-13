@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.LocalDateTime;
 import java.util.Optional;
 
 public interface OtpRepository extends JpaRepository<@NonNull Otp,@NonNull Long> {
@@ -33,4 +34,14 @@ public interface OtpRepository extends JpaRepository<@NonNull Otp,@NonNull Long>
     @Modifying(flushAutomatically = true)
     @Query("UPDATE Otp o SET o.used = true WHERE o.id = :id AND o.used = false")
     int consume(@Param("id") Long id);
+
+    /**
+     * Deletes every OTP row created before {@code cutoff}, used or not, and returns how many.
+     *
+     * <p>One bulk statement rather than load-and-delete: the rows are never needed in memory, and
+     * nothing references {@code otps}, so there is no cascade to honour.
+     */
+    @Modifying
+    @Query("DELETE FROM Otp o WHERE o.createdAt < :cutoff")
+    int deleteCreatedBefore(@Param("cutoff") LocalDateTime cutoff);
 }
