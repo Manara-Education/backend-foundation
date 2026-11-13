@@ -33,6 +33,11 @@ COPY mvnw pom.xml ./
 RUN ./mvnw -B -ntp dependency:go-offline
 
 # --- Source layer ----------------------------------------------------------
+# lombok.config changes what the compiler generates (it copies @Qualifier onto
+# Lombok-generated constructors), so it is part of the source. Leaving it out
+# made the image's jar differ from the one CI tested: v2.2.0 built here without
+# it, dropped a @Qualifier, and failed to start in production.
+COPY lombok.config ./
 COPY src/ src/
 
 # Tests are run by CI (`./mvnw verify`) against the same source, so re-running
