@@ -76,6 +76,17 @@ public class User implements UserDetails {
     @Column(nullable = false)
     private boolean requiresPasswordReset = false;
 
+    /**
+     * Whether this account may use Manara AI. Independent of role.
+     *
+     * Set out of band, in SQL, per person. Nothing in the application writes it: no endpoint, no
+     * registration path and no mapper sets it, so every account the application creates starts
+     * without access.
+     */
+    @Builder.Default
+    @Column(name = "ai_access", nullable = false)
+    private boolean aiAccess = false;
+
     @Builder.Default
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
