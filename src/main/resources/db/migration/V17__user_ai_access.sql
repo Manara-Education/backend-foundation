@@ -22,4 +22,11 @@
 --   so this migration runs first, as Flyway already guarantees.
 -- =============================================================================
 
+-- Give up after 5 seconds rather than wait for the lock. ADD COLUMN needs a brief ACCESS
+-- EXCLUSIVE lock on users, and while it queues behind a long-running transaction on that table
+-- every later query on it queues behind IT -- logins included. Failing fast makes the deploy
+-- fail visibly and be retried, instead of stalling sign-ins. Flyway runs this file in a
+-- transaction, so LOCAL scopes the setting to it and nothing else is affected.
+SET LOCAL lock_timeout = '5s';
+
 ALTER TABLE users ADD COLUMN ai_access boolean NOT NULL DEFAULT false;

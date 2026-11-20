@@ -21,6 +21,7 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -112,6 +113,35 @@ class AiAccessExposureTest extends AbstractPostgresBackedTest {
         grant(false);
         mockMvc.perform(get("/api/v1/auth/me").cookie(session))
                 .andExpect(jsonPath("$.data.aiAccess").value(false));
+    }
+
+    @Test
+    @DisplayName("aiAccess in a request body is ignored by PUT /profile and POST /auth/register")
+    void requestsCannotSetIt() throws Exception {
+        Cookie session = signIn(false);
+
+        mockMvc.perform(put("/api/v1/profile").with(csrf()).cookie(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"fullName":"Noor Renamed","aiAccess":true}
+                                """))
+                .andExpect(status().isOk());
+        assertThat(storedAccess(EMAIL)).isFalse();
+
+        String other = "mallory" + DOMAIN;
+        mockMvc.perform(post("/api/v1/auth/register").with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"fullName":"Mallory Test","email":"%s","password":"%s","role":"STUDENT",
+                                 "termsAccepted":true,"termsVersion":"%s","aiAccess":true}
+                                """.formatted(other, PASSWORD,
+                                termsVersionRegistry.current().orElseThrow().id())))
+                .andExpect(status().isCreated());
+        assertThat(storedAccess(other)).isFalse();
+    }
+
+    private Boolean storedAccess(String email) {
+        return jdbc.queryForObject("SELECT ai_access FROM users WHERE email = ?", Boolean.class, email);
     }
 
     private void grant(boolean access) {
