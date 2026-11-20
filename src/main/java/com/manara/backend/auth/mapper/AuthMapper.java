@@ -35,6 +35,7 @@ public class AuthMapper {
                 .email(user.getEmail())
                 .role(user.getRole().name())
                 .requiresPasswordReset(user.isRequiresPasswordReset())
+                .aiAccess(user.isAiAccess())
                 .build();
     }
 }
