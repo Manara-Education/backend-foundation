@@ -44,6 +44,22 @@ class AuthMapperTest {
     }
 
     @Test
+    @DisplayName("Manara AI access is off unless set, and reaches the authentication response")
+    void aiAccessDefaultsOffAndIsMapped() {
+        User plain = User.builder().email("student@manara.com").role(Role.STUDENT).build();
+        User granted = User.builder().email("student@manara.com").role(Role.STUDENT)
+                .aiAccess(true).build();
+
+        assertThat(plain.isAiAccess()).isFalse();
+        assertThat(mapper.toAuthResponse(plain).isAiAccess()).isFalse();
+        assertThat(mapper.toAuthResponse(granted).isAiAccess()).isTrue();
+        assertThat(mapper.toUser(
+                RegisterRequest.builder().fullName("x").email("a@b.com").build(),
+                "$2a$10$hash", Role.STUDENT).isAiAccess())
+                .as("registration never grants access").isFalse();
+    }
+
+    @Test
     @DisplayName("the entity is built with the canonical address, not the one that was typed")
     void theStoredAddressIsCanonical() {
         // The mapper is the only place a User is constructed, and Lombok's builder writes fields

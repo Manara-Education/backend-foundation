@@ -21,4 +21,10 @@ public class AuthResponse {
      * session restore, that this account must change its password before going anywhere else.
      */
     private boolean requiresPasswordReset;
+
+    /**
+     * Additive field, always present. Whether the signed-in account may use Manara AI. Reported
+     * only to the account itself, here and on session restore; never listed or settable elsewhere.
+     */
+    private boolean aiAccess;
 }
